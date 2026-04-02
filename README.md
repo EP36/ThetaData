@@ -176,6 +176,10 @@ Minimum for Render:
 - `WORKER_ENABLE_TRADING` (`false` by default)
 - `LIVE_TRADING=false` (must remain false)
 
+Startup validation behavior:
+- in `APP_ENV=production` or with `STRICT_ENV_VALIDATION=true`, missing required env vars fail fast with a clear startup error.
+- full variable matrix: [`docs/required-env-vars.md`](docs/required-env-vars.md)
+
 Recommended:
 - `RUN_MIGRATIONS_ON_STARTUP=true`
 - `STRICT_ENV_VALIDATION=true`
@@ -241,6 +245,24 @@ npm install
 cp .env.example .env.local
 npm run dev
 ```
+
+### Recommended Frontend Deployment: Render Static Site
+
+`apps/web` supports static export and can be deployed as a Render Static Site.
+
+Render settings:
+- Root Directory: `apps/web`
+- Build Command: `npm ci && npm run build`
+- Publish Directory: `out`
+
+Required frontend env var:
+- `NEXT_PUBLIC_API_BASE_URL`:
+  - local example: `http://127.0.0.1:8000`
+  - Render example: `https://<your-backend-service>.onrender.com`
+
+Notes:
+- The UI calls the backend from the browser, so backend CORS must allow your Static Site origin.
+- If you prefer no cross-origin browser calls, deploy frontend and backend behind a single origin with a proxy setup.
 
 Routes:
 - `/dashboard`

@@ -10,6 +10,15 @@ from typing import Any
 
 from dotenv import load_dotenv
 
+STRICT_REQUIRED_ENV_VARS = (
+    "APP_ENV",
+    "DATABASE_URL",
+    "WORKER_NAME",
+    "PAPER_TRADING",
+    "WORKER_ENABLE_TRADING",
+    "LIVE_TRADING",
+)
+
 
 def _read_bool(env_name: str, default: bool = False) -> bool:
     """Read a boolean-like env value with a safe default."""
@@ -27,6 +36,16 @@ def _normalize_database_url(value: str) -> str:
     if normalized.startswith("postgresql://"):
         return normalized.replace("postgresql://", "postgresql+psycopg://", 1)
     return normalized
+
+
+def _missing_env_vars(env_names: tuple[str, ...]) -> list[str]:
+    """Return env variable names that are unset or blank."""
+    missing: list[str] = []
+    for env_name in env_names:
+        raw = os.getenv(env_name)
+        if raw is None or raw.strip() == "":
+            missing.append(env_name)
+    return missing
 
 
 @dataclass(slots=True)
@@ -125,6 +144,16 @@ class DeploymentSettings:
         else:
             load_dotenv(override=False)
 
+        strict_env_validation = _read_bool("STRICT_ENV_VALIDATION", default=False)
+        app_env = os.getenv("APP_ENV", "development").strip().lower()
+        if strict_env_validation or app_env == "production":
+            missing = _missing_env_vars(STRICT_REQUIRED_ENV_VARS)
+            if missing:
+                raise ValueError(
+                    "Missing required environment variables for strict/production mode: "
+                    + ", ".join(missing)
+                )
+
         strategy_params_raw = os.getenv("WORKER_STRATEGY_PARAMS_JSON", "{}").strip()
         try:
             strategy_params = json.loads(strategy_params_raw)
@@ -138,12 +167,12 @@ class DeploymentSettings:
         )
 
         return cls(
-            app_env=os.getenv("APP_ENV", "development").strip().lower(),
+            app_env=app_env,
             service_name=os.getenv("SERVICE_NAME", "theta").strip(),
             host=os.getenv("HOST", "0.0.0.0").strip(),
             port=int(os.getenv("PORT", "8000")),
             database_url=database_url,
-            strict_env_validation=_read_bool("STRICT_ENV_VALIDATION", default=False),
+            strict_env_validation=strict_env_validation,
             run_migrations_on_startup=_read_bool("RUN_MIGRATIONS_ON_STARTUP", default=True),
             paper_trading_enabled=_read_bool("PAPER_TRADING", default=False),
             worker_enable_trading=_read_bool("WORKER_ENABLE_TRADING", default=False),
