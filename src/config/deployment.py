@@ -17,6 +17,7 @@ STRICT_REQUIRED_ENV_VARS = (
     "PAPER_TRADING",
     "WORKER_ENABLE_TRADING",
     "LIVE_TRADING",
+    "CORS_ALLOWED_ORIGINS",
 )
 
 
@@ -48,6 +49,12 @@ def _missing_env_vars(env_names: tuple[str, ...]) -> list[str]:
     return missing
 
 
+def _parse_csv_env(value: str) -> tuple[str, ...]:
+    """Parse comma-separated env value into a normalized tuple."""
+    parsed = [item.strip() for item in value.split(",")]
+    return tuple(item for item in parsed if item)
+
+
 @dataclass(slots=True)
 class DeploymentSettings:
     """Settings for web/worker deployment, including safety toggles."""
@@ -59,6 +66,10 @@ class DeploymentSettings:
     database_url: str = "sqlite+pysqlite:///data/theta.db"
     strict_env_validation: bool = False
     run_migrations_on_startup: bool = True
+    cors_allowed_origins: tuple[str, ...] = (
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    )
 
     paper_trading_enabled: bool = False
     worker_enable_trading: bool = False
@@ -110,6 +121,12 @@ class DeploymentSettings:
             raise ValueError("max_open_positions must be positive")
         if self.executor_daily_loss_cap <= 0:
             raise ValueError("executor_daily_loss_cap must be positive")
+        if not self.cors_allowed_origins:
+            raise ValueError("cors_allowed_origins cannot be empty")
+        if self.app_env in {"production", "staging"} and any(
+            origin == "*" for origin in self.cors_allowed_origins
+        ):
+            raise ValueError("Wildcard CORS origin is not allowed in production/staging")
         if self.app_env == "production" and self.database_url.startswith("sqlite"):
             raise ValueError("production deployment requires a Postgres DATABASE_URL")
 
@@ -165,6 +182,12 @@ class DeploymentSettings:
         database_url = _normalize_database_url(
             os.getenv("DATABASE_URL", "sqlite+pysqlite:///data/theta.db")
         )
+        cors_allowed_origins = _parse_csv_env(
+            os.getenv(
+                "CORS_ALLOWED_ORIGINS",
+                "http://localhost:3000,http://127.0.0.1:3000",
+            )
+        )
 
         return cls(
             app_env=app_env,
@@ -174,6 +197,7 @@ class DeploymentSettings:
             database_url=database_url,
             strict_env_validation=strict_env_validation,
             run_migrations_on_startup=_read_bool("RUN_MIGRATIONS_ON_STARTUP", default=True),
+            cors_allowed_origins=cors_allowed_origins,
             paper_trading_enabled=_read_bool("PAPER_TRADING", default=False),
             worker_enable_trading=_read_bool("WORKER_ENABLE_TRADING", default=False),
             worker_name=os.getenv("WORKER_NAME", "default-worker").strip(),

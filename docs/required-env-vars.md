@@ -16,6 +16,7 @@ If any required variable is missing, startup fails with a clear `ValueError` fro
 | `PAPER_TRADING` | Both | Global paper-trading mode flag. Must be explicit for unattended deployment. | Generate yourself | `false` |
 | `WORKER_ENABLE_TRADING` | Worker | Enables/disables worker order loop. Worker remains idle when false. | Generate yourself | `false` |
 | `LIVE_TRADING` | Both | Hard live-trading guardrail. Any true-like value is rejected at startup. | Generate yourself | `false` |
+| `CORS_ALLOWED_ORIGINS` | Both (used by Web) | Comma-separated allowed browser origins for backend CORS. | Generate yourself | `https://thetadata.onrender.com` |
 
 ## Not Required for Initial Paper Deployment
 
@@ -27,6 +28,7 @@ These are optional for MVP paper deployment:
 ## Notes
 
 - For Render, keep `PAPER_TRADING=false` and `WORKER_ENABLE_TRADING=false` until verification is complete.
+- In production/staging, do not use wildcard CORS (`*`); startup validation rejects it.
 - To intentionally enable paper execution later, set both:
   - `PAPER_TRADING=true`
   - `WORKER_ENABLE_TRADING=true`

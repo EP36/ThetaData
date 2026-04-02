@@ -43,6 +43,7 @@ def test_strict_mode_requires_explicit_required_env_vars(
         "PAPER_TRADING",
         "WORKER_ENABLE_TRADING",
         "LIVE_TRADING",
+        "CORS_ALLOWED_ORIGINS",
     ):
         monkeypatch.delenv(env_name, raising=False)
     monkeypatch.setenv("STRICT_ENV_VALIDATION", "true")
@@ -63,7 +64,20 @@ def test_production_mode_missing_database_url_fails_clearly(
     monkeypatch.setenv("PAPER_TRADING", "false")
     monkeypatch.setenv("WORKER_ENABLE_TRADING", "false")
     monkeypatch.setenv("LIVE_TRADING", "false")
+    monkeypatch.setenv("CORS_ALLOWED_ORIGINS", "https://thetadata.onrender.com")
     monkeypatch.delenv("DATABASE_URL", raising=False)
 
     with pytest.raises(ValueError, match="DATABASE_URL"):
         DeploymentSettings.from_env(env_path=empty_env)
+
+
+def test_production_rejects_wildcard_cors_origin() -> None:
+    with pytest.raises(ValueError, match="Wildcard CORS origin"):
+        DeploymentSettings(
+            app_env="production",
+            database_url="postgresql+psycopg://example.com:5432/theta",
+            worker_name="main-worker",
+            paper_trading_enabled=False,
+            worker_enable_trading=False,
+            cors_allowed_origins=("*",),
+        )

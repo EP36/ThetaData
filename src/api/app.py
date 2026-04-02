@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 
 from src.api.schemas import (
     BacktestRunRequest,
@@ -48,6 +49,20 @@ service, deployment_settings, repository = _build_api_service()
 app.state.api_service = service
 app.state.deployment_settings = deployment_settings
 app.state.repository = repository
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=list(deployment_settings.cors_allowed_origins),
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
+    allow_headers=[
+        "Accept",
+        "Authorization",
+        "Content-Type",
+        "Origin",
+        "X-Requested-With",
+    ],
+)
 
 
 def _service() -> TradingApiService:

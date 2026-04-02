@@ -175,6 +175,7 @@ Minimum for Render:
 - `PAPER_TRADING` (`false` by default)
 - `WORKER_ENABLE_TRADING` (`false` by default)
 - `LIVE_TRADING=false` (must remain false)
+- `CORS_ALLOWED_ORIGINS=https://thetadata.onrender.com` (comma-separated list supported)
 
 Startup validation behavior:
 - in `APP_ENV=production` or with `STRICT_ENV_VALIDATION=true`, missing required env vars fail fast with a clear startup error.
@@ -262,6 +263,8 @@ Required frontend env var:
 
 Notes:
 - The UI calls the backend from the browser, so backend CORS must allow your Static Site origin.
+- Backend CORS is environment-driven via `CORS_ALLOWED_ORIGINS` (for example: `https://thetadata.onrender.com`).
+- Do not use `*` in production/staging CORS config; startup validation rejects wildcard origins.
 - If you prefer no cross-origin browser calls, deploy frontend and backend behind a single origin with a proxy setup.
 
 Routes:

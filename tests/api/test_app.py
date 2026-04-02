@@ -99,3 +99,32 @@ def test_health_and_system_status_endpoints(client: TestClient) -> None:
     status_payload = status_response.json()
     assert "service_name" in status_payload
     assert "database_ok" in status_payload
+
+
+def test_cors_preflight_allows_configured_origin(client: TestClient) -> None:
+    response = client.options(
+        "/api/dashboard/summary",
+        headers={
+            "Origin": "http://localhost:3000",
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "content-type",
+        },
+    )
+    assert response.status_code == 200
+    assert response.headers.get("access-control-allow-origin") == "http://localhost:3000"
+
+    allowed_methods = response.headers.get("access-control-allow-methods", "")
+    for method in ("GET", "POST", "PATCH", "OPTIONS"):
+        assert method in allowed_methods
+
+    allowed_headers = response.headers.get("access-control-allow-headers", "").lower()
+    assert "content-type" in allowed_headers
+
+
+def test_cors_headers_present_on_get_for_configured_origin(client: TestClient) -> None:
+    response = client.get(
+        "/api/strategies",
+        headers={"Origin": "http://localhost:3000"},
+    )
+    assert response.status_code == 200
+    assert response.headers.get("access-control-allow-origin") == "http://localhost:3000"
