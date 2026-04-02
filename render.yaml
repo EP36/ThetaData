@@ -2,7 +2,7 @@ databases:
   - name: theta-postgres
     databaseName: thetadata
     user: thetadata_user
-    plan: starter
+    plan: basic-1gb
 
 services:
   - type: web
