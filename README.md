@@ -142,6 +142,9 @@ This repository includes a Render blueprint at `render.yaml` for:
 Deployment commands:
 
 ```bash
+# build (both services)
+pip install -r requirements.txt
+
 # web
 bash scripts/start_web.sh
 

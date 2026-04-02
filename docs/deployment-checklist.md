@@ -1,5 +1,25 @@
 # Deployment Readiness Checklist (Render, 30-Day Paper Trading)
 
+## Command Reference
+- Build command (web + worker): `pip install -r requirements.txt`
+- Web start command: `bash scripts/start_web.sh`
+- Worker start command: `bash scripts/start_worker.sh`
+
+## Required Render Services
+- [ ] One Web Service (`theta-web`)
+- [ ] One Background Worker (`theta-worker`)
+- [ ] One Managed Postgres database (`theta-postgres`)
+
+## Required Environment Variables
+- [ ] `APP_ENV=production`
+- [ ] `DATABASE_URL` (from Render Postgres connection string)
+- [ ] `WORKER_NAME=main-worker` (set on both web and worker)
+- [ ] `STRICT_ENV_VALIDATION=true`
+- [ ] `RUN_MIGRATIONS_ON_STARTUP=true`
+- [ ] `PAPER_TRADING=false` by default
+- [ ] `WORKER_ENABLE_TRADING=false` by default
+- [ ] `LIVE_TRADING=false`
+
 ## Safety
 - [ ] `LIVE_TRADING=false`
 - [ ] `PAPER_TRADING` explicitly set (`false` by default)

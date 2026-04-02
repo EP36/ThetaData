@@ -7,7 +7,7 @@ databases:
 services:
   - type: web
     name: theta-web
-    runtime: python
+    env: python
     plan: starter
     autoDeploy: true
     buildCommand: pip install -r requirements.txt
@@ -20,6 +20,8 @@ services:
         value: production
       - key: SERVICE_NAME
         value: theta-web
+      - key: WORKER_NAME
+        value: main-worker
       - key: DATABASE_URL
         fromDatabase:
           name: theta-postgres
@@ -34,10 +36,12 @@ services:
         value: "false"
       - key: LIVE_TRADING
         value: "false"
+      - key: KILL_SWITCH_ON_STARTUP
+        value: "false"
 
   - type: worker
     name: theta-worker
-    runtime: python
+    env: python
     plan: starter
     autoDeploy: true
     buildCommand: pip install -r requirements.txt
@@ -64,6 +68,8 @@ services:
       - key: WORKER_ENABLE_TRADING
         value: "false"
       - key: LIVE_TRADING
+        value: "false"
+      - key: KILL_SWITCH_ON_STARTUP
         value: "false"
       - key: WORKER_POLL_SECONDS
         value: "60"
