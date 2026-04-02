@@ -1,0 +1,176 @@
+"""SQLAlchemy models for durable runtime state and audit records."""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from typing import Any
+
+from sqlalchemy import JSON, Boolean, DateTime, Float, Integer, String, Text, UniqueConstraint
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+
+def utc_now() -> datetime:
+    """Return timezone-aware UTC timestamp."""
+    return datetime.now(tz=timezone.utc)
+
+
+class Base(DeclarativeBase):
+    """Declarative base for persistence models."""
+
+
+class GlobalStateModel(Base):
+    """Global runtime flags shared across services."""
+
+    __tablename__ = "global_state"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    kill_switch_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    reason: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        onupdate=utc_now,
+    )
+
+
+class WorkerHeartbeatModel(Base):
+    """Last-known heartbeat for each worker process."""
+
+    __tablename__ = "worker_heartbeats"
+
+    worker_name: Mapped[str] = mapped_column(String(128), primary_key=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="idle")
+    last_cycle_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    message: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        onupdate=utc_now,
+    )
+
+
+class StrategyConfigModel(Base):
+    """Persistent strategy configuration managed by API/worker."""
+
+    __tablename__ = "strategy_configs"
+
+    name: Mapped[str] = mapped_column(String(128), primary_key=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="enabled")
+    parameters: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        onupdate=utc_now,
+    )
+
+
+class RunHistoryModel(Base):
+    """Lifecycle records for API and worker runs."""
+
+    __tablename__ = "run_history"
+    __table_args__ = (
+        UniqueConstraint("service", "cycle_key", name="uq_run_history_service_cycle"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[str] = mapped_column(String(128), nullable=False, unique=True, index=True)
+    service: Mapped[str] = mapped_column(String(64), nullable=False)
+    cycle_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    symbol: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    timeframe: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    strategy: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="running")
+    details: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class OrderModel(Base):
+    """Paper-order records with idempotency support."""
+
+    __tablename__ = "orders"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    order_id: Mapped[str] = mapped_column(String(128), nullable=False, unique=True, index=True)
+    dedupe_key: Mapped[str | None] = mapped_column(String(255), nullable=True, unique=True)
+    run_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    source: Mapped[str] = mapped_column(String(32), nullable=False, default="worker")
+    symbol: Mapped[str] = mapped_column(String(32), nullable=False)
+    side: Mapped[str] = mapped_column(String(8), nullable=False)
+    quantity: Mapped[float] = mapped_column(Float, nullable=False)
+    price: Mapped[float] = mapped_column(Float, nullable=False)
+    notional: Mapped[float] = mapped_column(Float, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    rejection_reasons: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+
+class FillModel(Base):
+    """Paper-fill records linked to submitted orders."""
+
+    __tablename__ = "fills"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    fill_id: Mapped[str] = mapped_column(String(128), nullable=False, unique=True, index=True)
+    order_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    run_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    symbol: Mapped[str] = mapped_column(String(32), nullable=False)
+    side: Mapped[str] = mapped_column(String(8), nullable=False)
+    quantity: Mapped[float] = mapped_column(Float, nullable=False)
+    price: Mapped[float] = mapped_column(Float, nullable=False)
+    notional: Mapped[float] = mapped_column(Float, nullable=False)
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+
+class PositionModel(Base):
+    """Current paper position by symbol."""
+
+    __tablename__ = "positions"
+
+    symbol: Mapped[str] = mapped_column(String(32), primary_key=True)
+    quantity: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    avg_price: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    realized_pnl: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    unrealized_pnl: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        onupdate=utc_now,
+    )
+
+
+class PortfolioStateModel(Base):
+    """Singleton row for executor cash/equity anchors."""
+
+    __tablename__ = "portfolio_state"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    cash: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    day_start_equity: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    peak_equity: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        onupdate=utc_now,
+    )
+
+
+class LogEventModel(Base):
+    """Persisted operational events for auditability."""
+
+    __tablename__ = "log_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    level: Mapped[str] = mapped_column(String(16), nullable=False)
+    logger: Mapped[str] = mapped_column(String(128), nullable=False)
+    event: Mapped[str] = mapped_column(String(255), nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)

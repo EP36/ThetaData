@@ -1,0 +1,39 @@
+# Deployment Readiness Checklist (Render, 30-Day Paper Trading)
+
+## Safety
+- [ ] `LIVE_TRADING=false`
+- [ ] `PAPER_TRADING` explicitly set (`false` by default)
+- [ ] `WORKER_ENABLE_TRADING` explicitly set (`false` by default)
+- [ ] Kill switch endpoint tested: `POST /api/system/kill-switch`
+
+## Infrastructure
+- [ ] Managed Postgres provisioned in Render
+- [ ] `DATABASE_URL` injected into web and worker services
+- [ ] Web service health check points to `/healthz`
+- [ ] Worker service has unique `WORKER_NAME`
+
+## Startup and Migrations
+- [ ] `RUN_MIGRATIONS_ON_STARTUP=true` set for web and worker
+- [ ] `python -m src.persistence.migrate` succeeds
+- [ ] Web starts with `bash scripts/start_web.sh`
+- [ ] Worker starts with `bash scripts/start_worker.sh`
+
+## Runtime Validation
+- [ ] `GET /healthz` returns `status=ok` and `database=ok`
+- [ ] `GET /api/system/status` returns `database_ok=true`
+- [ ] Worker heartbeat appears in status payload
+- [ ] Strategy configs are persisted and editable via API
+
+## Persistence Validation
+- [ ] Orders are persisted
+- [ ] Fills are persisted
+- [ ] Positions are persisted
+- [ ] Log events are persisted
+- [ ] Run history is persisted
+- [ ] Strategy config is persisted
+
+## 30-Day Operations
+- [ ] Daily check of health, status, risk, and heartbeat
+- [ ] Daily review of recent run failures and rejection reasons
+- [ ] Alerting/manual process for kill switch activation
+- [ ] End-of-run export plan for orders/fills/runs/logs

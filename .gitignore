@@ -1,0 +1,23 @@
+# Virtual environments
+.venv/
+.venv311/
+
+# Python caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Local environment overrides
+.env
+
+# Local database files
+*.db
+*.sqlite3
+
+# Generated runtime artifacts
+logs/*.csv
+logs/*.log
+
+# Frontend build artifacts
+apps/web/node_modules/
+apps/web/.next/
