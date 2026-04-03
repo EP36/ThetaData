@@ -690,6 +690,24 @@ Frontend auth behavior:
 - Unauthenticated or expired sessions redirect to `/login`.
 - UI route protection is convenience only; backend authorization is the enforcement boundary.
 
+### Frontend Theme Support
+
+- Theme modes: `light`, `dark`, `system`.
+- The active preference is stored in browser `localStorage` under `theta-theme-preference`.
+- On first load:
+  - saved preference is applied if present
+  - otherwise system color-scheme preference is used
+- A pre-hydration script in the root layout applies the theme before React mounts to avoid theme flash.
+- Theme can be changed from the top navigation theme control.
+
+Key files:
+- `apps/web/lib/theme.ts`
+- `apps/web/components/theme/theme-provider.tsx`
+- `apps/web/components/theme/theme-toggle.tsx`
+- `apps/web/app/layout.tsx`
+- `apps/web/app/globals.css`
+- `apps/web/components/navigation/top-nav.tsx`
+
 ## Notes
 
 - The system is intentionally simple but production-oriented in structure.

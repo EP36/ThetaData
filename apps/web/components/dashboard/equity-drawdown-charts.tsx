@@ -52,19 +52,38 @@ export function EquityDrawdownCharts({
               <LineChart data={equityCurve}>
                 <defs>
                   <linearGradient id="equityStroke" x1="0" y1="0" x2="1" y2="0">
-                    <stop offset="0%" stopColor="#00c805" />
-                    <stop offset="100%" stopColor="#00a403" />
+                    <stop offset="0%" stopColor="var(--accent)" />
+                    <stop offset="100%" stopColor="var(--accent-strong)" />
                   </linearGradient>
                 </defs>
-                <CartesianGrid vertical={false} strokeDasharray="4 4" stroke="rgba(16, 25, 35, 0.08)" />
-                <XAxis dataKey="timestamp" tick={{ fontSize: 12, fill: "#617085" }} tickLine={false} axisLine={false} />
-                <YAxis tickFormatter={formatCurrency} tick={{ fontSize: 12, fill: "#617085" }} width={80} tickLine={false} axisLine={false} />
+                <CartesianGrid
+                  vertical={false}
+                  strokeDasharray="4 4"
+                  stroke="var(--chart-grid)"
+                />
+                <XAxis
+                  dataKey="timestamp"
+                  tick={{ fontSize: 12, fill: "var(--muted)" }}
+                  tickLine={false}
+                  axisLine={false}
+                />
+                <YAxis
+                  tickFormatter={formatCurrency}
+                  tick={{ fontSize: 12, fill: "var(--muted)" }}
+                  width={80}
+                  tickLine={false}
+                  axisLine={false}
+                />
                 <Tooltip
                   contentStyle={{
                     borderRadius: "0.8rem",
-                    border: "1px solid rgba(16, 25, 35, 0.12)",
-                    boxShadow: "0 12px 24px rgba(16, 25, 35, 0.12)"
+                    border: "1px solid var(--line-strong)",
+                    background: "var(--tooltip-bg)",
+                    color: "var(--text)",
+                    boxShadow: "var(--tooltip-shadow)"
                   }}
+                  labelStyle={{ color: "var(--muted)" }}
+                  itemStyle={{ color: "var(--text)" }}
                   formatter={(value: number) => formatCurrency(value)}
                 />
                 <Line
@@ -92,15 +111,34 @@ export function EquityDrawdownCharts({
           ) : (
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={drawdownCurve}>
-                <CartesianGrid vertical={false} strokeDasharray="4 4" stroke="rgba(16, 25, 35, 0.08)" />
-                <XAxis dataKey="timestamp" tick={{ fontSize: 12, fill: "#617085" }} tickLine={false} axisLine={false} />
-                <YAxis tickFormatter={formatPct} tick={{ fontSize: 12, fill: "#617085" }} width={70} tickLine={false} axisLine={false} />
+                <CartesianGrid
+                  vertical={false}
+                  strokeDasharray="4 4"
+                  stroke="var(--chart-grid)"
+                />
+                <XAxis
+                  dataKey="timestamp"
+                  tick={{ fontSize: 12, fill: "var(--muted)" }}
+                  tickLine={false}
+                  axisLine={false}
+                />
+                <YAxis
+                  tickFormatter={formatPct}
+                  tick={{ fontSize: 12, fill: "var(--muted)" }}
+                  width={70}
+                  tickLine={false}
+                  axisLine={false}
+                />
                 <Tooltip
                   contentStyle={{
                     borderRadius: "0.8rem",
-                    border: "1px solid rgba(16, 25, 35, 0.12)",
-                    boxShadow: "0 12px 24px rgba(16, 25, 35, 0.12)"
+                    border: "1px solid var(--line-strong)",
+                    background: "var(--tooltip-bg)",
+                    color: "var(--text)",
+                    boxShadow: "var(--tooltip-shadow)"
                   }}
+                  labelStyle={{ color: "var(--muted)" }}
+                  itemStyle={{ color: "var(--text)" }}
                   formatter={(value: number) => formatPct(value)}
                 />
                 <Line

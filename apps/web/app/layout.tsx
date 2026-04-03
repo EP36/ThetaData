@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import type { ReactNode } from "react";
 
 import { AppShell } from "@/components/auth/app-shell";
+import { ThemeProvider } from "@/components/theme/theme-provider";
+import { buildThemeInitScript } from "@/lib/theme";
 
 import "./globals.css";
 
@@ -16,8 +18,18 @@ export default function RootLayout({
   children: ReactNode;
 }>) {
   return (
-    <html lang="en">
-      <body><AppShell>{children}</AppShell></body>
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        <script
+          id="theme-init"
+          dangerouslySetInnerHTML={{ __html: buildThemeInitScript() }}
+        />
+      </head>
+      <body>
+        <ThemeProvider>
+          <AppShell>{children}</AppShell>
+        </ThemeProvider>
+      </body>
     </html>
   );
 }

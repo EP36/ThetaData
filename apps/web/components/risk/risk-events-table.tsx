@@ -29,7 +29,7 @@ export function RiskEventsTable({ events }: RiskEventsTableProps) {
                     event.severity === "critical"
                       ? "text-[var(--danger)]"
                       : event.severity === "warning"
-                        ? "text-[#9b6a06]"
+                        ? "text-[var(--warning-strong)]"
                         : "text-[var(--accent)]"
                   }`}
                 >

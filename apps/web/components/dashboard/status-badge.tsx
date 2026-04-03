@@ -25,7 +25,7 @@ export function StatusBadge({ status }: StatusBadgeProps) {
           ? "border-[var(--danger)] bg-[color:color-mix(in_srgb,var(--danger),white_89%)] text-[var(--danger)]"
           : isWarning
             ? "border-[var(--warning)] bg-[color:color-mix(in_srgb,var(--warning),white_88%)] text-[var(--warning)]"
-          : "border-[rgba(15,119,103,0.26)] bg-[var(--accent-soft)] text-[var(--accent-strong)]"
+          : "border-[var(--accent-ring)] bg-[var(--accent-soft)] text-[var(--accent-strong)]"
       }`}
     >
       <span className={`mr-2 inline-block h-1.5 w-1.5 rounded-full ${dotClass}`} />

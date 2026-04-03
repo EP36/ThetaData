@@ -125,7 +125,7 @@ export default function RiskPage() {
   const killTone = status.killSwitchEnabled ? "critical" : "neutral";
   const killSwitchIndicatorClass = status.killSwitchEnabled
     ? "border-[var(--danger)] bg-[color:color-mix(in_srgb,var(--danger),white_90%)] text-[var(--danger)]"
-    : "border-[rgba(0,200,5,0.28)] bg-[var(--accent-soft)] text-[var(--accent-strong)]";
+    : "border-[var(--accent-ring)] bg-[var(--accent-soft)] text-[var(--accent-strong)]";
   const killSwitchMessage = status.killSwitchEnabled
     ? "Emergency stop is ON. New paper orders should be blocked until this is disabled."
     : "Emergency stop is OFF. Controls are in normal operating mode.";

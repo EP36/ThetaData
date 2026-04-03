@@ -40,7 +40,7 @@ export function BacktestResults({ result }: BacktestResultsProps) {
           {metricRows.map((metric, idx) => (
             <article
               key={metric.label}
-              className="panel-animate rounded-xl border border-[rgba(16,25,35,0.08)] bg-[var(--panel-soft)] p-3"
+              className="panel-animate rounded-xl border border-[var(--line-soft)] bg-[var(--panel-soft)] p-3"
               style={{ animationDelay: `${idx * 60}ms` }}
             >
               <p className="text-xs uppercase tracking-[0.12em] text-[var(--muted)]">

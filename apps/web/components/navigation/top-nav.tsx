@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
+import { ThemeToggle } from "@/components/theme/theme-toggle";
+
 const navItems = [
   { href: "/dashboard", label: "Dashboard" },
   { href: "/analytics", label: "Analytics" },
@@ -37,6 +39,7 @@ export function TopNav({ userEmail, userRole, onLogout }: TopNavProps) {
           );
         })}
       </nav>
+      <ThemeToggle />
       <div className="flex items-center gap-2 rounded-full border border-[var(--line)] bg-[var(--panel-soft)] px-3 py-1.5">
         <div className="text-right leading-tight">
           <p className="text-xs font-medium text-[var(--text)]">{userEmail ?? "Signed out"}</p>

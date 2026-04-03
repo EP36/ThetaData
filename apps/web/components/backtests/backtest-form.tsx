@@ -117,7 +117,7 @@ export function BacktestForm({
         </label>
       </div>
 
-      <div className="mt-4 rounded-xl border border-[rgba(16,25,35,0.1)] bg-[var(--panel-soft)] px-3 py-3 text-sm">
+      <div className="mt-4 rounded-xl border border-[var(--line-soft)] bg-[var(--panel-soft)] px-3 py-3 text-sm">
         <p className="font-semibold">Position Sizing Preview</p>
         <p className="mt-1 text-[var(--muted)]">
           `riskPerTrade = 1%` of account, `positionSize = risk / stopLoss%`, capped at `25%`.

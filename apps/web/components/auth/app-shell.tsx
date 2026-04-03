@@ -136,7 +136,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             <h1 className="text-lg font-semibold tracking-[-0.02em] sm:text-xl">
               Trading Operations Console
             </h1>
-            <span className="ui-pill border-[rgba(0,200,5,0.26)] bg-[var(--accent-soft)] text-[#0b4f12]">
+            <span className="ui-pill border-[var(--accent-ring)] bg-[var(--accent-soft)] text-[var(--accent-strong)]">
               Paper-Only
             </span>
           </div>

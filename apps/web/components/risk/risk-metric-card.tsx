@@ -13,7 +13,7 @@ export function RiskMetricCard({
     tone === "critical"
       ? "text-[var(--danger)]"
       : tone === "warning"
-        ? "text-[#9b6a06]"
+        ? "text-[var(--warning-strong)]"
         : "text-[var(--ink)]";
 
   return (
