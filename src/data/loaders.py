@@ -41,8 +41,16 @@ class HistoricalDataLoader:
         force_refresh: bool = False,
     ) -> pd.DataFrame:
         """Load normalized OHLCV data by symbol/timeframe/date range."""
+        provider_name = type(self.provider).__name__
         LOGGER.info(
-            "data_load_start symbol=%s timeframe=%s start=%s end=%s force_refresh=%s",
+            "data_provider_selected provider=%s symbol=%s timeframe=%s",
+            provider_name,
+            symbol,
+            timeframe,
+        )
+        LOGGER.info(
+            "data_load_start provider=%s symbol=%s timeframe=%s start=%s end=%s force_refresh=%s",
+            provider_name,
             symbol,
             timeframe,
             start,
@@ -56,14 +64,43 @@ class HistoricalDataLoader:
         if not force_refresh:
             cached = self.cache.load(symbol=symbol, timeframe=timeframe)
         if cached is not None:
+            sliced_cached = self._slice_range(cached, start=start_ts, end=end_ts)
+            cache_covers_range = self._cache_covers_requested_range(
+                cached=cached,
+                start=start_ts,
+                end=end_ts,
+            )
+            if cache_covers_range and not sliced_cached.empty:
+                LOGGER.info(
+                    "data_cache_hit provider=%s symbol=%s timeframe=%s cached_rows=%d sliced_rows=%d",
+                    provider_name,
+                    symbol,
+                    timeframe,
+                    len(cached),
+                    len(sliced_cached),
+                )
+                return sliced_cached
+
+            cache_min = pd.Timestamp(cached.index.min()) if not cached.empty else None
+            cache_max = pd.Timestamp(cached.index.max()) if not cached.empty else None
             LOGGER.info(
-                "data_cache_hit symbol=%s timeframe=%s rows=%d",
+                "data_cache_range_miss provider=%s symbol=%s timeframe=%s cached_rows=%d sliced_rows=%d cache_start=%s cache_end=%s request_start=%s request_end=%s",
+                provider_name,
                 symbol,
                 timeframe,
                 len(cached),
+                len(sliced_cached),
+                cache_min,
+                cache_max,
+                start_ts,
+                end_ts,
             )
-            return self._slice_range(cached, start=start_ts, end=end_ts)
-        LOGGER.info("data_cache_miss symbol=%s timeframe=%s", symbol, timeframe)
+        LOGGER.info(
+            "data_cache_miss provider=%s symbol=%s timeframe=%s",
+            provider_name,
+            symbol,
+            timeframe,
+        )
 
         request = DataRequest(symbol=symbol, timeframe=timeframe, start=start_ts, end=end_ts)
 
@@ -71,25 +108,50 @@ class HistoricalDataLoader:
         for attempt in range(1, self.max_retries + 1):
             try:
                 LOGGER.info(
-                    "data_provider_fetch symbol=%s timeframe=%s attempt=%d",
+                    "data_provider_fetch provider=%s symbol=%s timeframe=%s attempt=%d start=%s end=%s",
+                    provider_name,
                     symbol,
                     timeframe,
                     attempt,
+                    start_ts,
+                    end_ts,
                 )
                 raw_data = self.provider.fetch_ohlcv(request)
-                normalized = self.normalize_ohlcv(raw_data)
-                self.cache.save(symbol=symbol, timeframe=timeframe, data=normalized)
                 LOGGER.info(
-                    "data_load_complete symbol=%s timeframe=%s rows=%d",
+                    "data_provider_response provider=%s symbol=%s timeframe=%s raw_rows=%d",
+                    provider_name,
+                    symbol,
+                    timeframe,
+                    len(raw_data),
+                )
+                normalized = self.normalize_ohlcv(raw_data)
+                LOGGER.info(
+                    "data_normalized provider=%s symbol=%s timeframe=%s normalized_rows=%d",
+                    provider_name,
                     symbol,
                     timeframe,
                     len(normalized),
                 )
-                return self._slice_range(normalized, start=start_ts, end=end_ts)
+                sliced = self._slice_range(normalized, start=start_ts, end=end_ts)
+                if sliced.empty:
+                    raise ValueError(
+                        "No market data rows available after normalization and date filtering "
+                        f"for {symbol} ({timeframe}) start={start_ts} end={end_ts}."
+                    )
+                self.cache.save(symbol=symbol, timeframe=timeframe, data=normalized)
+                LOGGER.info(
+                    "data_load_complete provider=%s symbol=%s timeframe=%s rows=%d",
+                    provider_name,
+                    symbol,
+                    timeframe,
+                    len(sliced),
+                )
+                return sliced
             except Exception as exc:  # pragma: no cover - retry branch asserted via behavior
                 last_error = exc
                 LOGGER.warning(
-                    "data_provider_error symbol=%s timeframe=%s attempt=%d error=%s",
+                    "data_provider_error provider=%s symbol=%s timeframe=%s attempt=%d error=%s",
+                    provider_name,
                     symbol,
                     timeframe,
                     attempt,
@@ -141,9 +203,62 @@ class HistoricalDataLoader:
         end: pd.Timestamp | None,
     ) -> pd.DataFrame:
         """Return date-filtered data without mutating source."""
+        aligned_start = HistoricalDataLoader._align_timestamp_timezone(
+            timestamp=start,
+            index=data.index,
+        )
+        aligned_end = HistoricalDataLoader._align_timestamp_timezone(
+            timestamp=end,
+            index=data.index,
+        )
         sliced = data
-        if start is not None:
-            sliced = sliced.loc[sliced.index >= start]
-        if end is not None:
-            sliced = sliced.loc[sliced.index <= end]
+        if aligned_start is not None:
+            sliced = sliced.loc[sliced.index >= aligned_start]
+        if aligned_end is not None:
+            sliced = sliced.loc[sliced.index <= aligned_end]
         return sliced.copy()
+
+    @staticmethod
+    def _cache_covers_requested_range(
+        cached: pd.DataFrame,
+        start: pd.Timestamp | None,
+        end: pd.Timestamp | None,
+    ) -> bool:
+        """Return True when cached data fully covers requested date range."""
+        if cached.empty:
+            return False
+        aligned_start = HistoricalDataLoader._align_timestamp_timezone(
+            timestamp=start,
+            index=cached.index,
+        )
+        aligned_end = HistoricalDataLoader._align_timestamp_timezone(
+            timestamp=end,
+            index=cached.index,
+        )
+        cache_start = pd.Timestamp(cached.index.min())
+        cache_end = pd.Timestamp(cached.index.max())
+        if aligned_start is not None and cache_start > aligned_start:
+            return False
+        if aligned_end is not None and cache_end < aligned_end:
+            return False
+        return True
+
+    @staticmethod
+    def _align_timestamp_timezone(
+        timestamp: pd.Timestamp | None,
+        index: pd.Index,
+    ) -> pd.Timestamp | None:
+        """Align timestamp timezone semantics with DatetimeIndex for safe comparison."""
+        if timestamp is None:
+            return None
+        aligned = pd.Timestamp(timestamp)
+        if not isinstance(index, pd.DatetimeIndex):
+            return aligned
+        index_tz = index.tz
+        if index_tz is None:
+            if aligned.tzinfo is not None:
+                return aligned.tz_localize(None)
+            return aligned
+        if aligned.tzinfo is None:
+            return aligned.tz_localize(index_tz)
+        return aligned.tz_convert(index_tz)

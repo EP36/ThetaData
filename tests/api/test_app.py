@@ -224,3 +224,30 @@ def test_worker_execution_status_endpoint_exposes_universe_and_symbol_rows(
     assert isinstance(payload["symbol_filter_reasons"], dict)
     assert isinstance(payload["active_strategy_by_symbol"], dict)
     assert isinstance(payload["symbols"], list)
+
+
+def test_backtest_missing_alpaca_credentials_returns_clear_error(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DATA_PROVIDER", "alpaca")
+    monkeypatch.delenv("ALPACA_API_KEY", raising=False)
+    monkeypatch.delenv("ALPACA_API_SECRET", raising=False)
+    monkeypatch.delenv("ALPACA_SECRET_KEY", raising=False)
+
+    response = client.post(
+        "/api/backtests/run",
+        json={
+            "symbol": "SPY",
+            "timeframe": "1d",
+            "start": "2025-01-01",
+            "end": "2025-12-31",
+            "strategy": "moving_average_crossover",
+        },
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert "ALPACA_API_KEY" in detail
+    assert "ALPACA_API_SECRET" in detail
+    assert "web service" in detail

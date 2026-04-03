@@ -239,8 +239,21 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   });
 
   if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`API ${response.status}: ${body}`);
+    let detail = `API ${response.status}`;
+    try {
+      const payload = (await response.json()) as { detail?: unknown; message?: unknown };
+      if (typeof payload.detail === "string" && payload.detail.trim()) {
+        detail = payload.detail.trim();
+      } else if (typeof payload.message === "string" && payload.message.trim()) {
+        detail = payload.message.trim();
+      }
+    } catch {
+      const body = await response.text();
+      if (body.trim()) {
+        detail = body.trim();
+      }
+    }
+    throw new Error(detail);
   }
   return (await response.json()) as T;
 }

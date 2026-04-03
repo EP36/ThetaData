@@ -341,6 +341,15 @@ For Alpaca mode, set:
 - `ALPACA_API_KEY` and `ALPACA_API_SECRET`
 - optional: `ALPACA_DATA_BASE_URL` and `ALPACA_DATA_FEED` (default `iex`)
 
+Web service environment required for real backtests (`POST /api/backtests/run`):
+- `DATA_PROVIDER=alpaca`
+- `ALPACA_API_KEY=<your_alpaca_key>`
+- `ALPACA_API_SECRET=<your_alpaca_secret>`
+- optional: `ALPACA_DATA_BASE_URL=https://data.alpaca.markets`
+- optional: `ALPACA_DATA_FEED=iex`
+
+If Alpaca credentials are missing while `DATA_PROVIDER=alpaca`, the endpoint returns a clear `422` explaining which web-service env vars are required.
+
 Current timeframe support in Alpaca mode:
 - `1m`, `5m`, `15m`, `30m`, `1h`, `2h`, `4h`, `1d`
 

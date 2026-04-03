@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
+import os
 from pathlib import Path
 
 import pandas as pd
@@ -31,7 +32,13 @@ class DownloadDataResult:
 
 def make_default_loader(cache_dir: str | Path) -> HistoricalDataLoader:
     """Create default loader backed by configured provider + parquet cache."""
+    selected_provider = os.getenv("DATA_PROVIDER", "synthetic").strip().lower() or "synthetic"
     provider = make_market_data_provider_from_env()
+    LOGGER.info(
+        "data_provider_config_selected provider=%s provider_class=%s",
+        selected_provider,
+        type(provider).__name__,
+    )
     cache = DataCache(root_dir=Path(cache_dir))
     return HistoricalDataLoader(provider=provider, cache=cache)
 
@@ -103,11 +110,14 @@ def run_backtest(
     configure_logging()
     active_run_id = start_run(run_id=run_id)
     LOGGER.info(
-        "backtest_workflow_start symbol=%s timeframe=%s strategy=%s run_id=%s",
+        "backtest_workflow_start symbol=%s timeframe=%s start=%s end=%s strategy=%s run_id=%s data_provider=%s",
         symbol,
         timeframe,
+        start,
+        end,
         strategy_name,
         active_run_id,
+        os.getenv("DATA_PROVIDER", "synthetic").strip().lower() or "synthetic",
     )
 
     loader = make_default_loader(cache_dir=cache_dir)
@@ -118,6 +128,13 @@ def run_backtest(
         end=end,
         force_refresh=force_refresh,
     )
+    if data.empty:
+        raise ValueError(
+            "No backtest market data rows loaded for "
+            f"{symbol} ({timeframe}) start={start} end={end}. "
+            "If DATA_PROVIDER=alpaca, ensure ALPACA_API_KEY and ALPACA_API_SECRET "
+            "are set on the web service."
+        )
 
     strategy = create_strategy(strategy_name, **strategy_params)
     if stop_loss_pct is not None and stop_loss_pct > 0:

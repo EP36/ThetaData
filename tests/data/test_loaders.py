@@ -122,3 +122,72 @@ def test_load_by_date_range_filters_rows(tmp_path) -> None:
 
     assert len(data) == 1
     assert data.index.min() == pd.Timestamp("2025-01-02")
+
+
+def test_cache_range_miss_refetches_provider(tmp_path) -> None:
+    cache = DataCache(root_dir=tmp_path / "cache")
+    stale_cached = pd.DataFrame(
+        {
+            "open": [100.0, 101.0],
+            "high": [101.0, 102.0],
+            "low": [99.0, 100.0],
+            "close": [100.5, 101.5],
+            "volume": [1000.0, 1100.0],
+        },
+        index=pd.DatetimeIndex([pd.Timestamp("2024-01-01"), pd.Timestamp("2024-01-02")], name="timestamp"),
+    )
+    cache.save(symbol="SPY", timeframe="1d", data=stale_cached)
+
+    fresh_provider_frame = pd.DataFrame(
+        {
+            "timestamp": ["2025-01-01", "2025-01-02"],
+            "open": [200.0, 201.0],
+            "high": [202.0, 203.0],
+            "low": [199.0, 200.0],
+            "close": [201.0, 202.0],
+            "volume": [5000, 6000],
+        }
+    )
+    provider = StubProvider(frame=fresh_provider_frame)
+    loader = HistoricalDataLoader(provider=provider, cache=cache)
+
+    data = loader.load(
+        symbol="SPY",
+        timeframe="1d",
+        start="2025-01-01",
+        end="2025-01-02",
+        force_refresh=False,
+    )
+
+    assert provider.calls == 1
+    assert len(data) == 2
+    assert data.index.min() == pd.Timestamp("2025-01-01")
+
+
+def test_load_handles_tz_aware_index_with_naive_request_range(tmp_path) -> None:
+    provider = StubProvider(
+        frame=pd.DataFrame(
+            {
+                "timestamp": [
+                    pd.Timestamp("2025-01-01T00:00:00Z"),
+                    pd.Timestamp("2025-01-02T00:00:00Z"),
+                ],
+                "open": [100.0, 101.0],
+                "high": [101.0, 102.0],
+                "low": [99.0, 100.0],
+                "close": [100.5, 101.5],
+                "volume": [1000, 1100],
+            }
+        )
+    )
+    loader = HistoricalDataLoader(provider=provider, cache=DataCache(root_dir=tmp_path / "cache"))
+
+    data = loader.load(
+        symbol="SPY",
+        timeframe="1d",
+        start="2025-01-02",
+        end="2025-01-02",
+        force_refresh=True,
+    )
+
+    assert len(data) == 1

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import MISSING, dataclass, field
 import logging
+import os
 from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
@@ -503,6 +504,7 @@ class TradingApiService:
         )
 
         run_id = uuid4().hex
+        provider_name = os.getenv("DATA_PROVIDER", "synthetic").strip().lower() or "synthetic"
         configure_logging(log_dir=self._log_dir())
         start_run(run_id=run_id)
         if self.repository is not None:
@@ -522,15 +524,21 @@ class TradingApiService:
                 payload={
                     "symbol": request.symbol,
                     "timeframe": request.timeframe,
+                    "start": request.start,
+                    "end": request.end,
                     "strategy": request.strategy,
+                    "data_provider": provider_name,
                 },
             )
         LOGGER.info(
-            "api_backtest_requested run_id=%s symbol=%s timeframe=%s strategy=%s",
+            "api_backtest_requested run_id=%s symbol=%s timeframe=%s start=%s end=%s strategy=%s data_provider=%s",
             run_id,
             request.symbol,
             request.timeframe,
+            request.start,
+            request.end,
             request.strategy,
+            provider_name,
         )
         LOGGER.info(
             "position_size_calculated run_id=%s symbol=%s risk_per_trade_pct=%.4f risk_per_trade=%.2f stop_loss_pct=%s raw_position_size_pct=%.6f capped_position_size_pct=%.6f max_open_positions=%d",
@@ -648,19 +656,44 @@ class TradingApiService:
                 trades=trade_records,
             )
         except Exception as exc:
+            error_message = str(exc)
+            if (
+                isinstance(exc, ValueError)
+                and "Backtest data cannot be empty" in error_message
+            ):
+                error_message = (
+                    "No backtest data rows were available for "
+                    f"{request.symbol} ({request.timeframe}) start={request.start} end={request.end}. "
+                    "This is often caused by out-of-range cache data or missing provider data."
+                )
+                if provider_name == "alpaca":
+                    error_message += (
+                        " Verify ALPACA_API_KEY and ALPACA_API_SECRET are configured "
+                        "on the web service."
+                    )
             if self.repository is not None:
                 self.repository.finish_run(
                     run_id=run_id,
                     status="failed",
-                    error_message=str(exc),
+                    error_message=error_message,
                 )
                 self.repository.append_log_event(
                     level="ERROR",
                     logger_name=LOGGER.name,
                     event="api_backtest_failed",
                     run_id=run_id,
-                    payload={"error": str(exc)},
+                    payload={
+                        "error": error_message,
+                        "symbol": request.symbol,
+                        "timeframe": request.timeframe,
+                        "start": request.start,
+                        "end": request.end,
+                        "strategy": request.strategy,
+                        "data_provider": provider_name,
+                    },
                 )
+            if isinstance(exc, ValueError) and error_message != str(exc):
+                raise ValueError(error_message) from exc
             raise
         finally:
             clear_run()

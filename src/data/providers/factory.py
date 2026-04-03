@@ -32,7 +32,8 @@ def make_market_data_provider_from_env() -> MarketDataProvider:
         if not api_key or not api_secret:
             raise ValueError(
                 "DATA_PROVIDER=alpaca requires ALPACA_API_KEY and "
-                "ALPACA_API_SECRET (ALPACA_SECRET_KEY accepted temporarily)."
+                "ALPACA_API_SECRET (ALPACA_SECRET_KEY accepted temporarily). "
+                "Set these environment variables on the web service for /api/backtests/run."
             )
         return AlpacaMarketDataProvider(
             api_key=api_key,
