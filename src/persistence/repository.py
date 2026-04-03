@@ -117,6 +117,19 @@ class PersistenceRepository:
                 "updated_at": row.updated_at,
             }
 
+    def update_user_password_hash(self, user_id: int, password_hash: str) -> bool:
+        """Update one user's password hash and touched timestamp."""
+        normalized_hash = password_hash.strip()
+        if not normalized_hash:
+            raise ValueError("password_hash cannot be empty")
+        with self.store.session() as session:
+            row = session.get(UserModel, int(user_id))
+            if row is None:
+                return False
+            row.password_hash = normalized_hash
+            row.updated_at = utc_now()
+            return True
+
     def create_user(
         self,
         email: str,

@@ -119,3 +119,40 @@ def test_require_admin_rejects_non_admin_role(tmp_path) -> None:
 
     with pytest.raises(AuthorizationError):
         service.require_admin(login.user)
+
+
+def test_change_password_rotates_credentials_and_logs_event(tmp_path) -> None:
+    db_path = tmp_path / "theta-auth.db"
+    database_url = f"sqlite+pysqlite:///{db_path}"
+    repository = PersistenceRepository(store=DatabaseStore(database_url=database_url))
+    settings = _settings(database_url=database_url)
+    repository.initialize(starting_cash=100_000.0)
+    service = AuthService(repository=repository, settings=settings)
+
+    user, _ = service.bootstrap_admin(email="admin@example.com", password="ChangeMeNow123!")
+
+    service.change_password(
+        user=user,
+        current_password="ChangeMeNow123!",
+        new_password="UpdatedPass456!",
+    )
+
+    with pytest.raises(AuthenticationError):
+        service.login(
+            email="admin@example.com",
+            password="ChangeMeNow123!",
+            ip_address="127.0.0.1",
+            user_agent="pytest",
+        )
+
+    new_login = service.login(
+        email="admin@example.com",
+        password="UpdatedPass456!",
+        ip_address="127.0.0.1",
+        user_agent="pytest",
+    )
+    assert new_login.user.email == "admin@example.com"
+
+    events = repository.recent_log_events(limit=10, event="auth_password_changed")
+    assert events
+    assert events[0]["payload"]["actor_email"] == "admin@example.com"

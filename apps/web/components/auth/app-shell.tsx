@@ -6,22 +6,9 @@ import { usePathname, useRouter } from "next/navigation";
 
 import { TopNav } from "@/components/navigation/top-nav";
 import { getAuthSession, logout } from "@/lib/api/client";
+import { isProtectedPath, loginPath } from "@/lib/auth/routes";
 import { authExpiredEventName, clearAuthToken, getAuthToken } from "@/lib/auth/session";
 import type { AuthSessionData } from "@/lib/types";
-
-const PUBLIC_PATHS = new Set(["/", "/login"]);
-
-function isProtectedPath(pathname: string): boolean {
-  return !PUBLIC_PATHS.has(pathname);
-}
-
-function loginPath(pathname: string, reason?: string): string {
-  const next = encodeURIComponent(pathname || "/dashboard");
-  if (reason) {
-    return `/login?next=${next}&reason=${encodeURIComponent(reason)}`;
-  }
-  return `/login?next=${next}`;
-}
 
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname() || "/";

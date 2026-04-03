@@ -38,6 +38,8 @@ from src.api.schemas import (
     StrategyUpdateRequest,
     TradesResponse,
     LogoutResponse,
+    PasswordChangeRequest,
+    PasswordChangeResponse,
     WorkerExecutionStatusResponse,
 )
 from src.api.services import TradingApiService
@@ -225,6 +227,27 @@ def post_auth_logout(
     token = _extract_bearer_token(authorization)
     _auth_service().logout(token)
     return LogoutResponse(ok=True)
+
+
+@app.post("/api/auth/password", response_model=PasswordChangeResponse)
+def post_auth_password_change(
+    payload: PasswordChangeRequest,
+    user: AuthenticatedUser = Depends(require_authenticated_user),
+) -> PasswordChangeResponse:
+    """Allow an authenticated user to rotate account password."""
+    if payload.new_password != payload.confirm_new_password:
+        raise HTTPException(status_code=422, detail="New password confirmation does not match")
+    try:
+        _auth_service().change_password(
+            user=user,
+            current_password=payload.current_password,
+            new_password=payload.new_password,
+        )
+    except AuthenticationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return PasswordChangeResponse(ok=True)
 
 
 @app.get("/healthz", response_model=HealthResponse)

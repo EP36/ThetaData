@@ -342,12 +342,6 @@ a {
   background: var(--table-row-alt);
 }
 
-.theme-toggle-wrap .ui-select {
-  min-height: 2rem;
-  padding-top: 0.3rem;
-  padding-bottom: 0.3rem;
-}
-
 html[data-theme="dark"] .ui-select option {
   color: var(--text);
   background: var(--surface);

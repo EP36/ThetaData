@@ -164,6 +164,7 @@ Core endpoints:
 - `POST /api/auth/login`
 - `GET /api/auth/session`
 - `POST /api/auth/logout`
+- `POST /api/auth/password`
 - `GET /api/dashboard/summary`
 - `POST /api/backtests/run`
 - `GET /api/strategies`
@@ -210,6 +211,7 @@ Security notes:
 - Passwords are PBKDF2-HMAC-SHA256 hashed with a secret pepper.
 - Session tokens are opaque bearer tokens; only token hashes are stored in DB.
 - Login failures and sensitive admin actions are persisted in `log_events` with actor identity.
+- Password changes require the current password and are audit logged as `auth_password_changed`.
 
 Architecture note (current single-user + future multi-user extension points):
 - [`docs/auth-architecture.md`](docs/auth-architecture.md)
@@ -684,6 +686,7 @@ Routes:
 - `/strategies`
 - `/risk`
 - `/trades`
+- `/settings`
 
 Frontend auth behavior:
 - Dashboard/control routes require a valid backend session.
@@ -698,12 +701,14 @@ Frontend auth behavior:
   - saved preference is applied if present
   - otherwise system color-scheme preference is used
 - A pre-hydration script in the root layout applies the theme before React mounts to avoid theme flash.
-- Theme can be changed from the top navigation theme control.
+- Theme preference is managed from `Settings` → `Appearance`.
+- Account password changes are managed from `Settings` → `Account Security` and call `POST /api/auth/password`.
 
 Key files:
 - `apps/web/lib/theme.ts`
 - `apps/web/components/theme/theme-provider.tsx`
-- `apps/web/components/theme/theme-toggle.tsx`
+- `apps/web/app/settings/page.tsx`
+- `apps/web/lib/auth/routes.ts`
 - `apps/web/app/layout.tsx`
 - `apps/web/app/globals.css`
 - `apps/web/components/navigation/top-nav.tsx`

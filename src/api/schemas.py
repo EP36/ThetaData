@@ -100,6 +100,24 @@ class LogoutResponse(BaseModel):
     ok: bool
 
 
+class PasswordChangeRequest(BaseModel):
+    """Authenticated password-change payload."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    current_password: str
+    new_password: str
+    confirm_new_password: str
+
+
+class PasswordChangeResponse(BaseModel):
+    """Password-change acknowledgement payload."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    ok: bool
+
+
 class BacktestRunRequest(BaseModel):
     """Request payload for launching a backtest run."""
 

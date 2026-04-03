@@ -271,6 +271,73 @@ class AuthService:
         if user.role.strip().lower() != "admin":
             raise AuthorizationError("Admin role is required")
 
+    def change_password(
+        self,
+        user: AuthenticatedUser,
+        current_password: str,
+        new_password: str,
+    ) -> None:
+        """Rotate password for an authenticated user."""
+        if not current_password:
+            raise ValueError("Current password is required")
+        if not new_password:
+            raise ValueError("New password is required")
+        if len(new_password) < 12:
+            raise ValueError("New password must be at least 12 characters")
+
+        user_row = self.repository.get_user_by_email(user.email)
+        if user_row is None or not bool(user_row.get("is_active", False)):
+            raise AuthenticationError("Invalid session")
+
+        existing_hash = str(user_row["password_hash"])
+        if not verify_password(
+            password=current_password,
+            password_hash=existing_hash,
+            pepper=self.settings.auth_password_pepper,
+        ):
+            self.repository.append_log_event(
+                level="WARNING",
+                logger_name="theta.auth",
+                event="auth_password_change_failed",
+                payload={
+                    "actor_user_id": user.id,
+                    "actor_email": user.email,
+                    "actor_role": user.role,
+                    "reason": "invalid_current_password",
+                },
+            )
+            raise AuthenticationError("Current password is incorrect")
+
+        if verify_password(
+            password=new_password,
+            password_hash=existing_hash,
+            pepper=self.settings.auth_password_pepper,
+        ):
+            raise ValueError("New password must differ from the current password")
+
+        next_hash = hash_password(
+            password=new_password,
+            pepper=self.settings.auth_password_pepper,
+            iterations=DEFAULT_PASSWORD_ITERATIONS,
+        )
+        updated = self.repository.update_user_password_hash(
+            user_id=user.id,
+            password_hash=next_hash,
+        )
+        if not updated:
+            raise AuthenticationError("Invalid session")
+
+        self.repository.append_log_event(
+            level="INFO",
+            logger_name="theta.auth",
+            event="auth_password_changed",
+            payload={
+                "actor_user_id": user.id,
+                "actor_email": user.email,
+                "actor_role": user.role,
+            },
+        )
+
     def bootstrap_admin(self, email: str, password: str) -> tuple[AuthenticatedUser, bool]:
         """Create/update initial admin user and return (user, created)."""
         normalized = normalize_email(email)

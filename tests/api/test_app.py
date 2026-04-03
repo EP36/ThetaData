@@ -95,6 +95,52 @@ def test_expired_session_is_rejected(client: TestClient, admin_headers: dict[str
     assert "Session expired" in session_response.json()["detail"]
 
 
+def test_password_change_requires_authenticated_session(client: TestClient) -> None:
+    response = client.post(
+        "/api/auth/password",
+        json={
+            "current_password": TEST_ADMIN_PASSWORD,
+            "new_password": "UpdatedPass456!",
+            "confirm_new_password": "UpdatedPass456!",
+        },
+    )
+    assert response.status_code == 401
+
+
+def test_password_change_flow_rotates_credentials(
+    client: TestClient,
+    admin_headers: dict[str, str],
+) -> None:
+    change_response = client.post(
+        "/api/auth/password",
+        json={
+            "current_password": TEST_ADMIN_PASSWORD,
+            "new_password": "UpdatedPass456!",
+            "confirm_new_password": "UpdatedPass456!",
+        },
+        headers=admin_headers,
+    )
+    assert change_response.status_code == 200
+    assert change_response.json()["ok"] is True
+
+    old_login = client.post(
+        "/api/auth/login",
+        json={"email": TEST_ADMIN_EMAIL, "password": TEST_ADMIN_PASSWORD},
+    )
+    assert old_login.status_code == 401
+
+    new_login = client.post(
+        "/api/auth/login",
+        json={"email": TEST_ADMIN_EMAIL, "password": "UpdatedPass456!"},
+    )
+    assert new_login.status_code == 200
+    assert new_login.json()["token"]
+
+    events = app.state.repository.recent_log_events(limit=10, event="auth_password_changed")
+    assert events
+    assert events[0]["payload"]["actor_email"] == TEST_ADMIN_EMAIL
+
+
 def test_get_strategies_returns_registered_strategies(
     client: TestClient,
     admin_headers: dict[str, str],

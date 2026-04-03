@@ -265,6 +265,10 @@ type ApiLogoutResponse = {
   ok: boolean;
 };
 
+type ApiPasswordChangeResponse = {
+  ok: boolean;
+};
+
 export class ApiError extends Error {
   readonly status: number;
 
@@ -367,6 +371,24 @@ export async function logout(): Promise<void> {
 export async function getAuthSession(): Promise<AuthSessionData> {
   const payload = await fetchJson<ApiAuthSessionResponse>("/api/auth/session");
   return mapAuthSession(payload);
+}
+
+export async function changePassword(
+  currentPassword: string,
+  newPassword: string,
+  confirmNewPassword: string
+): Promise<void> {
+  const payload = await fetchJson<ApiPasswordChangeResponse>("/api/auth/password", {
+    method: "POST",
+    body: JSON.stringify({
+      current_password: currentPassword,
+      new_password: newPassword,
+      confirm_new_password: confirmNewPassword
+    })
+  });
+  if (!payload.ok) {
+    throw new ApiError("Unable to change password.", 500);
+  }
 }
 
 function mapTradeRow(trade: ApiTrade): TradeRow {
