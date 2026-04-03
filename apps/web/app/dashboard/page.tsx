@@ -58,7 +58,7 @@ export default function DashboardPage() {
   const totalTone = summary.totalPnl >= 0 ? "positive" : "negative";
 
   return (
-    <section className="space-y-4">
+    <section className="space-y-5">
       <div className="glass-panel flex flex-wrap items-center justify-between gap-3 rounded-3xl px-4 py-4 md:px-5">
         <div>
           <h2 className="page-title font-semibold">Operational Dashboard</h2>

@@ -68,7 +68,7 @@ export default function StrategiesPage() {
   };
 
   return (
-    <section className="space-y-4">
+    <section className="space-y-5">
       <div className="glass-panel rounded-3xl p-4 md:px-5 md:py-5">
         <h2 className="page-title font-semibold">Strategies</h2>
         <p className="mt-1 text-sm text-[var(--muted)]">

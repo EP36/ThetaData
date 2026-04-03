@@ -10,7 +10,7 @@ export function RiskEventsTable({ events }: RiskEventsTableProps) {
       <h3 className="text-sm font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
         Risk Event Log
       </h3>
-      <div className="mt-3 overflow-x-auto">
+      <div className="table-scroll">
         <table className="data-table text-sm">
           <thead>
             <tr>

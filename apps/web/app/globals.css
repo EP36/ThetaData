@@ -256,6 +256,18 @@ a {
   box-shadow: var(--shadow-danger);
 }
 
+.ui-button-subtle {
+  color: var(--text);
+  border-color: var(--line);
+  background: var(--surface);
+  box-shadow: none;
+}
+
+.ui-button-subtle:hover {
+  border-color: var(--line-strong);
+  background: var(--panel-soft);
+}
+
 .ui-pill {
   display: inline-flex;
   align-items: center;
@@ -306,6 +318,19 @@ a {
   border-spacing: 0;
 }
 
+.table-scroll {
+  margin-top: 0.75rem;
+  max-height: min(52vh, 30rem);
+  overflow: auto;
+  border: 1px solid var(--line-soft);
+  border-radius: 0.9rem;
+  background: var(--panel);
+}
+
+.table-scroll .data-table {
+  min-width: 720px;
+}
+
 .data-table thead {
   color: var(--muted);
   font-size: 0.7rem;
@@ -340,6 +365,16 @@ a {
 
 .data-table tbody tr:nth-child(even) {
   background: var(--table-row-alt);
+}
+
+@media (max-width: 640px) {
+  .table-scroll {
+    max-height: 22rem;
+  }
+
+  .table-scroll .data-table {
+    min-width: 640px;
+  }
 }
 
 html[data-theme="dark"] .ui-select option {

@@ -131,7 +131,7 @@ export default function RiskPage() {
     : "Emergency stop is OFF. Controls are in normal operating mode.";
 
   return (
-    <section className="space-y-4">
+    <section className="space-y-5">
       <div className="glass-panel rounded-3xl p-4 md:px-5 md:py-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>

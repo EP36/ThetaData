@@ -27,7 +27,7 @@ export function RecentTradesTable({ trades }: RecentTradesTableProps) {
           No real trades yet. Paper trading is idle or no fills have been persisted.
         </p>
       ) : (
-        <div className="mt-3 overflow-x-auto">
+        <div className="table-scroll">
           <table className="data-table text-sm">
             <thead>
               <tr>

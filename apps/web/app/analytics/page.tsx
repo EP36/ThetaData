@@ -106,7 +106,7 @@ export default function AnalyticsPage() {
         : "No backtest runs yet";
 
   return (
-    <section className="space-y-4">
+    <section className="space-y-5">
       <div className="glass-panel rounded-3xl p-4 md:px-5 md:py-5">
         <h2 className="page-title font-semibold">Analytics & Selection</h2>
         <p className="mt-1 text-sm text-[var(--muted)]">
@@ -149,7 +149,7 @@ export default function AnalyticsPage() {
           Worker <strong>{data.execution.workerName}</strong> on timeframe <strong>{data.execution.timeframe}</strong>. Mode: <strong>{data.execution.universeMode}</strong>. Universe: <strong>{data.execution.universeSymbols.join(", ") || "none"}</strong>. Scanned: <strong>{data.execution.scannedSymbols.join(", ") || "none"}</strong>. Shortlisted: <strong>{data.execution.shortlistedSymbols.join(", ") || "none"}</strong>. Last selected: <strong>{data.execution.lastSelectedSymbol ?? "none"} / {data.execution.lastSelectedStrategy ?? "none"}</strong>. Last no-trade reason: <strong>{data.execution.lastNoTradeReason ?? "none"}</strong>.
         </p>
         {Object.keys(data.execution.symbolFilterReasons).length > 0 ? (
-          <div className="mt-3 overflow-x-auto">
+          <div className="table-scroll">
             <table className="data-table text-sm">
               <thead>
                 <tr>
@@ -171,7 +171,7 @@ export default function AnalyticsPage() {
         {data.execution.symbols.length === 0 ? (
           <p className="mt-3 text-sm text-[var(--muted)]">No execution-cycle data yet.</p>
         ) : (
-          <div className="mt-3 overflow-x-auto">
+          <div className="table-scroll">
             <table className="data-table text-sm">
               <thead>
                 <tr>
@@ -207,7 +207,7 @@ export default function AnalyticsPage() {
         {data.selection.candidates.length === 0 ? (
           <p className="mt-3 text-sm text-[var(--muted)]">No selection-candidate data yet.</p>
         ) : (
-          <div className="mt-3 overflow-x-auto">
+          <div className="table-scroll">
             <table className="data-table text-sm">
               <thead>
                 <tr>
@@ -251,7 +251,7 @@ export default function AnalyticsPage() {
           {paperData.strategies.strategies.length === 0 ? (
             <p className="mt-3 text-sm text-[var(--muted)]">No paper execution fills yet.</p>
           ) : (
-            <div className="mt-3 overflow-x-auto">
+            <div className="table-scroll">
               <table className="data-table text-sm">
                 <thead>
                   <tr>
@@ -294,7 +294,7 @@ export default function AnalyticsPage() {
           {backtestData.strategies.strategies.length === 0 ? (
             <p className="mt-3 text-sm text-[var(--muted)]">No persisted backtest runs yet.</p>
           ) : (
-            <div className="mt-3 overflow-x-auto">
+            <div className="table-scroll">
               <table className="data-table text-sm">
                 <thead>
                   <tr>
@@ -330,7 +330,7 @@ export default function AnalyticsPage() {
           {selectedMetrics == null ? (
             <p className="mt-3 text-sm text-[var(--muted)]">No selected paper strategy rolling data yet.</p>
           ) : (
-            <div className="mt-3 overflow-x-auto">
+            <div className="table-scroll">
               <table className="data-table text-sm">
                 <thead>
                   <tr>
@@ -364,7 +364,7 @@ export default function AnalyticsPage() {
           {rejected.length === 0 ? (
             <p className="mt-3 text-sm text-[var(--muted)]">No rejected strategies in the latest decision.</p>
           ) : (
-            <div className="mt-3 overflow-x-auto">
+            <div className="table-scroll">
               <table className="data-table text-sm">
                 <thead>
                   <tr>
