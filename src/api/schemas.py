@@ -195,6 +195,8 @@ class StrategyAnalyticsResponse(BaseModel):
 
     generated_at: datetime
     data_source: Literal["execution", "paper", "backtest"]
+    aggregation_scope: Literal["single_run", "multi_run_aggregate"]
+    run_count: int
     strategies: list[StrategyAnalyticsRecordResponse]
 
 

@@ -362,6 +362,7 @@ class TradingApiService:
                 runs=runs,
                 portfolio_snapshot=portfolio,
                 starting_equity=starting_equity,
+                analytics_source=source,
             )
 
         snapshot = self.repository.load_portfolio_snapshot(default_cash=starting_equity)
@@ -390,6 +391,7 @@ class TradingApiService:
             runs=runs,
             portfolio_snapshot=snapshot,
             starting_equity=starting_equity,
+            analytics_source=source,
         )
 
     def _initialize_strategy_state(self, use_persisted: bool) -> None:
@@ -887,9 +889,16 @@ class TradingApiService:
     ) -> StrategyAnalyticsResponse:
         """Return strategy-level analytics built from persisted fills/runs."""
         snapshot = self._performance_snapshot(source=source)
+        run_ids = {row.run_id for row in snapshot.outcomes if row.run_id}
+        run_count = len(run_ids) if run_ids else (1 if snapshot.outcomes else 0)
+        aggregation_scope: Literal["single_run", "multi_run_aggregate"] = (
+            "multi_run_aggregate" if run_count > 1 else "single_run"
+        )
         return StrategyAnalyticsResponse(
             generated_at=pd.Timestamp(snapshot.generated_at).to_pydatetime(),
             data_source=source,
+            aggregation_scope=aggregation_scope,
+            run_count=int(run_count),
             strategies=[_strategy_analytics_to_response(item) for item in snapshot.strategies],
         )
 

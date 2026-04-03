@@ -137,6 +137,8 @@ export type StrategyAnalyticsRecord = {
 export type StrategyAnalyticsData = {
   generatedAt: string;
   dataSource: "execution" | "paper" | "backtest";
+  aggregationScope: "single_run" | "multi_run_aggregate";
+  runCount: number;
   strategies: StrategyAnalyticsRecord[];
 };
 

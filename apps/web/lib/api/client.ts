@@ -120,6 +120,8 @@ type ApiStrategyAnalyticsRecord = {
 type ApiStrategyAnalyticsResponse = {
   generated_at: string;
   data_source: AnalyticsSource;
+  aggregation_scope: "single_run" | "multi_run_aggregate";
+  run_count: number;
   strategies: ApiStrategyAnalyticsRecord[];
 };
 
@@ -482,6 +484,8 @@ export async function getStrategyAnalytics(
   return {
     generatedAt: payload.generated_at,
     dataSource: payload.data_source,
+    aggregationScope: payload.aggregation_scope,
+    runCount: payload.run_count,
     strategies: payload.strategies.map((item) => ({
       strategy: item.strategy,
       totalReturn: item.total_return,

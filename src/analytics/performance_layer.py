@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
@@ -13,6 +13,7 @@ import pandas as pd
 from src.persistence.repository import PortfolioSnapshot
 
 EPSILON = 1e-12
+AnalyticsSource = Literal["execution", "backtest"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,13 +178,26 @@ def build_performance_snapshot(
     runs: list[dict[str, Any]],
     portfolio_snapshot: PortfolioSnapshot,
     starting_equity: float,
+    analytics_source: AnalyticsSource = "execution",
 ) -> PerformanceAnalyticsSnapshot:
     """Build deterministic analytics snapshot from persisted data."""
     run_context = _build_run_context(runs)
-    outcomes = _reconstruct_outcomes(fills, run_context)
-    strategy_analytics = _compute_strategy_analytics(outcomes)
+    outcomes = _reconstruct_outcomes(
+        fills=fills,
+        run_context=run_context,
+        isolate_positions_by_run=(analytics_source == "backtest"),
+    )
+    strategy_analytics = _compute_strategy_analytics(
+        outcomes=outcomes,
+        starting_equity=starting_equity,
+        analytics_source=analytics_source,
+    )
     portfolio = _compute_portfolio_analytics(outcomes, portfolio_snapshot, starting_equity)
-    context = _compute_context_analytics(outcomes)
+    context = _compute_context_analytics(
+        outcomes=outcomes,
+        starting_equity=starting_equity,
+        analytics_source=analytics_source,
+    )
 
     return PerformanceAnalyticsSnapshot(
         generated_at=datetime.now(tz=timezone.utc),
@@ -243,6 +257,7 @@ def _build_run_context(runs: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
 def _reconstruct_outcomes(
     fills: list[dict[str, Any]],
     run_context: dict[str, dict[str, Any]],
+    isolate_positions_by_run: bool = False,
 ) -> list[TradeOutcome]:
     """Reconstruct closed long-only trade outcomes from fills."""
     if not fills:
@@ -288,11 +303,11 @@ def _reconstruct_outcomes(
     )
 
     outcomes: list[TradeOutcome] = []
-    # key=(strategy, symbol)
-    positions: dict[tuple[str, str], dict[str, Any]] = {}
+    positions: dict[tuple[str, str, str | None], dict[str, Any]] = {}
 
     for fill in normalized:
-        key = (fill["strategy"], fill["symbol"])
+        position_run_key: str | None = fill["run_id"] if isolate_positions_by_run else None
+        key = (fill["strategy"], fill["symbol"], position_run_key)
         position = positions.get(
             key,
             {
@@ -391,7 +406,11 @@ def _to_utc_timestamp(value: Any) -> pd.Timestamp:
     return timestamp.tz_convert("UTC")
 
 
-def _compute_strategy_analytics(outcomes: list[TradeOutcome]) -> list[StrategyAnalytics]:
+def _compute_strategy_analytics(
+    outcomes: list[TradeOutcome],
+    starting_equity: float,
+    analytics_source: AnalyticsSource,
+) -> list[StrategyAnalytics]:
     """Compute strategy-level analytics from closed trade outcomes."""
     grouped: dict[str, list[TradeOutcome]] = defaultdict(list)
     for outcome in outcomes:
@@ -410,7 +429,12 @@ def _compute_strategy_analytics(outcomes: list[TradeOutcome]) -> list[StrategyAn
         rows.append(
             StrategyAnalytics(
                 strategy=strategy_name,
-                total_return=_total_return(returns),
+                total_return=_strategy_total_return(
+                    outcomes=ordered,
+                    returns=returns,
+                    starting_equity=starting_equity,
+                    analytics_source=analytics_source,
+                ),
                 win_rate=_win_rate(pnls),
                 average_win=_average_win(pnls),
                 average_loss=_average_loss(pnls),
@@ -600,26 +624,51 @@ def _strategy_contribution_rows(
     return rows
 
 
-def _compute_context_analytics(outcomes: list[TradeOutcome]) -> ContextAnalytics:
+def _compute_context_analytics(
+    outcomes: list[TradeOutcome],
+    starting_equity: float,
+    analytics_source: AnalyticsSource,
+) -> ContextAnalytics:
     """Compute grouped context analytics across symbol/time/timeframe/regime buckets."""
     return ContextAnalytics(
-        by_symbol=_grouped_context(outcomes, key_fn=lambda row: row.symbol),
-        by_timeframe=_grouped_context(outcomes, key_fn=lambda row: row.timeframe),
+        by_symbol=_grouped_context(
+            outcomes=outcomes,
+            key_fn=lambda row: row.symbol,
+            starting_equity=starting_equity,
+            analytics_source=analytics_source,
+        ),
+        by_timeframe=_grouped_context(
+            outcomes=outcomes,
+            key_fn=lambda row: row.timeframe,
+            starting_equity=starting_equity,
+            analytics_source=analytics_source,
+        ),
         by_weekday=_grouped_context(
-            outcomes,
+            outcomes=outcomes,
             key_fn=lambda row: pd.Timestamp(row.exit_timestamp).day_name(),
+            starting_equity=starting_equity,
+            analytics_source=analytics_source,
         ),
         by_hour=_grouped_context(
-            outcomes,
+            outcomes=outcomes,
             key_fn=lambda row: f"{pd.Timestamp(row.exit_timestamp).hour:02d}:00",
+            starting_equity=starting_equity,
+            analytics_source=analytics_source,
         ),
-        by_regime=_grouped_context(outcomes, key_fn=lambda row: row.regime),
+        by_regime=_grouped_context(
+            outcomes=outcomes,
+            key_fn=lambda row: row.regime,
+            starting_equity=starting_equity,
+            analytics_source=analytics_source,
+        ),
     )
 
 
 def _grouped_context(
     outcomes: list[TradeOutcome],
     key_fn,
+    starting_equity: float,
+    analytics_source: AnalyticsSource,
 ) -> tuple[ContextBucketPerformance, ...]:
     """Aggregate one context dimension into deterministic grouped metrics."""
     grouped: dict[str, list[TradeOutcome]] = defaultdict(list)
@@ -635,7 +684,12 @@ def _grouped_context(
             ContextBucketPerformance(
                 key=key,
                 trades=len(bucket),
-                total_return=_total_return(returns),
+                total_return=_strategy_total_return(
+                    outcomes=bucket,
+                    returns=returns,
+                    starting_equity=starting_equity,
+                    analytics_source=analytics_source,
+                ),
                 win_rate=_win_rate(pnls),
                 expectancy=_expectancy(pnls),
                 sharpe=_sharpe(returns),
@@ -643,6 +697,39 @@ def _grouped_context(
             )
         )
     return tuple(items)
+
+
+def _strategy_total_return(
+    outcomes: list[TradeOutcome],
+    returns: pd.Series,
+    starting_equity: float,
+    analytics_source: AnalyticsSource,
+) -> float:
+    """Compute total return for one grouped slice by source semantics."""
+    if analytics_source == "backtest":
+        return _normalized_return_from_pnl(outcomes=outcomes, starting_equity=starting_equity)
+    return _total_return(returns)
+
+
+def _normalized_return_from_pnl(
+    outcomes: list[TradeOutcome],
+    starting_equity: float,
+) -> float:
+    """Return PnL-normalized aggregate return across independent runs."""
+    if not outcomes or starting_equity <= EPSILON:
+        return 0.0
+    run_count = _run_count_from_outcomes(outcomes)
+    total_pnl = float(sum(item.pnl for item in outcomes))
+    capital_base = float(starting_equity * run_count)
+    if capital_base <= EPSILON:
+        return 0.0
+    return float(total_pnl / capital_base)
+
+
+def _run_count_from_outcomes(outcomes: list[TradeOutcome]) -> int:
+    """Count distinct runs represented in outcomes; fallback to one."""
+    run_ids = {item.run_id for item in outcomes if item.run_id}
+    return len(run_ids) if run_ids else 1
 
 
 def _total_return(returns: pd.Series) -> float:

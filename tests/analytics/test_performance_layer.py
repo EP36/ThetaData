@@ -162,3 +162,117 @@ def test_empty_state_snapshot_returns_empty_series() -> None:
     assert snapshot.portfolio.equity_curve == ()
     assert snapshot.portfolio.daily_pnl == ()
     assert snapshot.context.by_symbol == ()
+
+
+def test_backtest_total_return_uses_run_normalized_capital_base() -> None:
+    fills = [
+        {
+            "run_id": "run-a",
+            "timestamp": pd.Timestamp("2026-01-01T10:00:00Z"),
+            "symbol": "SPY",
+            "side": "BUY",
+            "quantity": 1.0,
+            "price": 100.0,
+            "strategy": "moving_average_crossover",
+        },
+        {
+            "run_id": "run-a",
+            "timestamp": pd.Timestamp("2026-01-01T11:00:00Z"),
+            "symbol": "SPY",
+            "side": "SELL",
+            "quantity": 1.0,
+            "price": 110.0,
+            "strategy": "moving_average_crossover",
+        },
+        {
+            "run_id": "run-b",
+            "timestamp": pd.Timestamp("2026-01-02T10:00:00Z"),
+            "symbol": "SPY",
+            "side": "BUY",
+            "quantity": 1.0,
+            "price": 100.0,
+            "strategy": "moving_average_crossover",
+        },
+        {
+            "run_id": "run-b",
+            "timestamp": pd.Timestamp("2026-01-02T11:00:00Z"),
+            "symbol": "SPY",
+            "side": "SELL",
+            "quantity": 1.0,
+            "price": 90.0,
+            "strategy": "moving_average_crossover",
+        },
+    ]
+    runs = [
+        {"run_id": "run-a", "strategy": "moving_average_crossover", "timeframe": "1d", "details": {}},
+        {"run_id": "run-b", "strategy": "moving_average_crossover", "timeframe": "1d", "details": {}},
+    ]
+
+    snapshot = build_performance_snapshot(
+        fills=fills,
+        runs=runs,
+        portfolio_snapshot=_portfolio_snapshot(),
+        starting_equity=100_000.0,
+        analytics_source="backtest",
+    )
+
+    strategy = snapshot.strategies[0]
+    # Two independent runs with +10 and -10 pnl average to flat return.
+    assert abs(strategy.total_return) < 1e-12
+
+
+def test_backtest_run_isolation_prevents_cross_run_trade_mixing() -> None:
+    fills = [
+        {
+            "run_id": "run-a",
+            "timestamp": pd.Timestamp("2026-01-01T10:00:00Z"),
+            "symbol": "SPY",
+            "side": "BUY",
+            "quantity": 1.0,
+            "price": 100.0,
+            "strategy": "moving_average_crossover",
+        },
+        {
+            "run_id": "run-b",
+            "timestamp": pd.Timestamp("2026-01-01T10:30:00Z"),
+            "symbol": "SPY",
+            "side": "BUY",
+            "quantity": 1.0,
+            "price": 200.0,
+            "strategy": "moving_average_crossover",
+        },
+        {
+            "run_id": "run-a",
+            "timestamp": pd.Timestamp("2026-01-01T11:00:00Z"),
+            "symbol": "SPY",
+            "side": "SELL",
+            "quantity": 1.0,
+            "price": 110.0,
+            "strategy": "moving_average_crossover",
+        },
+        {
+            "run_id": "run-b",
+            "timestamp": pd.Timestamp("2026-01-01T11:30:00Z"),
+            "symbol": "SPY",
+            "side": "SELL",
+            "quantity": 1.0,
+            "price": 220.0,
+            "strategy": "moving_average_crossover",
+        },
+    ]
+    runs = [
+        {"run_id": "run-a", "strategy": "moving_average_crossover", "timeframe": "1d", "details": {}},
+        {"run_id": "run-b", "strategy": "moving_average_crossover", "timeframe": "1d", "details": {}},
+    ]
+
+    snapshot = build_performance_snapshot(
+        fills=fills,
+        runs=runs,
+        portfolio_snapshot=_portfolio_snapshot(),
+        starting_equity=100_000.0,
+        analytics_source="backtest",
+    )
+
+    strategy = snapshot.strategies[0]
+    assert strategy.num_trades == 2
+    assert strategy.win_rate == 1.0

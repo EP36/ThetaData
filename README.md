@@ -239,6 +239,11 @@ Strategy analytics (`/api/analytics/strategies`) include:
 - rolling 20-trade metrics (win rate, expectancy, Sharpe)
 - recent windows (last 5 / 20 / 60 trades)
 
+Backtest analytics return semantics:
+- Backtest analytics are computed from persisted backtest trades and may cover multiple runs.
+- `total_return` for backtest analytics is run-normalized (`sum_pnl / (initial_capital * run_count)`), not compounded across every trade across all runs.
+- Use the Backtests page run result for single-run metrics.
+
 Portfolio analytics (`/api/analytics/portfolio`) include:
 - equity curve
 - daily pnl

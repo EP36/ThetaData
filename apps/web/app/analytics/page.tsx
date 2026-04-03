@@ -98,6 +98,12 @@ export default function AnalyticsPage() {
     (row) => row.strategy === selectedStrategy
   );
   const rejected = rejectionRows(data.selection.candidates);
+  const backtestAggregationLabel =
+    backtestData.strategies.aggregationScope === "multi_run_aggregate"
+      ? `Aggregate across ${backtestData.strategies.runCount} persisted backtest runs`
+      : backtestData.strategies.runCount === 1
+        ? "Single persisted backtest run"
+        : "No backtest runs yet";
 
   return (
     <section className="space-y-4">
@@ -280,6 +286,10 @@ export default function AnalyticsPage() {
           </h3>
           <p className="mt-2 text-xs text-[var(--muted)]">
             Source: <strong>{backtestData.strategies.dataSource}</strong>
+          </p>
+          <p className="mt-1 text-xs text-[var(--muted)]">
+            Scope: <strong>{backtestAggregationLabel}</strong>. For per-run results, use the
+            Backtests page run output.
           </p>
           {backtestData.strategies.strategies.length === 0 ? (
             <p className="mt-3 text-sm text-[var(--muted)]">No persisted backtest runs yet.</p>

@@ -277,6 +277,8 @@ def test_analytics_and_selection_endpoints_return_typed_shapes(
     strategies_payload = strategies_response.json()
     assert isinstance(strategies_payload["generated_at"], str)
     assert strategies_payload["data_source"] == "execution"
+    assert strategies_payload["aggregation_scope"] in {"single_run", "multi_run_aggregate"}
+    assert isinstance(strategies_payload["run_count"], int)
     assert isinstance(strategies_payload["strategies"], list)
 
     portfolio_response = client.get("/api/analytics/portfolio", headers=admin_headers)
@@ -328,6 +330,8 @@ def test_strategy_analytics_populates_after_backtest_run(
     backtest_payload = backtest_analytics_response.json()
     assert isinstance(backtest_payload["generated_at"], str)
     assert backtest_payload["data_source"] == "backtest"
+    assert backtest_payload["aggregation_scope"] in {"single_run", "multi_run_aggregate"}
+    assert isinstance(backtest_payload["run_count"], int)
     assert any(
         item["strategy"] == "moving_average_crossover"
         for item in backtest_payload["strategies"]
