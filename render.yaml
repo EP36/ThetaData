@@ -38,6 +38,12 @@ services:
         value: "false"
       - key: CORS_ALLOWED_ORIGINS
         value: "https://thetadata.onrender.com"
+      - key: AUTH_SESSION_SECRET
+        sync: false
+      - key: AUTH_PASSWORD_PEPPER
+        sync: false
+      - key: AUTH_BOOTSTRAP_ADMIN_ON_STARTUP
+        value: "false"
       - key: KILL_SWITCH_ON_STARTUP
         value: "false"
 
@@ -73,6 +79,12 @@ services:
         value: "false"
       - key: CORS_ALLOWED_ORIGINS
         value: "https://thetadata.onrender.com"
+      - key: AUTH_SESSION_SECRET
+        sync: false
+      - key: AUTH_PASSWORD_PEPPER
+        sync: false
+      - key: AUTH_BOOTSTRAP_ADMIN_ON_STARTUP
+        value: "false"
       - key: KILL_SWITCH_ON_STARTUP
         value: "false"
       - key: WORKER_POLL_SECONDS

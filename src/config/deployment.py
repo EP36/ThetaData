@@ -32,6 +32,8 @@ STRICT_REQUIRED_ENV_VARS = (
     "WORKER_ENABLE_TRADING",
     "LIVE_TRADING",
     "CORS_ALLOWED_ORIGINS",
+    "AUTH_SESSION_SECRET",
+    "AUTH_PASSWORD_PEPPER",
 )
 
 
@@ -97,6 +99,16 @@ class DeploymentSettings:
         "http://localhost:3000",
         "http://127.0.0.1:3000",
     )
+    auth_enabled: bool = True
+    auth_session_secret: str = "dev-insecure-auth-session-secret-change-me"
+    auth_password_pepper: str = "dev-insecure-auth-password-pepper-change-me"
+    auth_session_ttl_minutes: int = 720
+    auth_login_max_attempts: int = 5
+    auth_login_window_seconds: int = 900
+    auth_login_block_seconds: int = 900
+    auth_bootstrap_admin_on_startup: bool = False
+    auth_bootstrap_admin_email: str = ""
+    auth_bootstrap_admin_password: str = ""
 
     paper_trading_enabled: bool = False
     worker_enable_trading: bool = False
@@ -192,6 +204,14 @@ class DeploymentSettings:
             raise ValueError("executor_daily_loss_cap must be positive")
         if not self.cors_allowed_origins:
             raise ValueError("cors_allowed_origins cannot be empty")
+        if self.auth_session_ttl_minutes <= 0:
+            raise ValueError("auth_session_ttl_minutes must be positive")
+        if self.auth_login_max_attempts <= 0:
+            raise ValueError("auth_login_max_attempts must be positive")
+        if self.auth_login_window_seconds <= 0:
+            raise ValueError("auth_login_window_seconds must be positive")
+        if self.auth_login_block_seconds <= 0:
+            raise ValueError("auth_login_block_seconds must be positive")
         if not self.alpaca_base_url.strip():
             raise ValueError("alpaca_base_url cannot be empty")
         if self.app_env in {"production", "staging"} and any(
@@ -200,6 +220,19 @@ class DeploymentSettings:
             raise ValueError("Wildcard CORS origin is not allowed in production/staging")
         if self.app_env == "production" and self.database_url.startswith("sqlite"):
             raise ValueError("production deployment requires a Postgres DATABASE_URL")
+        if self.auth_enabled and (
+            not self.auth_session_secret.strip() or not self.auth_password_pepper.strip()
+        ):
+            raise ValueError("auth_session_secret and auth_password_pepper cannot be empty")
+        if self.auth_bootstrap_admin_on_startup:
+            if not self.auth_bootstrap_admin_email.strip():
+                raise ValueError(
+                    "auth_bootstrap_admin_email is required when bootstrap on startup is enabled"
+                )
+            if not self.auth_bootstrap_admin_password:
+                raise ValueError(
+                    "auth_bootstrap_admin_password is required when bootstrap on startup is enabled"
+                )
 
         # Safety gate: active worker trading requires explicit paper mode unless dry-run is on.
         if self.worker_enable_trading and not self.paper_trading_enabled and not self.worker_dry_run:
@@ -210,6 +243,27 @@ class DeploymentSettings:
         # Hard guard against accidental live trading flags.
         if _read_bool("LIVE_TRADING", default=False):
             raise ValueError("LIVE_TRADING must remain disabled for this repository")
+
+        if self.app_env in {"production", "staging"} and self.auth_enabled:
+            if len(self.auth_session_secret.strip()) < 32:
+                raise ValueError(
+                    "auth_session_secret must be at least 32 characters in production/staging"
+                )
+            if len(self.auth_password_pepper.strip()) < 32:
+                raise ValueError(
+                    "auth_password_pepper must be at least 32 characters in production/staging"
+                )
+            insecure_defaults = {
+                "dev-insecure-auth-session-secret-change-me",
+                "dev-insecure-auth-password-pepper-change-me",
+            }
+            if (
+                self.auth_session_secret.strip() in insecure_defaults
+                or self.auth_password_pepper.strip() in insecure_defaults
+            ):
+                raise ValueError(
+                    "auth secrets must not use development placeholder values in production/staging"
+                )
 
         if self.strict_env_validation or self.app_env == "production":
             self._validate_strict_requirements()
@@ -274,6 +328,25 @@ class DeploymentSettings:
             strict_env_validation=strict_env_validation,
             run_migrations_on_startup=_read_bool("RUN_MIGRATIONS_ON_STARTUP", default=True),
             cors_allowed_origins=cors_allowed_origins,
+            auth_enabled=_read_bool("AUTH_ENABLED", default=True),
+            auth_session_secret=os.getenv(
+                "AUTH_SESSION_SECRET",
+                "dev-insecure-auth-session-secret-change-me",
+            ).strip(),
+            auth_password_pepper=os.getenv(
+                "AUTH_PASSWORD_PEPPER",
+                "dev-insecure-auth-password-pepper-change-me",
+            ).strip(),
+            auth_session_ttl_minutes=int(os.getenv("AUTH_SESSION_TTL_MINUTES", "720")),
+            auth_login_max_attempts=int(os.getenv("AUTH_LOGIN_MAX_ATTEMPTS", "5")),
+            auth_login_window_seconds=int(os.getenv("AUTH_LOGIN_WINDOW_SECONDS", "900")),
+            auth_login_block_seconds=int(os.getenv("AUTH_LOGIN_BLOCK_SECONDS", "900")),
+            auth_bootstrap_admin_on_startup=_read_bool(
+                "AUTH_BOOTSTRAP_ADMIN_ON_STARTUP",
+                default=False,
+            ),
+            auth_bootstrap_admin_email=os.getenv("AUTH_BOOTSTRAP_ADMIN_EMAIL", "").strip(),
+            auth_bootstrap_admin_password=os.getenv("AUTH_BOOTSTRAP_ADMIN_PASSWORD", ""),
             paper_trading_enabled=_read_bool("PAPER_TRADING", default=False),
             worker_enable_trading=_read_bool("WORKER_ENABLE_TRADING", default=False),
             worker_name=os.getenv("WORKER_NAME", "default-worker").strip(),

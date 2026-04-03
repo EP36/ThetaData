@@ -1,4 +1,5 @@
 import type {
+  AuthSessionData,
   BacktestFormInput,
   BacktestResultData,
   ContextAnalyticsData,
@@ -11,6 +12,12 @@ import type {
   TradeRow,
   WorkerExecutionStatusData
 } from "@/lib/types";
+import {
+  clearAuthToken,
+  dispatchAuthExpired,
+  getAuthToken,
+  setAuthToken
+} from "@/lib/auth/session";
 
 type AnalyticsSource = "execution" | "paper" | "backtest";
 
@@ -234,17 +241,55 @@ type ApiWorkerExecutionStatusResponse = {
   symbols: ApiWorkerSymbolDecision[];
 };
 
+type ApiAuthUser = {
+  id: number;
+  email: string;
+  role: string;
+  is_active: boolean;
+};
+
+type ApiAuthLoginResponse = {
+  token: string;
+  expires_at: string;
+  user: ApiAuthUser;
+};
+
+type ApiAuthSessionResponse = {
+  user: ApiAuthUser;
+  expires_at: string;
+};
+
+type ApiLogoutResponse = {
+  ok: boolean;
+};
+
+export class ApiError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
 function apiBaseUrl(): string {
   return process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
 }
 
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
+  const authToken = getAuthToken();
+  const providedHeaders = new Headers(init?.headers);
+  if (!providedHeaders.has("Content-Type")) {
+    providedHeaders.set("Content-Type", "application/json");
+  }
+  if (authToken && !providedHeaders.has("Authorization")) {
+    providedHeaders.set("Authorization", `Bearer ${authToken}`);
+  }
+
   const response = await fetch(`${apiBaseUrl()}${path}`, {
     ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {})
-    },
+    headers: providedHeaders,
     cache: "no-store"
   });
 
@@ -263,9 +308,63 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
         detail = body.trim();
       }
     }
-    throw new Error(detail);
+    if (response.status === 401 && path !== "/api/auth/login") {
+      clearAuthToken();
+      dispatchAuthExpired();
+    }
+    throw new ApiError(detail, response.status);
   }
   return (await response.json()) as T;
+}
+
+function mapAuthSession(payload: ApiAuthSessionResponse): AuthSessionData {
+  return {
+    user: {
+      id: payload.user.id,
+      email: payload.user.email,
+      role: payload.user.role,
+      isActive: payload.user.is_active
+    },
+    expiresAt: payload.expires_at
+  };
+}
+
+export async function login(email: string, password: string): Promise<AuthSessionData> {
+  const payload = await fetchJson<ApiAuthLoginResponse>("/api/auth/login", {
+    method: "POST",
+    body: JSON.stringify({
+      email,
+      password
+    })
+  });
+  setAuthToken(payload.token);
+  return mapAuthSession({
+    user: payload.user,
+    expires_at: payload.expires_at
+  });
+}
+
+export async function logout(): Promise<void> {
+  const token = getAuthToken();
+  if (!token) {
+    clearAuthToken();
+    return;
+  }
+  try {
+    const response = await fetchJson<ApiLogoutResponse>("/api/auth/logout", {
+      method: "POST"
+    });
+    if (!response.ok) {
+      throw new ApiError("Logout failed", 500);
+    }
+  } finally {
+    clearAuthToken();
+  }
+}
+
+export async function getAuthSession(): Promise<AuthSessionData> {
+  const payload = await fetchJson<ApiAuthSessionResponse>("/api/auth/session");
+  return mapAuthSession(payload);
 }
 
 function mapTradeRow(trade: ApiTrade): TradeRow {

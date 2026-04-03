@@ -59,6 +59,8 @@ def test_strict_mode_requires_explicit_required_env_vars(
         "WORKER_ENABLE_TRADING",
         "LIVE_TRADING",
         "CORS_ALLOWED_ORIGINS",
+        "AUTH_SESSION_SECRET",
+        "AUTH_PASSWORD_PEPPER",
     ):
         monkeypatch.delenv(env_name, raising=False)
     monkeypatch.setenv("STRICT_ENV_VALIDATION", "true")
@@ -80,6 +82,8 @@ def test_production_mode_missing_database_url_fails_clearly(
     monkeypatch.setenv("WORKER_ENABLE_TRADING", "false")
     monkeypatch.setenv("LIVE_TRADING", "false")
     monkeypatch.setenv("CORS_ALLOWED_ORIGINS", "https://thetadata.onrender.com")
+    monkeypatch.setenv("AUTH_SESSION_SECRET", "x" * 40)
+    monkeypatch.setenv("AUTH_PASSWORD_PEPPER", "y" * 40)
     monkeypatch.delenv("DATABASE_URL", raising=False)
 
     with pytest.raises(ValueError, match="DATABASE_URL"):
@@ -170,3 +174,17 @@ def test_from_env_supports_legacy_alpaca_secret_alias(
     monkeypatch.setenv("ALPACA_SECRET_KEY", "legacy-secret")
     settings = DeploymentSettings.from_env()
     assert settings.alpaca_api_secret == "legacy-secret"
+
+
+def test_production_rejects_short_auth_secrets() -> None:
+    with pytest.raises(ValueError, match="auth_session_secret"):
+        DeploymentSettings(
+            app_env="production",
+            database_url="postgresql+psycopg://example.com:5432/theta",
+            worker_name="main-worker",
+            paper_trading_enabled=False,
+            worker_enable_trading=False,
+            cors_allowed_origins=("https://thetadata.onrender.com",),
+            auth_session_secret="short",
+            auth_password_pepper="p" * 40,
+        )

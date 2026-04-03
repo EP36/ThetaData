@@ -19,11 +19,14 @@
 - [ ] `PAPER_TRADING=false` by default
 - [ ] `WORKER_ENABLE_TRADING=false` by default
 - [ ] `LIVE_TRADING=false`
+- [ ] `AUTH_SESSION_SECRET` (32+ random chars)
+- [ ] `AUTH_PASSWORD_PEPPER` (32+ random chars)
 
 ## Safety
 - [ ] `LIVE_TRADING=false`
 - [ ] `PAPER_TRADING` explicitly set (`false` by default)
 - [ ] `WORKER_ENABLE_TRADING` explicitly set (`false` by default)
+- [ ] Admin user bootstrapped before opening dashboard/API access
 - [ ] Kill switch endpoint tested: `POST /api/system/kill-switch`
 
 ## Infrastructure

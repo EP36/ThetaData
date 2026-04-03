@@ -257,3 +257,15 @@ export type WorkerExecutionStatusData = {
   activeStrategyBySymbol: Record<string, string>;
   symbols: WorkerSymbolDecision[];
 };
+
+export type AuthenticatedUser = {
+  id: number;
+  email: string;
+  role: string;
+  isActive: boolean;
+};
+
+export type AuthSessionData = {
+  user: AuthenticatedUser;
+  expiresAt: string;
+};

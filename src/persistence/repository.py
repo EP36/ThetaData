@@ -3,18 +3,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from src.execution.models import Fill, Order, Position
 from src.persistence.models import (
+    AuthSessionModel,
     BacktestTradeModel,
     FillModel,
     GlobalStateModel,
+    LoginAttemptModel,
     LogEventModel,
     OrderModel,
     PortfolioStateModel,
@@ -22,6 +24,7 @@ from src.persistence.models import (
     RunHistoryModel,
     SymbolStrategyLockModel,
     StrategyConfigModel,
+    UserModel,
     WorkerHeartbeatModel,
 )
 from src.persistence.store import DatabaseStore
@@ -88,6 +91,286 @@ class PersistenceRepository:
             state.reason = reason.strip()
             state.updated_at = utc_now()
             return state.kill_switch_enabled
+
+    def user_count(self) -> int:
+        """Return total number of persisted users."""
+        with self.store.session() as session:
+            count = session.scalar(select(func.count()).select_from(UserModel))
+            return int(count or 0)
+
+    def get_user_by_email(self, email: str) -> dict[str, Any] | None:
+        """Fetch one user row by normalized email."""
+        normalized = email.strip().lower()
+        if not normalized:
+            return None
+        with self.store.session() as session:
+            row = session.scalar(select(UserModel).where(UserModel.email == normalized).limit(1))
+            if row is None:
+                return None
+            return {
+                "id": int(row.id),
+                "email": row.email,
+                "password_hash": row.password_hash,
+                "role": row.role,
+                "is_active": bool(row.is_active),
+                "created_at": row.created_at,
+                "updated_at": row.updated_at,
+            }
+
+    def create_user(
+        self,
+        email: str,
+        password_hash: str,
+        role: str = "admin",
+        is_active: bool = True,
+    ) -> dict[str, Any]:
+        """Create one user row and return persisted values."""
+        normalized = email.strip().lower()
+        if not normalized:
+            raise ValueError("email cannot be empty")
+        if not password_hash.strip():
+            raise ValueError("password_hash cannot be empty")
+        with self.store.session() as session:
+            row = UserModel(
+                email=normalized,
+                password_hash=password_hash.strip(),
+                role=role.strip() or "admin",
+                is_active=bool(is_active),
+                created_at=utc_now(),
+                updated_at=utc_now(),
+            )
+            session.add(row)
+            try:
+                session.flush()
+            except IntegrityError as exc:
+                session.rollback()
+                raise ValueError(f"user already exists for email '{normalized}'") from exc
+            return {
+                "id": int(row.id),
+                "email": row.email,
+                "password_hash": row.password_hash,
+                "role": row.role,
+                "is_active": bool(row.is_active),
+                "created_at": row.created_at,
+                "updated_at": row.updated_at,
+            }
+
+    def upsert_bootstrap_admin(
+        self,
+        email: str,
+        password_hash: str,
+    ) -> tuple[dict[str, Any], bool]:
+        """Create or update bootstrap admin credentials; returns (user, created)."""
+        normalized = email.strip().lower()
+        if not normalized:
+            raise ValueError("bootstrap admin email cannot be empty")
+        if not password_hash.strip():
+            raise ValueError("bootstrap admin password hash cannot be empty")
+        with self.store.session() as session:
+            row = session.scalar(select(UserModel).where(UserModel.email == normalized).limit(1))
+            created = False
+            if row is None:
+                row = UserModel(
+                    email=normalized,
+                    password_hash=password_hash.strip(),
+                    role="admin",
+                    is_active=True,
+                    created_at=utc_now(),
+                    updated_at=utc_now(),
+                )
+                session.add(row)
+                created = True
+            else:
+                row.password_hash = password_hash.strip()
+                row.role = "admin"
+                row.is_active = True
+                row.updated_at = utc_now()
+            session.flush()
+            return (
+                {
+                    "id": int(row.id),
+                    "email": row.email,
+                    "password_hash": row.password_hash,
+                    "role": row.role,
+                    "is_active": bool(row.is_active),
+                    "created_at": row.created_at,
+                    "updated_at": row.updated_at,
+                },
+                created,
+            )
+
+    def create_auth_session(
+        self,
+        user_id: int,
+        token_hash: str,
+        expires_at: datetime,
+        ip_address: str = "",
+        user_agent: str = "",
+    ) -> None:
+        """Persist one hashed auth-session row."""
+        with self.store.session() as session:
+            session.add(
+                AuthSessionModel(
+                    user_id=int(user_id),
+                    token_hash=token_hash.strip(),
+                    expires_at=expires_at,
+                    revoked_at=None,
+                    ip_address=ip_address.strip(),
+                    user_agent=user_agent.strip(),
+                    created_at=utc_now(),
+                    last_seen_at=utc_now(),
+                )
+            )
+
+    def get_auth_session_by_token_hash(self, token_hash: str) -> dict[str, Any] | None:
+        """Return auth-session + user info for a hashed token."""
+        normalized = token_hash.strip()
+        if not normalized:
+            return None
+        with self.store.session() as session:
+            row = session.execute(
+                select(AuthSessionModel, UserModel)
+                .join(UserModel, UserModel.id == AuthSessionModel.user_id)
+                .where(AuthSessionModel.token_hash == normalized)
+                .limit(1)
+            ).first()
+            if row is None:
+                return None
+            session_row, user_row = row
+            return {
+                "session_id": int(session_row.id),
+                "token_hash": session_row.token_hash,
+                "user_id": int(session_row.user_id),
+                "expires_at": session_row.expires_at,
+                "revoked_at": session_row.revoked_at,
+                "ip_address": session_row.ip_address,
+                "user_agent": session_row.user_agent,
+                "created_at": session_row.created_at,
+                "last_seen_at": session_row.last_seen_at,
+                "user": {
+                    "id": int(user_row.id),
+                    "email": user_row.email,
+                    "password_hash": user_row.password_hash,
+                    "role": user_row.role,
+                    "is_active": bool(user_row.is_active),
+                    "created_at": user_row.created_at,
+                    "updated_at": user_row.updated_at,
+                },
+            }
+
+    def touch_auth_session(self, token_hash: str) -> None:
+        """Update session last-seen timestamp."""
+        normalized = token_hash.strip()
+        if not normalized:
+            return
+        with self.store.session() as session:
+            row = session.scalar(
+                select(AuthSessionModel).where(AuthSessionModel.token_hash == normalized).limit(1)
+            )
+            if row is None:
+                return
+            row.last_seen_at = utc_now()
+
+    def revoke_auth_session(self, token_hash: str) -> None:
+        """Mark one session token as revoked."""
+        normalized = token_hash.strip()
+        if not normalized:
+            return
+        with self.store.session() as session:
+            row = session.scalar(
+                select(AuthSessionModel).where(AuthSessionModel.token_hash == normalized).limit(1)
+            )
+            if row is None:
+                return
+            if row.revoked_at is None:
+                row.revoked_at = utc_now()
+
+    def expire_auth_session(self, token_hash: str) -> None:
+        """Force session expiration immediately (testing/ops utility)."""
+        normalized = token_hash.strip()
+        if not normalized:
+            return
+        with self.store.session() as session:
+            row = session.scalar(
+                select(AuthSessionModel).where(AuthSessionModel.token_hash == normalized).limit(1)
+            )
+            if row is None:
+                return
+            row.expires_at = utc_now() - timedelta(seconds=1)
+
+    def get_login_attempt(self, identifier: str, ip_address: str) -> dict[str, Any] | None:
+        """Return login-attempt counters for one identifier/ip pair."""
+        normalized_identifier = identifier.strip().lower()
+        normalized_ip = ip_address.strip()
+        if not normalized_identifier:
+            return None
+        with self.store.session() as session:
+            row = session.scalar(
+                select(LoginAttemptModel)
+                .where(
+                    LoginAttemptModel.identifier == normalized_identifier,
+                    LoginAttemptModel.ip_address == normalized_ip,
+                )
+                .limit(1)
+            )
+            if row is None:
+                return None
+            return {
+                "id": int(row.id),
+                "identifier": row.identifier,
+                "ip_address": row.ip_address,
+                "failure_count": int(row.failure_count),
+                "window_started_at": row.window_started_at,
+                "blocked_until": row.blocked_until,
+                "updated_at": row.updated_at,
+            }
+
+    def upsert_login_attempt(
+        self,
+        identifier: str,
+        ip_address: str,
+        failure_count: int,
+        window_started_at: datetime,
+        blocked_until: datetime | None,
+    ) -> None:
+        """Insert/update login-attempt counters."""
+        normalized_identifier = identifier.strip().lower()
+        normalized_ip = ip_address.strip()
+        with self.store.session() as session:
+            row = session.scalar(
+                select(LoginAttemptModel)
+                .where(
+                    LoginAttemptModel.identifier == normalized_identifier,
+                    LoginAttemptModel.ip_address == normalized_ip,
+                )
+                .limit(1)
+            )
+            if row is None:
+                row = LoginAttemptModel(
+                    identifier=normalized_identifier,
+                    ip_address=normalized_ip,
+                )
+                session.add(row)
+            row.failure_count = int(max(0, failure_count))
+            row.window_started_at = window_started_at
+            row.blocked_until = blocked_until
+            row.updated_at = utc_now()
+
+    def clear_login_attempt(self, identifier: str, ip_address: str) -> None:
+        """Reset login-attempt state after successful authentication."""
+        normalized_identifier = identifier.strip().lower()
+        normalized_ip = ip_address.strip()
+        with self.store.session() as session:
+            row = session.scalar(
+                select(LoginAttemptModel)
+                .where(
+                    LoginAttemptModel.identifier == normalized_identifier,
+                    LoginAttemptModel.ip_address == normalized_ip,
+                )
+                .limit(1)
+            )
+            if row is not None:
+                session.delete(row)
 
     def upsert_strategy_config(
         self,

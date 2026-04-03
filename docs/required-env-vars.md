@@ -17,6 +17,8 @@ If any required variable is missing, startup fails with a clear `ValueError` fro
 | `WORKER_ENABLE_TRADING` | Worker | Enables/disables worker order loop. Worker remains idle when false. | Generate yourself | `false` |
 | `LIVE_TRADING` | Both | Hard live-trading guardrail. Any true-like value is rejected at startup. | Generate yourself | `false` |
 | `CORS_ALLOWED_ORIGINS` | Both (used by Web) | Comma-separated allowed browser origins for backend CORS. | Generate yourself | `https://thetadata.onrender.com` |
+| `AUTH_SESSION_SECRET` | Both | Secret used to HMAC-hash bearer session tokens in DB. | Generate yourself | 32+ char random string |
+| `AUTH_PASSWORD_PEPPER` | Both | Secret pepper included in password-hash verification flow. | Generate yourself | 32+ char random string |
 
 ## Not Required for Initial Paper Deployment
 
@@ -25,6 +27,8 @@ These are optional for MVP paper deployment:
 - Alpaca execution base URL (`ALPACA_BASE_URL`) is optional and defaults to `https://paper-api.alpaca.markets`.
 - Legacy fallback `ALPACA_SECRET_KEY` is accepted temporarily, but `ALPACA_API_SECRET` is canonical.
 - `DATA_API_KEY` is optional when using synthetic/local data flow.
+- Auth tuning vars (`AUTH_SESSION_TTL_MINUTES`, `AUTH_LOGIN_MAX_ATTEMPTS`, `AUTH_LOGIN_WINDOW_SECONDS`, `AUTH_LOGIN_BLOCK_SECONDS`) are optional with safe defaults.
+- Admin bootstrap vars (`AUTH_BOOTSTRAP_ADMIN_ON_STARTUP`, `AUTH_BOOTSTRAP_ADMIN_EMAIL`, `AUTH_BOOTSTRAP_ADMIN_PASSWORD`) are optional and should be used only for initial setup/rotation.
 - Strategy/risk tuning vars (`WORKER_SYMBOL`, `WORKER_STRATEGY`, `MAX_DAILY_LOSS`, etc.) have safe defaults and can be added later.
 - Universe/selection controls (`WORKER_SYMBOLS`, `WORKER_ALLOW_MULTI_STRATEGY_PER_SYMBOL`) are optional and default to safe behavior.
 - `WORKER_DRY_RUN` is optional and defaults to `true` (full worker evaluation with no order submission).

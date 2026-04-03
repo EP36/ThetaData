@@ -53,6 +53,53 @@ class StrategyUpdateRequest(BaseModel):
     parameters: Optional[dict[str, Any]] = None
 
 
+class AuthLoginRequest(BaseModel):
+    """Login payload for admin authentication."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    email: str
+    password: str
+
+
+class AuthUserResponse(BaseModel):
+    """Authenticated user identity returned to clients."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: int
+    email: str
+    role: str
+    is_active: bool
+
+
+class AuthLoginResponse(BaseModel):
+    """Session creation response for successful login."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    token: str
+    expires_at: datetime
+    user: AuthUserResponse
+
+
+class AuthSessionResponse(BaseModel):
+    """Current session metadata response."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    user: AuthUserResponse
+    expires_at: datetime
+
+
+class LogoutResponse(BaseModel):
+    """Logout acknowledgement payload."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    ok: bool
+
+
 class BacktestRunRequest(BaseModel):
     """Request payload for launching a backtest run."""
 

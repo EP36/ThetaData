@@ -443,6 +443,9 @@ class TradingApiService:
         name: str,
         status: Literal["enabled", "disabled"] | None,
         parameters: dict[str, Any] | None,
+        actor_user_id: int | None = None,
+        actor_email: str | None = None,
+        actor_role: str | None = None,
     ) -> StrategySummary:
         """Update strategy status and/or default parameters."""
         if name not in self.strategy_state:
@@ -468,6 +471,19 @@ class TradingApiService:
                 status=state.status,
                 parameters=dict(state.parameters),
             )
+            self.repository.append_log_event(
+                level="INFO",
+                logger_name=LOGGER.name,
+                event="api_strategy_updated",
+                payload={
+                    "strategy": name,
+                    "status": state.status,
+                    "parameters": dict(state.parameters),
+                    "actor_user_id": actor_user_id,
+                    "actor_email": actor_email,
+                    "actor_role": actor_role,
+                },
+            )
 
         return StrategySummary(
             name=name,
@@ -476,7 +492,13 @@ class TradingApiService:
             parameters=dict(state.parameters),
         )
 
-    def run_backtest(self, request: BacktestRunRequest) -> BacktestRunResponse:
+    def run_backtest(
+        self,
+        request: BacktestRunRequest,
+        actor_user_id: int | None = None,
+        actor_email: str | None = None,
+        actor_role: str | None = None,
+    ) -> BacktestRunResponse:
         """Run a backtest using existing backtest modules."""
         if request.strategy not in self.strategy_state:
             raise KeyError(f"Unknown strategy '{request.strategy}'")
@@ -549,6 +571,9 @@ class TradingApiService:
                     "end": request.end,
                     "strategy": request.strategy,
                     "data_provider": provider_name,
+                    "actor_user_id": actor_user_id,
+                    "actor_email": actor_email,
+                    "actor_role": actor_role,
                 },
             )
         LOGGER.info(
@@ -654,6 +679,9 @@ class TradingApiService:
                         "symbol": request.symbol,
                         "strategy": request.strategy,
                         "trades": len(trade_records),
+                        "actor_user_id": actor_user_id,
+                        "actor_email": actor_email,
+                        "actor_role": actor_role,
                     },
                 )
             return BacktestRunResponse(
@@ -711,6 +739,9 @@ class TradingApiService:
                         "end": request.end,
                         "strategy": request.strategy,
                         "data_provider": provider_name,
+                        "actor_user_id": actor_user_id,
+                        "actor_email": actor_email,
+                        "actor_role": actor_role,
                     },
                 )
             if isinstance(exc, ValueError) and error_message != str(exc):
@@ -1348,7 +1379,13 @@ class TradingApiService:
             timestamp=pd.Timestamp.utcnow().to_pydatetime(),
         )
 
-    def set_kill_switch(self, enabled: bool) -> KillSwitchResponse:
+    def set_kill_switch(
+        self,
+        enabled: bool,
+        actor_user_id: int | None = None,
+        actor_email: str | None = None,
+        actor_role: str | None = None,
+    ) -> KillSwitchResponse:
         """Enable or disable kill switch for API-level operations."""
         self.kill_switch_enabled = enabled
         if self.repository is not None:
@@ -1360,7 +1397,12 @@ class TradingApiService:
                 level="WARNING" if enabled else "INFO",
                 logger_name=LOGGER.name,
                 event="api_kill_switch_toggled",
-                payload={"enabled": enabled},
+                payload={
+                    "enabled": enabled,
+                    "actor_user_id": actor_user_id,
+                    "actor_email": actor_email,
+                    "actor_role": actor_role,
+                },
             )
         if enabled:
             self.rejected_orders.append("kill_switch_manually_enabled")

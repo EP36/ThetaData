@@ -31,6 +31,10 @@ A modular Python 3.12 MVP for strategy research, backtesting, and paper-trading 
   - portfolio-level contribution/exposure analytics
   - rule-based market regime classification
   - deterministic strategy eligibility + scoring + selection
+- Single-user admin authentication (future-ready role/user model):
+  - secure password hashing + session-token revocation
+  - server-enforced route protection for sensitive API actions
+  - login attempt throttling + audit events
 - Analytics report artifacts:
   - equity curve plot
   - drawdown plot
@@ -60,6 +64,12 @@ python3.12 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
+```
+
+Bootstrap the first admin user (required before using protected dashboard/API routes):
+
+```bash
+python -m src.auth.bootstrap_admin --email admin@example.com --password "ChangeMeNow123!"
 ```
 
 ## Run End-to-End Sample
@@ -151,6 +161,9 @@ python -m src.api
 ```
 
 Core endpoints:
+- `POST /api/auth/login`
+- `GET /api/auth/session`
+- `POST /api/auth/logout`
 - `GET /api/dashboard/summary`
 - `POST /api/backtests/run`
 - `GET /api/strategies`
@@ -165,6 +178,41 @@ Core endpoints:
 - `POST /api/system/kill-switch`
 - `GET /healthz`
 - `GET /api/system/status`
+
+Route protection model:
+- `GET /healthz` is public for uptime checks.
+- `POST /api/auth/login` is public.
+- All other `/api/*` routes require authentication.
+- Sensitive mutations (`PATCH /api/strategies/*`, `POST /api/system/kill-switch`, `POST /api/backtests/run`) require `admin` role.
+
+### Authentication Setup
+
+Required auth env vars:
+- `AUTH_SESSION_SECRET` (32+ char random secret in production/staging)
+- `AUTH_PASSWORD_PEPPER` (32+ char random secret in production/staging)
+
+Optional auth tuning:
+- `AUTH_SESSION_TTL_MINUTES` (default `720`)
+- `AUTH_LOGIN_MAX_ATTEMPTS` (default `5`)
+- `AUTH_LOGIN_WINDOW_SECONDS` (default `900`)
+- `AUTH_LOGIN_BLOCK_SECONDS` (default `900`)
+
+Bootstrap options:
+1. CLI (recommended):
+   - `python -m src.auth.bootstrap_admin --email <admin_email> --password \"<strong_password>\"`
+2. Startup-safe env bootstrap:
+   - `AUTH_BOOTSTRAP_ADMIN_ON_STARTUP=true`
+   - `AUTH_BOOTSTRAP_ADMIN_EMAIL=<admin_email>`
+   - `AUTH_BOOTSTRAP_ADMIN_PASSWORD=<strong_password>`
+   - set back to `false` after first bootstrap/rotation.
+
+Security notes:
+- Passwords are PBKDF2-HMAC-SHA256 hashed with a secret pepper.
+- Session tokens are opaque bearer tokens; only token hashes are stored in DB.
+- Login failures and sensitive admin actions are persisted in `log_events` with actor identity.
+
+Architecture note (current single-user + future multi-user extension points):
+- [`docs/auth-architecture.md`](docs/auth-architecture.md)
 
 ### Analytics Metrics
 
@@ -485,6 +533,8 @@ Minimum for Render:
 - `WORKER_DRY_RUN` (`true` by default)
 - `LIVE_TRADING=false` (must remain false)
 - `CORS_ALLOWED_ORIGINS=https://thetadata.onrender.com` (comma-separated list supported)
+- `AUTH_SESSION_SECRET` (32+ random chars)
+- `AUTH_PASSWORD_PEPPER` (32+ random chars)
 
 Startup validation behavior:
 - in `APP_ENV=production` or with `STRICT_ENV_VALIDATION=true`, missing required env vars fail fast with a clear startup error.
@@ -622,12 +672,18 @@ Notes:
 - If you prefer no cross-origin browser calls, deploy frontend and backend behind a single origin with a proxy setup.
 
 Routes:
+- `/login`
 - `/dashboard`
 - `/analytics`
 - `/backtests`
 - `/strategies`
 - `/risk`
 - `/trades`
+
+Frontend auth behavior:
+- Dashboard/control routes require a valid backend session.
+- Unauthenticated or expired sessions redirect to `/login`.
+- UI route protection is convenience only; backend authorization is the enforcement boundary.
 
 ## Notes
 
@@ -663,7 +719,9 @@ Overfitting caution:
 - Data provider layer defaults to synthetic/local patterns unless a real provider is implemented and configured.
 - Real historical backtest mode is available via `DATA_PROVIDER=alpaca` and Alpaca credentials.
 - Frontend demo data is controlled by `NEXT_PUBLIC_DEMO_MODE`; keep it false in production.
-- No authentication/authorization on API endpoints yet (acceptable for local MVP, unsafe for exposed deployments).
+- Auth model is intentionally single-user admin for now:
+  - sufficient for one-operator deployment
+  - does not yet include multi-user tenancy/ownership boundaries
 - Frontend dependency maintenance:
   - keep `apps/web` dependencies patched regularly, especially Next.js security advisories.
 - Worker loop assumptions are intentionally simple:
