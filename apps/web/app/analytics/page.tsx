@@ -91,8 +91,10 @@ export default function AnalyticsPage() {
     );
   }
 
+  const paperData = data.paper;
+  const backtestData = data.backtest;
   const selectedStrategy = data.selection.selectedStrategy;
-  const selectedMetrics = data.strategies.strategies.find(
+  const selectedMetrics = paperData.strategies.strategies.find(
     (row) => row.strategy === selectedStrategy
   );
   const rejected = rejectionRows(data.selection.candidates);
@@ -102,11 +104,11 @@ export default function AnalyticsPage() {
       <div className="glass-panel rounded-3xl p-4 md:px-5 md:py-5">
         <h2 className="page-title font-semibold">Analytics & Selection</h2>
         <p className="mt-1 text-sm text-[var(--muted)]">
-          Strategy scoring, regime state, and allocation decisions from real persisted data.
+          Source-separated analytics for backtests, execution flow, and paper-trading performance.
         </p>
       </div>
 
-      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
         <article className="glass-panel rounded-2xl p-4">
           <p className="ui-label">Current Regime</p>
           <p className="mt-1 text-lg font-semibold">{data.selection.regime || "unknown"}</p>
@@ -125,41 +127,28 @@ export default function AnalyticsPage() {
           <p className="ui-label">Sizing Multiplier</p>
           <p className="mt-1 text-lg font-semibold">{data.selection.sizingMultiplier.toFixed(2)}x</p>
         </article>
+        <article className="glass-panel rounded-2xl p-4">
+          <p className="ui-label">Worker Dry-Run</p>
+          <p className="mt-1 text-lg font-semibold">
+            {data.execution.dryRunEnabled ? "Enabled" : "Disabled"}
+          </p>
+        </article>
       </div>
 
       <article className="glass-panel rounded-2xl p-4">
         <h3 className="text-sm font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
-          Worker Universe & Active Strategy Locks
+          Execution Analytics (Worker)
         </h3>
         <p className="mt-2 text-sm text-[var(--muted)]">
-          Worker <strong>{data.execution.workerName}</strong> on timeframe{" "}
-          <strong>{data.execution.timeframe}</strong>. Mode:{" "}
-          <strong>{data.execution.universeMode}</strong>. Configured universe:{" "}
-          {data.execution.universeSymbols.length > 0
-            ? data.execution.universeSymbols.join(", ")
-            : "none configured"}
-          . Scanned:{" "}
-          {data.execution.scannedSymbols.length > 0
-            ? data.execution.scannedSymbols.join(", ")
-            : "none"}
-          . Shortlisted:{" "}
-          {data.execution.shortlistedSymbols.length > 0
-            ? data.execution.shortlistedSymbols.join(", ")
-            : "none"}
-          . Selected symbol/strategy:{" "}
-          <strong>
-            {data.execution.selectedSymbol ?? "none"} / {data.execution.selectedStrategy ?? "none"}
-          </strong>
-          . Per-symbol multi-strategy:{" "}
-          {data.execution.allowMultiStrategyPerSymbol ? "enabled" : "disabled"}.
+          Worker <strong>{data.execution.workerName}</strong> on timeframe <strong>{data.execution.timeframe}</strong>. Mode: <strong>{data.execution.universeMode}</strong>. Universe: <strong>{data.execution.universeSymbols.join(", ") || "none"}</strong>. Scanned: <strong>{data.execution.scannedSymbols.join(", ") || "none"}</strong>. Shortlisted: <strong>{data.execution.shortlistedSymbols.join(", ") || "none"}</strong>. Last selected: <strong>{data.execution.lastSelectedSymbol ?? "none"} / {data.execution.lastSelectedStrategy ?? "none"}</strong>. Last no-trade reason: <strong>{data.execution.lastNoTradeReason ?? "none"}</strong>.
         </p>
-        {Object.keys(data.execution.symbolFilterReasons).length > 0 && (
+        {Object.keys(data.execution.symbolFilterReasons).length > 0 ? (
           <div className="mt-3 overflow-x-auto">
             <table className="data-table text-sm">
               <thead>
                 <tr>
                   <th>Filtered Symbol</th>
-                  <th>Filter Reasons</th>
+                  <th>Reasons</th>
                 </tr>
               </thead>
               <tbody>
@@ -172,9 +161,9 @@ export default function AnalyticsPage() {
               </tbody>
             </table>
           </div>
-        )}
+        ) : null}
         {data.execution.symbols.length === 0 ? (
-          <p className="mt-3 text-sm text-[var(--muted)]">No worker execution data yet.</p>
+          <p className="mt-3 text-sm text-[var(--muted)]">No execution-cycle data yet.</p>
         ) : (
           <div className="mt-3 overflow-x-auto">
             <table className="data-table text-sm">
@@ -185,30 +174,20 @@ export default function AnalyticsPage() {
                   <th>Latest Selected</th>
                   <th>Action</th>
                   <th>Order Status</th>
-                  <th>Rejected/Skipped Reasons</th>
+                  <th>No-Trade Reason</th>
                 </tr>
               </thead>
               <tbody>
-                {data.execution.symbols.map((row) => {
-                  const rejected = row.candidates.filter(
-                    (item) => !item.eligible || item.reasons.length > 0
-                  );
-                  const reasons = [
-                    ...row.rejectionReasons,
-                    ...rejected.flatMap((item) => item.reasons)
-                  ];
-                  const uniqueReasons = [...new Set(reasons)];
-                  return (
-                    <tr key={row.symbol}>
-                      <td>{row.symbol}</td>
-                      <td>{row.activeStrategy ?? "none"}</td>
-                      <td>{row.selectedStrategy ?? "none"}</td>
-                      <td>{row.action}</td>
-                      <td>{row.orderStatus ?? "n/a"}</td>
-                      <td>{uniqueReasons.length > 0 ? uniqueReasons.join(", ") : "none"}</td>
-                    </tr>
-                  );
-                })}
+                {data.execution.symbols.map((row) => (
+                  <tr key={row.symbol}>
+                    <td>{row.symbol}</td>
+                    <td>{row.activeStrategy ?? "none"}</td>
+                    <td>{row.selectedStrategy ?? "none"}</td>
+                    <td>{row.action}</td>
+                    <td>{row.orderStatus ?? "n/a"}</td>
+                    <td>{row.noTradeReason ?? "none"}</td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
@@ -220,7 +199,7 @@ export default function AnalyticsPage() {
           Strategy Scores
         </h3>
         {data.selection.candidates.length === 0 ? (
-          <p className="mt-3 text-sm text-[var(--muted)]">No trading data yet.</p>
+          <p className="mt-3 text-sm text-[var(--muted)]">No selection-candidate data yet.</p>
         ) : (
           <div className="mt-3 overflow-x-auto">
             <table className="data-table text-sm">
@@ -258,10 +237,13 @@ export default function AnalyticsPage() {
       <div className="grid gap-4 xl:grid-cols-2">
         <article className="glass-panel rounded-2xl p-4">
           <h3 className="text-sm font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
-            Strategy Analytics Summary
+            Paper Trading Analytics
           </h3>
-          {data.strategies.strategies.length === 0 ? (
-            <p className="mt-3 text-sm text-[var(--muted)]">No trading data yet.</p>
+          <p className="mt-2 text-xs text-[var(--muted)]">
+            Source: <strong>{paperData.strategies.dataSource}</strong>
+          </p>
+          {paperData.strategies.strategies.length === 0 ? (
+            <p className="mt-3 text-sm text-[var(--muted)]">No paper execution fills yet.</p>
           ) : (
             <div className="mt-3 overflow-x-auto">
               <table className="data-table text-sm">
@@ -273,12 +255,10 @@ export default function AnalyticsPage() {
                     <th>Win Rate</th>
                     <th>Profit Factor</th>
                     <th>Expectancy</th>
-                    <th>Max DD</th>
-                    <th>Avg Hold</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {data.strategies.strategies.map((row) => (
+                  {paperData.strategies.strategies.map((row) => (
                     <tr key={row.strategy}>
                       <td>{row.strategy}</td>
                       <td>{row.numTrades}</td>
@@ -286,8 +266,6 @@ export default function AnalyticsPage() {
                       <td>{formatPct(row.winRate)}</td>
                       <td>{row.profitFactor.toFixed(2)}</td>
                       <td>{formatUsd(row.expectancy)}</td>
-                      <td>{formatPct(row.maxDrawdown)}</td>
-                      <td>{row.averageHoldTimeHours.toFixed(2)}h</td>
                     </tr>
                   ))}
                 </tbody>
@@ -298,45 +276,77 @@ export default function AnalyticsPage() {
 
         <article className="glass-panel rounded-2xl p-4">
           <h3 className="text-sm font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
-            Rolling 20-Trade Performance
+            Backtest Analytics
           </h3>
-          {selectedMetrics == null ? (
-            <p className="mt-3 text-sm text-[var(--muted)]">No selected strategy with rolling data yet.</p>
+          <p className="mt-2 text-xs text-[var(--muted)]">
+            Source: <strong>{backtestData.strategies.dataSource}</strong>
+          </p>
+          {backtestData.strategies.strategies.length === 0 ? (
+            <p className="mt-3 text-sm text-[var(--muted)]">No persisted backtest runs yet.</p>
           ) : (
-            <>
-              <p className="mt-2 text-sm text-[var(--muted)]">
-                Latest rolling metrics for <strong>{selectedMetrics.strategy}</strong>
-              </p>
-              <div className="mt-3 overflow-x-auto">
-                <table className="data-table text-sm">
-                  <thead>
-                    <tr>
-                      <th>Trade #</th>
-                      <th>Timestamp</th>
-                      <th>Win Rate</th>
-                      <th>Expectancy</th>
-                      <th>Sharpe</th>
+            <div className="mt-3 overflow-x-auto">
+              <table className="data-table text-sm">
+                <thead>
+                  <tr>
+                    <th>Strategy</th>
+                    <th>Trades</th>
+                    <th>Total Return</th>
+                    <th>Win Rate</th>
+                    <th>Profit Factor</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {backtestData.strategies.strategies.map((row) => (
+                    <tr key={`${row.strategy}-backtest`}>
+                      <td>{row.strategy}</td>
+                      <td>{row.numTrades}</td>
+                      <td>{formatPct(row.totalReturn)}</td>
+                      <td>{formatPct(row.winRate)}</td>
+                      <td>{row.profitFactor.toFixed(2)}</td>
                     </tr>
-                  </thead>
-                  <tbody>
-                    {topRollingRows(selectedMetrics).map((point) => (
-                      <tr key={`${point.tradeIndex}-${point.timestamp}`}>
-                        <td>{point.tradeIndex}</td>
-                        <td>{new Date(point.timestamp).toLocaleString()}</td>
-                        <td>{formatPct(point.winRate)}</td>
-                        <td>{formatUsd(point.expectancy)}</td>
-                        <td>{point.sharpe.toFixed(3)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </article>
       </div>
 
       <div className="grid gap-4 xl:grid-cols-2">
+        <article className="glass-panel rounded-2xl p-4">
+          <h3 className="text-sm font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
+            Rolling 20-Trade (Paper)
+          </h3>
+          {selectedMetrics == null ? (
+            <p className="mt-3 text-sm text-[var(--muted)]">No selected paper strategy rolling data yet.</p>
+          ) : (
+            <div className="mt-3 overflow-x-auto">
+              <table className="data-table text-sm">
+                <thead>
+                  <tr>
+                    <th>Trade #</th>
+                    <th>Timestamp</th>
+                    <th>Win Rate</th>
+                    <th>Expectancy</th>
+                    <th>Sharpe</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {topRollingRows(selectedMetrics).map((point) => (
+                    <tr key={`${point.tradeIndex}-${point.timestamp}`}>
+                      <td>{point.tradeIndex}</td>
+                      <td>{new Date(point.timestamp).toLocaleString()}</td>
+                      <td>{formatPct(point.winRate)}</td>
+                      <td>{formatUsd(point.expectancy)}</td>
+                      <td>{point.sharpe.toFixed(3)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </article>
+
         <article className="glass-panel rounded-2xl p-4">
           <h3 className="text-sm font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
             Strategy Rejections / Deprioritization
@@ -359,108 +369,6 @@ export default function AnalyticsPage() {
                       <td>{row.strategy}</td>
                       <td>{row.score.toFixed(4)}</td>
                       <td>{row.reasons.length > 0 ? row.reasons.join(", ") : "deprioritized"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </article>
-
-        <article className="glass-panel rounded-2xl p-4">
-          <h3 className="text-sm font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
-            Portfolio Contribution by Strategy
-          </h3>
-          {data.portfolio.strategyContribution.length === 0 ? (
-            <p className="mt-3 text-sm text-[var(--muted)]">No realized strategy contribution yet.</p>
-          ) : (
-            <div className="mt-3 overflow-x-auto">
-              <table className="data-table text-sm">
-                <thead>
-                  <tr>
-                    <th>Strategy</th>
-                    <th>Trades</th>
-                    <th>Realized PnL</th>
-                    <th>Return %</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.portfolio.strategyContribution.map((row) => (
-                    <tr key={row.strategy}>
-                      <td>{row.strategy}</td>
-                      <td>{row.trades}</td>
-                      <td>{formatUsd(row.realizedPnl)}</td>
-                      <td>{formatPct(row.returnPct)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </article>
-      </div>
-
-      <div className="grid gap-4 xl:grid-cols-2">
-        <article className="glass-panel rounded-2xl p-4">
-          <h3 className="text-sm font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
-            Context Performance by Symbol
-          </h3>
-          {data.context.bySymbol.length === 0 ? (
-            <p className="mt-3 text-sm text-[var(--muted)]">No trading data yet.</p>
-          ) : (
-            <div className="mt-3 overflow-x-auto">
-              <table className="data-table text-sm">
-                <thead>
-                  <tr>
-                    <th>Symbol</th>
-                    <th>Trades</th>
-                    <th>Win Rate</th>
-                    <th>Expectancy</th>
-                    <th>Total PnL</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.context.bySymbol.map((row) => (
-                    <tr key={row.key}>
-                      <td>{row.key}</td>
-                      <td>{row.trades}</td>
-                      <td>{formatPct(row.winRate)}</td>
-                      <td>{formatUsd(row.expectancy)}</td>
-                      <td>{formatUsd(row.totalPnl)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </article>
-
-        <article className="glass-panel rounded-2xl p-4">
-          <h3 className="text-sm font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
-            Context Performance by Regime
-          </h3>
-          {data.context.byRegime.length === 0 ? (
-            <p className="mt-3 text-sm text-[var(--muted)]">No regime-tagged trade history yet.</p>
-          ) : (
-            <div className="mt-3 overflow-x-auto">
-              <table className="data-table text-sm">
-                <thead>
-                  <tr>
-                    <th>Regime</th>
-                    <th>Trades</th>
-                    <th>Win Rate</th>
-                    <th>Expectancy</th>
-                    <th>Total PnL</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.context.byRegime.map((row) => (
-                    <tr key={row.key}>
-                      <td>{row.key}</td>
-                      <td>{row.trades}</td>
-                      <td>{formatPct(row.winRate)}</td>
-                      <td>{formatUsd(row.expectancy)}</td>
-                      <td>{formatUsd(row.totalPnl)}</td>
                     </tr>
                   ))}
                 </tbody>

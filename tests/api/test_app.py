@@ -158,12 +158,14 @@ def test_analytics_and_selection_endpoints_return_typed_shapes(
     assert strategies_response.status_code == 200
     strategies_payload = strategies_response.json()
     assert isinstance(strategies_payload["generated_at"], str)
+    assert strategies_payload["data_source"] == "execution"
     assert isinstance(strategies_payload["strategies"], list)
 
     portfolio_response = client.get("/api/analytics/portfolio")
     assert portfolio_response.status_code == 200
     portfolio_payload = portfolio_response.json()
     assert isinstance(portfolio_payload["generated_at"], str)
+    assert portfolio_payload["data_source"] == "execution"
     assert isinstance(portfolio_payload["equity_curve"], list)
     assert isinstance(portfolio_payload["daily_pnl"], list)
     assert isinstance(portfolio_payload["rolling_drawdown"], list)
@@ -173,6 +175,7 @@ def test_analytics_and_selection_endpoints_return_typed_shapes(
     assert context_response.status_code == 200
     context_payload = context_response.json()
     assert isinstance(context_payload["generated_at"], str)
+    assert context_payload["data_source"] == "execution"
     assert isinstance(context_payload["by_symbol"], list)
     assert isinstance(context_payload["by_regime"], list)
 
@@ -195,14 +198,21 @@ def test_strategy_analytics_populates_after_backtest_run(client: TestClient) -> 
     )
     assert run_response.status_code == 200
 
-    analytics_response = client.get("/api/analytics/strategies")
-    assert analytics_response.status_code == 200
-    analytics_payload = analytics_response.json()
-    assert isinstance(analytics_payload["generated_at"], str)
+    backtest_analytics_response = client.get("/api/analytics/strategies?source=backtest")
+    assert backtest_analytics_response.status_code == 200
+    backtest_payload = backtest_analytics_response.json()
+    assert isinstance(backtest_payload["generated_at"], str)
+    assert backtest_payload["data_source"] == "backtest"
     assert any(
         item["strategy"] == "moving_average_crossover"
-        for item in analytics_payload["strategies"]
+        for item in backtest_payload["strategies"]
     )
+
+    paper_analytics_response = client.get("/api/analytics/strategies?source=paper")
+    assert paper_analytics_response.status_code == 200
+    paper_payload = paper_analytics_response.json()
+    assert paper_payload["data_source"] == "paper"
+    assert isinstance(paper_payload["strategies"], list)
 
 
 def test_worker_execution_status_endpoint_exposes_universe_and_symbol_rows(
@@ -215,12 +225,16 @@ def test_worker_execution_status_endpoint_exposes_universe_and_symbol_rows(
     assert isinstance(payload["worker_name"], str)
     assert isinstance(payload["timeframe"], str)
     assert isinstance(payload["universe_mode"], str)
+    assert isinstance(payload["dry_run_enabled"], bool)
     assert isinstance(payload["universe_symbols"], list)
     assert isinstance(payload["scanned_symbols"], list)
     assert isinstance(payload["shortlisted_symbols"], list)
     assert isinstance(payload["allow_multi_strategy_per_symbol"], bool)
     assert payload["selected_symbol"] is None or isinstance(payload["selected_symbol"], str)
     assert payload["selected_strategy"] is None or isinstance(payload["selected_strategy"], str)
+    assert payload["last_selected_symbol"] is None or isinstance(payload["last_selected_symbol"], str)
+    assert payload["last_selected_strategy"] is None or isinstance(payload["last_selected_strategy"], str)
+    assert payload["last_no_trade_reason"] is None or isinstance(payload["last_no_trade_reason"], str)
     assert isinstance(payload["symbol_filter_reasons"], dict)
     assert isinstance(payload["active_strategy_by_symbol"], dict)
     assert isinstance(payload["symbols"], list)

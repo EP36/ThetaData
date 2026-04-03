@@ -109,6 +109,7 @@ class DeploymentSettings:
     worker_strategy_params: dict[str, Any] = field(default_factory=dict)
     worker_order_quantity: float = 1.0
     worker_force_refresh: bool = False
+    worker_dry_run: bool = True
     worker_allow_multi_strategy_per_symbol: bool = False
     worker_universe_mode: str = "static"
     worker_max_candidates: int = 10
@@ -194,10 +195,10 @@ class DeploymentSettings:
         if self.app_env == "production" and self.database_url.startswith("sqlite"):
             raise ValueError("production deployment requires a Postgres DATABASE_URL")
 
-        # Safety gate: active worker trading always requires explicit paper mode.
-        if self.worker_enable_trading and not self.paper_trading_enabled:
+        # Safety gate: active worker trading requires explicit paper mode unless dry-run is on.
+        if self.worker_enable_trading and not self.paper_trading_enabled and not self.worker_dry_run:
             raise ValueError(
-                "worker_enable_trading requires paper_trading_enabled=true"
+                "worker_enable_trading requires paper_trading_enabled=true unless WORKER_DRY_RUN=true"
             )
 
         # Hard guard against accidental live trading flags.
@@ -278,6 +279,7 @@ class DeploymentSettings:
             worker_strategy_params=strategy_params,
             worker_order_quantity=float(os.getenv("WORKER_ORDER_QUANTITY", "1.0")),
             worker_force_refresh=_read_bool("WORKER_FORCE_REFRESH", default=False),
+            worker_dry_run=_read_bool("WORKER_DRY_RUN", default=True),
             worker_allow_multi_strategy_per_symbol=_read_bool(
                 "WORKER_ALLOW_MULTI_STRATEGY_PER_SYMBOL",
                 default=False,

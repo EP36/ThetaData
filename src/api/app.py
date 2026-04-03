@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.api.schemas import (
@@ -28,6 +29,8 @@ from src.api.schemas import (
 from src.api.services import TradingApiService
 from src.config.deployment import DeploymentSettings
 from src.persistence import DatabaseStore, PersistenceRepository
+
+AnalyticsSource = Literal["execution", "paper", "backtest"]
 
 
 def _build_api_service() -> tuple[TradingApiService, DeploymentSettings, PersistenceRepository]:
@@ -134,21 +137,27 @@ def get_strategies() -> list[StrategySummary]:
 
 
 @app.get("/api/analytics/strategies", response_model=StrategyAnalyticsResponse)
-def get_strategy_analytics() -> StrategyAnalyticsResponse:
+def get_strategy_analytics(
+    source: AnalyticsSource = Query(default="execution"),
+) -> StrategyAnalyticsResponse:
     """Return strategy-level analytics computed from persisted trading data."""
-    return _service().strategy_analytics()
+    return _service().strategy_analytics(source=source)
 
 
 @app.get("/api/analytics/portfolio", response_model=PortfolioAnalyticsResponse)
-def get_portfolio_analytics() -> PortfolioAnalyticsResponse:
+def get_portfolio_analytics(
+    source: AnalyticsSource = Query(default="execution"),
+) -> PortfolioAnalyticsResponse:
     """Return portfolio-level analytics computed from persisted trading data."""
-    return _service().portfolio_analytics()
+    return _service().portfolio_analytics(source=source)
 
 
 @app.get("/api/analytics/context", response_model=ContextAnalyticsResponse)
-def get_context_analytics() -> ContextAnalyticsResponse:
+def get_context_analytics(
+    source: AnalyticsSource = Query(default="execution"),
+) -> ContextAnalyticsResponse:
     """Return context/regime analytics grouped by symbol/time and regime."""
-    return _service().context_analytics()
+    return _service().context_analytics(source=source)
 
 
 @app.get("/api/selection/status", response_model=SelectionStatusResponse)

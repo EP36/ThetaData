@@ -136,6 +136,7 @@ export type StrategyAnalyticsRecord = {
 
 export type StrategyAnalyticsData = {
   generatedAt: string;
+  dataSource: "execution" | "paper" | "backtest";
   strategies: StrategyAnalyticsRecord[];
 };
 
@@ -165,6 +166,7 @@ export type OpenRiskSummary = {
 
 export type PortfolioAnalyticsData = {
   generatedAt: string;
+  dataSource: "execution" | "paper" | "backtest";
   equityCurve: TimeSeriesPoint[];
   dailyPnl: TimeSeriesPoint[];
   realizedPnl: number;
@@ -187,6 +189,7 @@ export type ContextBucketPerformance = {
 
 export type ContextAnalyticsData = {
   generatedAt: string;
+  dataSource: "execution" | "paper" | "backtest";
   bySymbol: ContextBucketPerformance[];
   byTimeframe: ContextBucketPerformance[];
   byWeekday: ContextBucketPerformance[];
@@ -230,6 +233,7 @@ export type WorkerSymbolDecision = {
   selectedStrategy: string | null;
   activeStrategy: string | null;
   selectedScore: number;
+  noTradeReason: string | null;
   rejectionReasons: string[];
   candidates: StrategyScore[];
 };
@@ -239,12 +243,16 @@ export type WorkerExecutionStatusData = {
   workerName: string;
   timeframe: string;
   universeMode: string;
+  dryRunEnabled: boolean;
   universeSymbols: string[];
   scannedSymbols: string[];
   shortlistedSymbols: string[];
   allowMultiStrategyPerSymbol: boolean;
   selectedSymbol: string | null;
   selectedStrategy: string | null;
+  lastSelectedSymbol: string | null;
+  lastSelectedStrategy: string | null;
+  lastNoTradeReason: string | null;
   symbolFilterReasons: Record<string, string[]>;
   activeStrategyBySymbol: Record<string, string>;
   symbols: WorkerSymbolDecision[];

@@ -12,6 +12,8 @@ import type {
   WorkerExecutionStatusData
 } from "@/lib/types";
 
+type AnalyticsSource = "execution" | "paper" | "backtest";
+
 type ApiPoint = {
   timestamp: string;
   value: number;
@@ -110,6 +112,7 @@ type ApiStrategyAnalyticsRecord = {
 
 type ApiStrategyAnalyticsResponse = {
   generated_at: string;
+  data_source: AnalyticsSource;
   strategies: ApiStrategyAnalyticsRecord[];
 };
 
@@ -139,6 +142,7 @@ type ApiOpenRiskSummary = {
 
 type ApiPortfolioAnalyticsResponse = {
   generated_at: string;
+  data_source: AnalyticsSource;
   equity_curve: ApiPoint[];
   daily_pnl: ApiPoint[];
   realized_pnl: number;
@@ -161,6 +165,7 @@ type ApiContextBucketPerformance = {
 
 type ApiContextAnalyticsResponse = {
   generated_at: string;
+  data_source: AnalyticsSource;
   by_symbol: ApiContextBucketPerformance[];
   by_timeframe: ApiContextBucketPerformance[];
   by_weekday: ApiContextBucketPerformance[];
@@ -204,6 +209,7 @@ type ApiWorkerSymbolDecision = {
   selected_strategy: string | null;
   active_strategy: string | null;
   selected_score: number;
+  no_trade_reason: string | null;
   rejection_reasons: string[];
   candidates: ApiStrategyScore[];
 };
@@ -213,12 +219,16 @@ type ApiWorkerExecutionStatusResponse = {
   worker_name: string;
   timeframe: string;
   universe_mode: string;
+  dry_run_enabled: boolean;
   universe_symbols: string[];
   scanned_symbols: string[];
   shortlisted_symbols: string[];
   allow_multi_strategy_per_symbol: boolean;
   selected_symbol: string | null;
   selected_strategy: string | null;
+  last_selected_symbol: string | null;
+  last_selected_strategy: string | null;
+  last_no_trade_reason: string | null;
   symbol_filter_reasons: Record<string, string[]>;
   active_strategy_by_symbol: Record<string, string>;
   symbols: ApiWorkerSymbolDecision[];
@@ -364,10 +374,15 @@ export async function triggerKillSwitch(enabled = true): Promise<boolean> {
   return payload.kill_switch_enabled;
 }
 
-export async function getStrategyAnalytics(): Promise<StrategyAnalyticsData> {
-  const payload = await fetchJson<ApiStrategyAnalyticsResponse>("/api/analytics/strategies");
+export async function getStrategyAnalytics(
+  source: AnalyticsSource = "execution"
+): Promise<StrategyAnalyticsData> {
+  const payload = await fetchJson<ApiStrategyAnalyticsResponse>(
+    `/api/analytics/strategies?source=${source}`
+  );
   return {
     generatedAt: payload.generated_at,
+    dataSource: payload.data_source,
     strategies: payload.strategies.map((item) => ({
       strategy: item.strategy,
       totalReturn: item.total_return,
@@ -415,10 +430,15 @@ export async function getStrategyAnalytics(): Promise<StrategyAnalyticsData> {
   };
 }
 
-export async function getPortfolioAnalytics(): Promise<PortfolioAnalyticsData> {
-  const payload = await fetchJson<ApiPortfolioAnalyticsResponse>("/api/analytics/portfolio");
+export async function getPortfolioAnalytics(
+  source: AnalyticsSource = "execution"
+): Promise<PortfolioAnalyticsData> {
+  const payload = await fetchJson<ApiPortfolioAnalyticsResponse>(
+    `/api/analytics/portfolio?source=${source}`
+  );
   return {
     generatedAt: payload.generated_at,
+    dataSource: payload.data_source,
     equityCurve: payload.equity_curve,
     dailyPnl: payload.daily_pnl,
     realizedPnl: payload.realized_pnl,
@@ -448,8 +468,12 @@ export async function getPortfolioAnalytics(): Promise<PortfolioAnalyticsData> {
   };
 }
 
-export async function getContextAnalytics(): Promise<ContextAnalyticsData> {
-  const payload = await fetchJson<ApiContextAnalyticsResponse>("/api/analytics/context");
+export async function getContextAnalytics(
+  source: AnalyticsSource = "execution"
+): Promise<ContextAnalyticsData> {
+  const payload = await fetchJson<ApiContextAnalyticsResponse>(
+    `/api/analytics/context?source=${source}`
+  );
   const mapBucket = (item: ApiContextBucketPerformance) => ({
     key: item.key,
     trades: item.trades,
@@ -461,6 +485,7 @@ export async function getContextAnalytics(): Promise<ContextAnalyticsData> {
   });
   return {
     generatedAt: payload.generated_at,
+    dataSource: payload.data_source,
     bySymbol: payload.by_symbol.map(mapBucket),
     byTimeframe: payload.by_timeframe.map(mapBucket),
     byWeekday: payload.by_weekday.map(mapBucket),
@@ -517,12 +542,16 @@ export async function getWorkerExecutionStatus(): Promise<WorkerExecutionStatusD
     workerName: payload.worker_name,
     timeframe: payload.timeframe,
     universeMode: payload.universe_mode,
+    dryRunEnabled: payload.dry_run_enabled,
     universeSymbols: payload.universe_symbols,
     scannedSymbols: payload.scanned_symbols,
     shortlistedSymbols: payload.shortlisted_symbols,
     allowMultiStrategyPerSymbol: payload.allow_multi_strategy_per_symbol,
     selectedSymbol: payload.selected_symbol,
     selectedStrategy: payload.selected_strategy,
+    lastSelectedSymbol: payload.last_selected_symbol,
+    lastSelectedStrategy: payload.last_selected_strategy,
+    lastNoTradeReason: payload.last_no_trade_reason,
     symbolFilterReasons: payload.symbol_filter_reasons,
     activeStrategyBySymbol: payload.active_strategy_by_symbol,
     symbols: payload.symbols.map((item) => ({
@@ -535,6 +564,7 @@ export async function getWorkerExecutionStatus(): Promise<WorkerExecutionStatusD
       selectedStrategy: item.selected_strategy,
       activeStrategy: item.active_strategy,
       selectedScore: item.selected_score,
+      noTradeReason: item.no_trade_reason,
       rejectionReasons: item.rejection_reasons,
       candidates: item.candidates.map(mapScore)
     }))

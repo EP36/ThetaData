@@ -147,6 +147,7 @@ class StrategyAnalyticsResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     generated_at: datetime
+    data_source: Literal["execution", "paper", "backtest"]
     strategies: list[StrategyAnalyticsRecordResponse]
 
 
@@ -192,6 +193,7 @@ class PortfolioAnalyticsResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     generated_at: datetime
+    data_source: Literal["execution", "paper", "backtest"]
     equity_curve: list[EquityPoint]
     daily_pnl: list[EquityPoint]
     realized_pnl: float
@@ -222,6 +224,7 @@ class ContextAnalyticsResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     generated_at: datetime
+    data_source: Literal["execution", "paper", "backtest"]
     by_symbol: list[ContextBucketPerformanceResponse]
     by_timeframe: list[ContextBucketPerformanceResponse]
     by_weekday: list[ContextBucketPerformanceResponse]
@@ -277,6 +280,7 @@ class WorkerSymbolDecisionResponse(BaseModel):
     selected_strategy: Optional[str]
     active_strategy: Optional[str]
     selected_score: float
+    no_trade_reason: Optional[str]
     rejection_reasons: list[str]
     candidates: list[StrategyScoreResponse]
 
@@ -290,12 +294,16 @@ class WorkerExecutionStatusResponse(BaseModel):
     worker_name: str
     timeframe: str
     universe_mode: str
+    dry_run_enabled: bool
     universe_symbols: list[str]
     scanned_symbols: list[str]
     shortlisted_symbols: list[str]
     allow_multi_strategy_per_symbol: bool
     selected_symbol: Optional[str]
     selected_strategy: Optional[str]
+    last_selected_symbol: Optional[str]
+    last_selected_strategy: Optional[str]
+    last_no_trade_reason: Optional[str]
     symbol_filter_reasons: dict[str, list[str]]
     active_strategy_by_symbol: dict[str, str]
     symbols: list[WorkerSymbolDecisionResponse]

@@ -168,6 +168,16 @@ Core endpoints:
 
 ### Analytics Metrics
 
+Analytics source categories are explicit via `source` query param:
+- `source=backtest`: backtest-trade analytics only
+- `source=paper`: persisted paper-execution fill analytics only
+- `source=execution`: execution-fill analytics (currently the same as paper in this paper-only system)
+
+Examples:
+- `GET /api/analytics/strategies?source=backtest`
+- `GET /api/analytics/portfolio?source=paper`
+- `GET /api/analytics/context?source=execution`
+
 Strategy analytics (`/api/analytics/strategies`) include:
 - total return
 - win rate
@@ -198,6 +208,7 @@ Context analytics (`/api/analytics/context`) include:
 - performance by regime
 
 If data is insufficient, analytics endpoints return empty arrays/zero-safe values (no fake demo metrics).
+Backtest and execution/paper analytics are persisted separately; execution/paper tables are not reused for backtest rows.
 
 ### Deterministic Strategy Selection
 
@@ -253,7 +264,12 @@ Universe source of truth:
   - `MAX_SPREAD_PCT` (only when quote columns exist)
   - stale intraday-data exclusion
 - `WORKER_MAX_CANDIDATES` limits shortlist size for each worker cycle.
-- Default behavior is paper-only and non-executing until both `PAPER_TRADING=true` and `WORKER_ENABLE_TRADING=true`.
+- Default behavior is non-executing until `WORKER_ENABLE_TRADING=true`.
+- With `WORKER_DRY_RUN=true` (default), the worker runs full scan/filter/select logic but does not submit orders.
+- To place paper orders, set all of:
+  - `WORKER_ENABLE_TRADING=true`
+  - `PAPER_TRADING=true`
+  - `WORKER_DRY_RUN=false`
 
 Cycle behavior:
 1. Worker scans the configured symbol universe.
@@ -276,11 +292,14 @@ Same-symbol conflict prevention:
 
 Operational visibility:
 - `GET /api/worker/execution-status` returns:
+  - dry-run mode status
   - universe mode
   - configured universe symbols
   - scanned symbols
   - shortlisted symbols
   - selected symbol + strategy summary
+  - last selected symbol/strategy
+  - last no-trade reason
   - symbol-level filter reasons
   - per-symbol active strategy lock
   - latest per-symbol action/order status
@@ -441,6 +460,7 @@ Minimum for Render:
 - `WORKER_NAME` (for heartbeat and worker identity)
 - `PAPER_TRADING` (`false` by default)
 - `WORKER_ENABLE_TRADING` (`false` by default)
+- `WORKER_DRY_RUN` (`true` by default)
 - `LIVE_TRADING=false` (must remain false)
 - `CORS_ALLOWED_ORIGINS=https://thetadata.onrender.com` (comma-separated list supported)
 
@@ -458,6 +478,7 @@ Recommended:
 - `WORKER_TIMEFRAME=1d`
 - `WORKER_STRATEGY=moving_average_crossover`
 - `WORKER_STRATEGY_PARAMS_JSON={}`
+- `WORKER_DRY_RUN=true`
 - `WORKER_SYMBOLS=SPY,QQQ`
 - `WORKER_ALLOW_MULTI_STRATEGY_PER_SYMBOL=false`
 - `MIN_PRICE=1.0`
@@ -482,19 +503,44 @@ Recommended:
 ### Paper-Trading Safety Defaults
 
 - `PAPER_TRADING=false` by default.
-- Worker trading is blocked unless `WORKER_ENABLE_TRADING=true`.
-- Worker trading requires `PAPER_TRADING=true` and respects global kill switch.
+- `WORKER_DRY_RUN=true` by default.
+- Worker order submission is blocked unless:
+  - `WORKER_ENABLE_TRADING=true`
+  - `PAPER_TRADING=true`
+  - `WORKER_DRY_RUN=false`
+- Worker always respects global kill switch.
 - Any `LIVE_TRADING=true` setting raises a startup validation error.
+
+### Pre-Paper-Trading Validation Checklist
+
+1. Run worker in dry-run mode and confirm cycle logs look correct.
+2. Verify `/api/worker/execution-status` reports:
+   - `dry_run_enabled=true`
+   - expected scanned/shortlisted symbols
+   - expected selected strategy behavior
+   - explicit no-trade reasons when no order is placed
+3. Verify source-separated analytics:
+   - `source=backtest` contains only backtest analytics
+   - `source=paper` is empty until real paper fills exist
+4. Validate risk controls and manual kill switch behavior.
+5. Enable paper order submission intentionally:
+   - `WORKER_ENABLE_TRADING=true`
+   - `PAPER_TRADING=true`
+   - `WORKER_DRY_RUN=false`
+6. Recheck `/healthz`, `/api/system/status`, and `/api/risk/status` after toggling.
 
 ### 30-Day Unattended Runbook
 
 1. Provision Render services using `render.yaml`.
 2. Confirm web health: `GET /healthz` returns `status=ok` and `database=ok`.
 3. Confirm system status: `GET /api/system/status` shows worker heartbeat.
-4. Keep `PAPER_TRADING=false` and `WORKER_ENABLE_TRADING=false` for initial verification.
-5. Enable paper mode intentionally:
-   - set `PAPER_TRADING=true`
+4. Start with dry-run validation:
    - set `WORKER_ENABLE_TRADING=true`
+   - keep `PAPER_TRADING=false`
+   - keep `WORKER_DRY_RUN=true`
+5. Enable paper mode intentionally after dry-run validation:
+   - set `PAPER_TRADING=true`
+   - set `WORKER_DRY_RUN=false`
 6. Monitor daily:
    - run history in `/api/system/status`
    - risk endpoint `GET /api/risk/status`

@@ -106,6 +106,40 @@ def test_recent_fills_returns_only_persisted_fill_rows(tmp_path) -> None:
     assert rows[0]["strategy"] == "moving_average_crossover"
 
 
+def test_backtest_trades_are_persisted_separately_from_execution_fills(tmp_path) -> None:
+    db_path = tmp_path / "theta.db"
+    repository = PersistenceRepository(
+        store=DatabaseStore(database_url=f"sqlite+pysqlite:///{db_path}")
+    )
+    repository.initialize(starting_cash=50_000.0)
+
+    repository.start_run(
+        run_id="run-bt-1",
+        service="api",
+        strategy="moving_average_crossover",
+        timeframe="1d",
+        details={"source": "api_backtest"},
+    )
+    repository.record_backtest_trade(
+        run_id="run-bt-1",
+        symbol="SPY",
+        side="BUY",
+        quantity=1.0,
+        price=100.0,
+        fee=1.0,
+        reason="entry_signal",
+        strategy="moving_average_crossover",
+        timeframe="1d",
+        timestamp=pd.Timestamp("2026-01-01T10:00:00Z").to_pydatetime(),
+    )
+
+    assert repository.recent_fills(limit=10, run_service_prefix="worker:") == []
+    backtest_rows = repository.recent_backtest_trades(limit=10)
+    assert len(backtest_rows) == 1
+    assert backtest_rows[0]["symbol"] == "SPY"
+    assert backtest_rows[0]["strategy"] == "moving_average_crossover"
+
+
 def test_symbol_strategy_lock_lifecycle(tmp_path) -> None:
     db_path = tmp_path / "theta.db"
     repository = PersistenceRepository(

@@ -13,27 +13,51 @@ import type {
   WorkerExecutionStatusData
 } from "@/lib/types";
 
-export type AnalyticsData = {
+export type AnalyticsCategory = {
   strategies: StrategyAnalyticsData;
   portfolio: PortfolioAnalyticsData;
   context: ContextAnalyticsData;
-  selection: SelectionStatusData;
+};
+
+export type AnalyticsData = {
+  backtest: AnalyticsCategory;
+  paper: AnalyticsCategory;
   execution: WorkerExecutionStatusData;
+  selection: SelectionStatusData;
 };
 
 export async function getAnalyticsData(): Promise<AnalyticsData> {
-  const [strategies, portfolio, context, selection, execution] = await Promise.all([
-    getStrategyAnalytics(),
-    getPortfolioAnalytics(),
-    getContextAnalytics(),
+  const [
+    backtestStrategies,
+    backtestPortfolio,
+    backtestContext,
+    paperStrategies,
+    paperPortfolio,
+    paperContext,
+    selection,
+    execution
+  ] = await Promise.all([
+    getStrategyAnalytics("backtest"),
+    getPortfolioAnalytics("backtest"),
+    getContextAnalytics("backtest"),
+    getStrategyAnalytics("paper"),
+    getPortfolioAnalytics("paper"),
+    getContextAnalytics("paper"),
     getSelectionStatus(),
     getWorkerExecutionStatus()
   ]);
 
   return {
-    strategies,
-    portfolio,
-    context,
+    backtest: {
+      strategies: backtestStrategies,
+      portfolio: backtestPortfolio,
+      context: backtestContext
+    },
+    paper: {
+      strategies: paperStrategies,
+      portfolio: paperPortfolio,
+      context: paperContext
+    },
     selection,
     execution
   };

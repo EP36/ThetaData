@@ -159,3 +159,32 @@ def test_worker_enforces_symbol_strategy_lock_reason(tmp_path) -> None:
         and lock_reason in candidate.get("reasons", [])
         for candidate in candidates
     )
+
+
+def test_worker_dry_run_evaluates_without_submitting_orders(tmp_path) -> None:
+    db_path = tmp_path / "theta.db"
+    settings = DeploymentSettings(
+        database_url=f"sqlite+pysqlite:///{db_path}",
+        worker_enable_trading=True,
+        paper_trading_enabled=False,
+        worker_dry_run=True,
+        worker_name="dry-run-worker",
+        worker_symbols=("SPY",),
+        worker_timeframe="1d",
+        worker_order_quantity=1.0,
+        app_env="development",
+        strict_env_validation=False,
+    )
+    repository = build_repository(db_path)
+    worker = TradingWorker(settings=settings, repository=repository)
+
+    worker.run_once()
+
+    runs = repository.recent_runs(limit=10)
+    worker_runs = [row for row in runs if str(row.get("service") or "").startswith("worker:")]
+    assert worker_runs
+    details = dict(worker_runs[0].get("details") or {})
+    assert details.get("action") in {"no_order", "dry_run_order_skipped", "duplicate_order_skipped"}
+
+    fills = repository.recent_fills(limit=20, run_service_prefix="worker:")
+    assert fills == []

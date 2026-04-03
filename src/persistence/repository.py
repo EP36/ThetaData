@@ -12,6 +12,7 @@ from sqlalchemy.exc import IntegrityError
 
 from src.execution.models import Fill, Order, Position
 from src.persistence.models import (
+    BacktestTradeModel,
     FillModel,
     GlobalStateModel,
     LogEventModel,
@@ -347,6 +348,47 @@ class PersistenceRepository:
                 session.rollback()
                 return
 
+    def record_backtest_trade(
+        self,
+        run_id: str,
+        symbol: str,
+        side: str,
+        quantity: float,
+        price: float,
+        fee: float,
+        reason: str,
+        strategy: str,
+        timeframe: str,
+        timestamp: datetime,
+    ) -> None:
+        """Persist one backtest trade row in the backtest-only table."""
+        trade_key = hashlib.sha256(
+            (
+                f"{run_id}|{symbol.upper()}|{side.upper()}|{quantity:.8f}|"
+                f"{price:.8f}|{timestamp.isoformat()}"
+            ).encode("utf-8")
+        ).hexdigest()
+        with self.store.session() as session:
+            row = BacktestTradeModel(
+                backtest_trade_id=trade_key,
+                run_id=run_id,
+                symbol=symbol.upper(),
+                side=side.upper(),
+                quantity=float(quantity),
+                price=float(price),
+                fee=float(fee),
+                reason=reason.strip(),
+                strategy=strategy,
+                timeframe=timeframe,
+                timestamp=timestamp,
+            )
+            session.add(row)
+            try:
+                session.flush()
+            except IntegrityError:
+                session.rollback()
+                return
+
     def save_portfolio_snapshot(self, snapshot: PortfolioSnapshot) -> None:
         """Persist cash/equity anchors and positions."""
         with self.store.session() as session:
@@ -409,47 +451,74 @@ class PersistenceRepository:
                 positions=positions,
             )
 
-    def recent_fills(self, limit: int = 200) -> list[dict[str, Any]]:
+    def recent_fills(
+        self,
+        limit: int = 200,
+        run_service_prefix: str | None = None,
+    ) -> list[dict[str, Any]]:
         """Return recent fills with lightweight run context for API consumers."""
         with self.store.session() as session:
-            fill_rows = session.scalars(
-                select(FillModel).order_by(FillModel.timestamp.desc()).limit(limit)
-            ).all()
-
-            run_ids = sorted({row.run_id for row in fill_rows if row.run_id})
-            strategy_by_run: dict[str, str] = {}
-            if run_ids:
-                run_rows = session.scalars(
-                    select(RunHistoryModel).where(RunHistoryModel.run_id.in_(run_ids))
-                ).all()
-                strategy_by_run = {}
-                for row in run_rows:
-                    if not row.run_id:
-                        continue
-                    details = dict(row.details or {})
-                    selection = details.get("selection")
-                    selected_strategy = None
-                    if isinstance(selection, dict):
-                        selected_strategy = selection.get("selected_strategy")
-                    strategy_by_run[row.run_id] = str(
-                        selected_strategy or row.strategy or "paper_worker"
-                    )
-
+            statement = (
+                select(FillModel, RunHistoryModel)
+                .outerjoin(RunHistoryModel, FillModel.run_id == RunHistoryModel.run_id)
+                .order_by(FillModel.timestamp.desc())
+            )
+            if run_service_prefix:
+                statement = statement.where(
+                    RunHistoryModel.service.like(f"{run_service_prefix}%")
+                )
+            rows = session.execute(statement.limit(limit)).all()
             records: list[dict[str, Any]] = []
-            for row in fill_rows:
+            for fill_row, run_row in rows:
+                details = dict(run_row.details or {}) if run_row is not None else {}
+                selection = details.get("selection")
+                selected_strategy = None
+                if isinstance(selection, dict):
+                    selected_strategy = selection.get("selected_strategy")
+                strategy = str(
+                    selected_strategy
+                    or (run_row.strategy if run_row is not None else None)
+                    or "paper_worker"
+                )
+                service = str(run_row.service) if run_row is not None else ""
                 records.append(
                     {
-                        "order_id": row.order_id,
-                        "run_id": row.run_id,
-                        "timestamp": row.timestamp,
-                        "symbol": row.symbol,
-                        "side": row.side.upper(),
-                        "quantity": float(row.quantity),
-                        "price": float(row.price),
-                        "strategy": strategy_by_run.get(row.run_id or "", "paper_worker"),
+                        "order_id": fill_row.order_id,
+                        "run_id": fill_row.run_id,
+                        "timestamp": fill_row.timestamp,
+                        "symbol": fill_row.symbol,
+                        "side": fill_row.side.upper(),
+                        "quantity": float(fill_row.quantity),
+                        "price": float(fill_row.price),
+                        "strategy": strategy,
+                        "service": service,
                     }
                 )
             return records
+
+    def recent_backtest_trades(self, limit: int = 2000) -> list[dict[str, Any]]:
+        """Return recent persisted backtest trades."""
+        with self.store.session() as session:
+            rows = session.scalars(
+                select(BacktestTradeModel)
+                .order_by(BacktestTradeModel.timestamp.desc())
+                .limit(limit)
+            ).all()
+            return [
+                {
+                    "run_id": row.run_id,
+                    "timestamp": row.timestamp,
+                    "symbol": row.symbol,
+                    "side": row.side.upper(),
+                    "quantity": float(row.quantity),
+                    "price": float(row.price),
+                    "fee": float(row.fee),
+                    "reason": row.reason,
+                    "strategy": row.strategy,
+                    "timeframe": row.timeframe,
+                }
+                for row in rows
+            ]
 
     def append_log_event(
         self,

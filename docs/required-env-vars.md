@@ -27,12 +27,15 @@ These are optional for MVP paper deployment:
 - `DATA_API_KEY` is optional when using synthetic/local data flow.
 - Strategy/risk tuning vars (`WORKER_SYMBOL`, `WORKER_STRATEGY`, `MAX_DAILY_LOSS`, etc.) have safe defaults and can be added later.
 - Universe/selection controls (`WORKER_SYMBOLS`, `WORKER_ALLOW_MULTI_STRATEGY_PER_SYMBOL`) are optional and default to safe behavior.
+- `WORKER_DRY_RUN` is optional and defaults to `true` (full worker evaluation with no order submission).
 - Universe scanner controls (`WORKER_UNIVERSE_MODE`, `WORKER_MAX_CANDIDATES`, `MIN_PRICE`, `MIN_AVG_VOLUME`, `MIN_RELATIVE_VOLUME`, `MAX_SPREAD_PCT`) are optional and default to deterministic safe values.
 
 ## Notes
 
 - For Render, keep `PAPER_TRADING=false` and `WORKER_ENABLE_TRADING=false` until verification is complete.
+- If you enable the worker loop before paper execution, keep `WORKER_DRY_RUN=true`.
 - In production/staging, do not use wildcard CORS (`*`); startup validation rejects it.
-- To intentionally enable paper execution later, set both:
+- To intentionally enable paper execution later, set all:
   - `PAPER_TRADING=true`
   - `WORKER_ENABLE_TRADING=true`
+  - `WORKER_DRY_RUN=false`

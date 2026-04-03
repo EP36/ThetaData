@@ -63,6 +63,7 @@ class SymbolCycleSummary:
     selected_strategy: str | None
     active_strategy: str | None
     order_status: str | None
+    no_trade_reason: str | None
     rejection_reasons: tuple[str, ...]
 
 
@@ -104,11 +105,12 @@ class TradingWorker:
             )
 
         LOGGER.info(
-            "worker_start service=%s worker_name=%s paper_trading=%s worker_enable_trading=%s poll_seconds=%d universe_mode=%s universe=%s",
+            "worker_start service=%s worker_name=%s paper_trading=%s worker_enable_trading=%s worker_dry_run=%s poll_seconds=%d universe_mode=%s universe=%s",
             self.settings.service_name,
             self.settings.worker_name,
             self.settings.paper_trading_enabled,
             self.settings.worker_enable_trading,
+            self.settings.worker_dry_run,
             self.settings.worker_poll_seconds,
             self.settings.worker_universe_mode,
             ",".join(self.settings.worker_symbols),
@@ -122,6 +124,7 @@ class TradingWorker:
                 "worker_name": self.settings.worker_name,
                 "paper_trading_enabled": self.settings.paper_trading_enabled,
                 "worker_enable_trading": self.settings.worker_enable_trading,
+                "worker_dry_run": self.settings.worker_dry_run,
                 "universe_mode": self.settings.worker_universe_mode,
                 "universe": list(self.settings.worker_symbols),
                 "worker_max_candidates": self.settings.worker_max_candidates,
@@ -177,12 +180,10 @@ class TradingWorker:
             )
             return
 
-        if not self.settings.paper_trading_enabled or not self.settings.worker_enable_trading:
+        if not self.settings.worker_enable_trading:
             LOGGER.info(
-                "worker_cycle_skipped reason=paper_or_worker_disabled cycle_key=%s paper=%s worker=%s",
+                "worker_cycle_skipped reason=worker_disabled cycle_key=%s",
                 heartbeat_cycle_key,
-                self.settings.paper_trading_enabled,
-                self.settings.worker_enable_trading,
             )
             self.repository.append_log_event(
                 level="INFO",
@@ -190,9 +191,10 @@ class TradingWorker:
                 event="worker_cycle_skipped",
                 payload={
                     "cycle_key": heartbeat_cycle_key,
-                    "reason": "paper_or_worker_disabled",
+                    "reason": "worker_disabled",
                     "paper_trading_enabled": self.settings.paper_trading_enabled,
                     "worker_enable_trading": self.settings.worker_enable_trading,
+                    "worker_dry_run": self.settings.worker_dry_run,
                     "universe_mode": self.settings.worker_universe_mode,
                     "configured_universe": list(configured_universe),
                 },
@@ -201,7 +203,34 @@ class TradingWorker:
                 worker_name=self.settings.worker_name,
                 status="idle",
                 last_cycle_key=heartbeat_cycle_key,
-                message="paper_or_worker_disabled",
+                message="worker_disabled",
+            )
+            return
+
+        if not self.settings.paper_trading_enabled and not self.settings.worker_dry_run:
+            LOGGER.info(
+                "worker_cycle_skipped reason=paper_disabled_without_dry_run cycle_key=%s",
+                heartbeat_cycle_key,
+            )
+            self.repository.append_log_event(
+                level="INFO",
+                logger_name=LOGGER.name,
+                event="worker_cycle_skipped",
+                payload={
+                    "cycle_key": heartbeat_cycle_key,
+                    "reason": "paper_disabled_without_dry_run",
+                    "paper_trading_enabled": self.settings.paper_trading_enabled,
+                    "worker_enable_trading": self.settings.worker_enable_trading,
+                    "worker_dry_run": self.settings.worker_dry_run,
+                    "universe_mode": self.settings.worker_universe_mode,
+                    "configured_universe": list(configured_universe),
+                },
+            )
+            self.repository.record_worker_heartbeat(
+                worker_name=self.settings.worker_name,
+                status="idle",
+                last_cycle_key=heartbeat_cycle_key,
+                message="paper_disabled_without_dry_run",
             )
             return
 
@@ -216,7 +245,9 @@ class TradingWorker:
         executor = PaperTradingExecutor(
             starting_cash=self.settings.initial_capital,
             risk_manager=risk_manager,
-            paper_trading_enabled=self.settings.paper_trading_enabled,
+            paper_trading_enabled=(
+                self.settings.paper_trading_enabled and not self.settings.worker_dry_run
+            ),
             max_notional_per_trade=self.settings.max_notional_per_trade,
             max_open_positions=self.settings.max_open_positions,
             daily_loss_cap=self.settings.executor_daily_loss_cap,
@@ -361,6 +392,48 @@ class TradingWorker:
             ]
             message = ",".join(selected)
 
+        selected_summary = next(
+            (row for row in summaries if row.selected_strategy is not None),
+            None,
+        )
+        last_no_trade_reason = next(
+            (row.no_trade_reason for row in summaries if row.no_trade_reason),
+            None,
+        )
+        LOGGER.info(
+            "worker_cycle_summary cycle_key=%s dry_run=%s scanned=%s shortlisted=%s selected_symbol=%s selected_strategy=%s no_trade_reason=%s",
+            heartbeat_cycle_key,
+            self.settings.worker_dry_run,
+            ",".join(scan_result.scanned_symbols),
+            ",".join(scan_result.shortlisted_symbols),
+            selected_summary.symbol if selected_summary is not None else "none",
+            selected_summary.selected_strategy if selected_summary is not None else "none",
+            last_no_trade_reason or "none",
+        )
+        self.repository.append_log_event(
+            level="INFO",
+            logger_name=LOGGER.name,
+            event="worker_cycle_summary",
+            payload={
+                "cycle_key": heartbeat_cycle_key,
+                "worker_name": self.settings.worker_name,
+                "dry_run": self.settings.worker_dry_run,
+                "scanned_symbols": list(scan_result.scanned_symbols),
+                "shortlisted_symbols": list(scan_result.shortlisted_symbols),
+                "filtered_out_reasons": {
+                    symbol: list(reasons)
+                    for symbol, reasons in scan_result.filtered_out_reasons.items()
+                },
+                "selected_symbol": (
+                    selected_summary.symbol if selected_summary is not None else None
+                ),
+                "selected_strategy": (
+                    selected_summary.selected_strategy if selected_summary is not None else None
+                ),
+                "last_no_trade_reason": last_no_trade_reason,
+            },
+        )
+
         self.repository.record_worker_heartbeat(
             worker_name=self.settings.worker_name,
             status=status,
@@ -426,6 +499,7 @@ class TradingWorker:
                 selected_strategy=None,
                 active_strategy=symbol_strategy_locks.get(symbol),
                 order_status=None,
+                no_trade_reason="duplicate_cycle",
                 rejection_reasons=(),
             )
 
@@ -512,6 +586,11 @@ class TradingWorker:
             )
 
             if order is None:
+                no_trade_reason = self._determine_no_trade_reason(
+                    decision=decision,
+                    selected_signal=selected_signal,
+                    current_position=current_position,
+                )
                 self._sync_lock_on_no_order(
                     symbol=symbol,
                     current_position=executor.positions.get(symbol),
@@ -527,6 +606,7 @@ class TradingWorker:
                     payload={
                         "cycle_key": cycle_key,
                         "symbol": symbol,
+                        "no_trade_reason": no_trade_reason,
                         "selection": decision.as_dict(),
                     },
                 )
@@ -536,6 +616,7 @@ class TradingWorker:
                     details={
                         "selection": decision.as_dict(),
                         "action": "no_order",
+                        "no_trade_reason": no_trade_reason,
                         "active_strategy": symbol_strategy_locks.get(symbol),
                     },
                 )
@@ -547,6 +628,58 @@ class TradingWorker:
                     selected_strategy=decision.selected_strategy,
                     active_strategy=symbol_strategy_locks.get(symbol),
                     order_status=None,
+                    no_trade_reason=no_trade_reason,
+                    rejection_reasons=(),
+                )
+
+            if self.settings.worker_dry_run:
+                LOGGER.info(
+                    "worker_dry_run_order_skipped cycle_key=%s symbol=%s side=%s qty=%.6f price=%.6f selected_strategy=%s",
+                    cycle_key,
+                    symbol,
+                    order.side.upper(),
+                    order.quantity,
+                    order.price,
+                    decision.selected_strategy or "none",
+                )
+                self.repository.append_log_event(
+                    level="INFO",
+                    logger_name=LOGGER.name,
+                    event="worker_dry_run_order_skipped",
+                    run_id=run_id,
+                    payload={
+                        "cycle_key": cycle_key,
+                        "symbol": symbol,
+                        "order": {
+                            "symbol": order.symbol,
+                            "side": order.side.upper(),
+                            "quantity": float(order.quantity),
+                            "price": float(order.price),
+                        },
+                        "selection": decision.as_dict(),
+                        "no_trade_reason": "dry_run_enabled",
+                    },
+                )
+                self.repository.finish_run(
+                    run_id=run_id,
+                    status="completed",
+                    details={
+                        "selection": decision.as_dict(),
+                        "action": "dry_run_order_skipped",
+                        "dry_run": True,
+                        "no_trade_reason": "dry_run_enabled",
+                        "active_strategy": symbol_strategy_locks.get(symbol),
+                    },
+                )
+                return SymbolCycleSummary(
+                    symbol=symbol,
+                    run_id=run_id,
+                    status="completed",
+                    action="dry_run_order_skipped",
+                    selected_strategy=decision.selected_strategy,
+                    active_strategy=symbol_strategy_locks.get(symbol),
+                    order_status=None,
+                    no_trade_reason="dry_run_enabled",
                     rejection_reasons=(),
                 )
 
@@ -570,6 +703,7 @@ class TradingWorker:
                     details={
                         "selection": decision.as_dict(),
                         "action": "duplicate_order_skipped",
+                        "no_trade_reason": "duplicate_order_skipped",
                         "active_strategy": symbol_strategy_locks.get(symbol),
                     },
                 )
@@ -581,6 +715,7 @@ class TradingWorker:
                     selected_strategy=decision.selected_strategy,
                     active_strategy=symbol_strategy_locks.get(symbol),
                     order_status=None,
+                    no_trade_reason="duplicate_order_skipped",
                     rejection_reasons=(),
                 )
 
@@ -635,6 +770,11 @@ class TradingWorker:
                     "order_id": result.order_id,
                     "order_status": result.status,
                     "rejection_reasons": list(result.rejection_reasons),
+                    "no_trade_reason": (
+                        "order_rejected:" + ",".join(result.rejection_reasons)
+                        if result.status != "FILLED" and result.rejection_reasons
+                        else None
+                    ),
                     "active_strategy": symbol_strategy_locks.get(symbol),
                 },
             )
@@ -646,6 +786,11 @@ class TradingWorker:
                 selected_strategy=decision.selected_strategy,
                 active_strategy=symbol_strategy_locks.get(symbol),
                 order_status=result.status,
+                no_trade_reason=(
+                    "order_rejected:" + ",".join(result.rejection_reasons)
+                    if result.status != "FILLED" and result.rejection_reasons
+                    else None
+                ),
                 rejection_reasons=tuple(result.rejection_reasons),
             )
         except Exception as exc:
@@ -683,6 +828,7 @@ class TradingWorker:
                 selected_strategy=None,
                 active_strategy=symbol_strategy_locks.get(symbol),
                 order_status=None,
+                no_trade_reason="cycle_failed",
                 rejection_reasons=(),
             )
         finally:
@@ -768,7 +914,7 @@ class TradingWorker:
         snapshot: PortfolioSnapshot,
     ) -> PerformanceAnalyticsSnapshot:
         """Build analytics snapshot from persisted fills/runs for selection + API parity."""
-        fills = self.repository.recent_fills(limit=5000)
+        fills = self.repository.recent_fills(limit=5000, run_service_prefix="worker:")
         runs = self.repository.recent_runs(limit=2000)
         return build_performance_snapshot(
             fills=fills,
@@ -1045,6 +1191,30 @@ class TradingWorker:
                 timestamp=latest_timestamp,
             )
         return None
+
+    def _determine_no_trade_reason(
+        self,
+        decision: SelectionDecision,
+        selected_signal: float,
+        current_position: Position | None,
+    ) -> str:
+        """Derive a deterministic no-trade reason for cycle-level observability."""
+        current_qty = 0.0 if current_position is None else float(current_position.quantity)
+
+        if decision.selected_strategy is None:
+            if decision.candidates:
+                top = decision.candidates[0]
+                if top.reasons:
+                    return f"no_eligible_strategy:{top.reasons[0]}"
+            return "no_eligible_strategy"
+
+        if selected_signal <= EPSILON and current_qty <= EPSILON:
+            return "selected_signal_not_actionable"
+        if selected_signal > EPSILON and current_qty > EPSILON:
+            return "position_already_open"
+        if decision.sizing_multiplier <= EPSILON:
+            return "sizing_multiplier_zero"
+        return "no_order_condition_not_met"
 
     def _heartbeat_cycle_key(self, timestamp: pd.Timestamp) -> str:
         """Derive a cross-universe cycle key for worker heartbeat updates."""

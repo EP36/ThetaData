@@ -11,11 +11,26 @@ def test_defaults_keep_trading_disabled() -> None:
     settings = DeploymentSettings()
     assert settings.paper_trading_enabled is False
     assert settings.worker_enable_trading is False
+    assert settings.worker_dry_run is True
 
 
 def test_worker_trading_requires_paper_mode() -> None:
     with pytest.raises(ValueError, match="worker_enable_trading requires"):
-        DeploymentSettings(worker_enable_trading=True, paper_trading_enabled=False)
+        DeploymentSettings(
+            worker_enable_trading=True,
+            paper_trading_enabled=False,
+            worker_dry_run=False,
+        )
+
+
+def test_worker_trading_allows_dry_run_without_paper() -> None:
+    settings = DeploymentSettings(
+        worker_enable_trading=True,
+        paper_trading_enabled=False,
+        worker_dry_run=True,
+    )
+    assert settings.worker_enable_trading is True
+    assert settings.worker_dry_run is True
 
 
 def test_production_requires_postgres_database() -> None:

@@ -48,7 +48,6 @@ from src.analytics.performance_layer import (
 )
 from src.backtest.engine import BacktestResult
 from src.cli.services import run_backtest as run_backtest_workflow
-from src.execution.models import Fill
 from src.observability import clear_run, configure_logging, start_run
 from src.persistence import PersistenceRepository
 from src.strategies import get_strategy_class, list_strategies
@@ -57,6 +56,7 @@ LOGGER = logging.getLogger("theta.api.services")
 RISK_PER_TRADE_PCT = 0.01
 MAX_POSITION_SIZE_CAP_PCT = 0.25
 MAX_OPEN_POSITIONS_CAP = 3
+AnalyticsSource = Literal["execution", "paper", "backtest"]
 
 
 def _drawdown_series(equity_curve: pd.Series) -> pd.Series:
@@ -307,13 +307,16 @@ class TradingApiService:
             return self.deployment_settings.log_dir
         return "logs"
 
-    def _performance_snapshot(self) -> PerformanceAnalyticsSnapshot:
-        """Build analytics snapshot from persisted runtime state when available."""
+    def _performance_snapshot(
+        self,
+        source: AnalyticsSource = "execution",
+    ) -> PerformanceAnalyticsSnapshot:
+        """Build analytics snapshot from one explicit data source category."""
         starting_equity = self._initial_capital_for_bootstrap()
         if self.repository is None:
             from src.persistence.repository import PortfolioSnapshot
 
-            if self.last_backtest is None:
+            if source != "backtest" or self.last_backtest is None:
                 empty = PortfolioSnapshot(
                     cash=starting_equity,
                     day_start_equity=starting_equity,
@@ -362,7 +365,25 @@ class TradingApiService:
             )
 
         snapshot = self.repository.load_portfolio_snapshot(default_cash=starting_equity)
-        fills = self.repository.recent_fills(limit=5000)
+        if source == "backtest":
+            backtest_trades = self.repository.recent_backtest_trades(limit=5000)
+            fills = [
+                {
+                    "run_id": row["run_id"],
+                    "timestamp": row["timestamp"],
+                    "symbol": row["symbol"],
+                    "side": row["side"],
+                    "quantity": row["quantity"],
+                    "price": row["price"],
+                    "strategy": row["strategy"],
+                }
+                for row in backtest_trades
+            ]
+        else:
+            fills = self.repository.recent_fills(
+                limit=5000,
+                run_service_prefix="worker:",
+            )
         runs = self.repository.recent_runs(limit=2000)
         return build_performance_snapshot(
             fills=fills,
@@ -604,17 +625,17 @@ class TradingApiService:
             if self.repository is not None:
                 for index, trade in enumerate(result.trades):
                     timestamp = pd.Timestamp(trade.timestamp)
-                    self.repository.record_fill(
-                        fill=Fill(
-                            order_id=f"{run_id}-bt-{index}",
-                            symbol=request.symbol,
-                            side=str(trade.side).upper(),
-                            quantity=float(trade.quantity),
-                            price=float(trade.fill_price),
-                            timestamp=timestamp,
-                            notional=float(trade.quantity * trade.fill_price),
-                        ),
+                    self.repository.record_backtest_trade(
                         run_id=run_id,
+                        symbol=request.symbol,
+                        side=str(trade.side).upper(),
+                        quantity=float(trade.quantity),
+                        price=float(trade.fill_price),
+                        fee=float(trade.fee),
+                        reason=str(trade.reason),
+                        strategy=request.strategy,
+                        timeframe=request.timeframe,
+                        timestamp=timestamp.to_pydatetime(),
                     )
                 self.repository.finish_run(
                     run_id=run_id,
@@ -799,7 +820,10 @@ class TradingApiService:
     def trades(self) -> TradesResponse:
         """Return serialized trade records from persistence or latest in-memory backtest."""
         if self.repository is not None:
-            persisted_fills = self.repository.recent_fills(limit=200)
+            persisted_fills = self.repository.recent_fills(
+                limit=200,
+                run_service_prefix="worker:",
+            )
             records = [
                 TradeRecord(
                     timestamp=pd.Timestamp(fill["timestamp"]).to_pydatetime(),
@@ -826,20 +850,28 @@ class TradingApiService:
         )
         return TradesResponse(trades=records, total=len(records))
 
-    def strategy_analytics(self) -> StrategyAnalyticsResponse:
+    def strategy_analytics(
+        self,
+        source: AnalyticsSource = "execution",
+    ) -> StrategyAnalyticsResponse:
         """Return strategy-level analytics built from persisted fills/runs."""
-        snapshot = self._performance_snapshot()
+        snapshot = self._performance_snapshot(source=source)
         return StrategyAnalyticsResponse(
             generated_at=pd.Timestamp(snapshot.generated_at).to_pydatetime(),
+            data_source=source,
             strategies=[_strategy_analytics_to_response(item) for item in snapshot.strategies],
         )
 
-    def portfolio_analytics(self) -> PortfolioAnalyticsResponse:
+    def portfolio_analytics(
+        self,
+        source: AnalyticsSource = "execution",
+    ) -> PortfolioAnalyticsResponse:
         """Return portfolio-level analytics built from persisted state."""
-        snapshot = self._performance_snapshot()
+        snapshot = self._performance_snapshot(source=source)
         portfolio = snapshot.portfolio
         return PortfolioAnalyticsResponse(
             generated_at=pd.Timestamp(snapshot.generated_at).to_pydatetime(),
+            data_source=source,
             equity_curve=[
                 EquityPoint(
                     timestamp=pd.Timestamp(point.timestamp).to_pydatetime(),
@@ -892,12 +924,16 @@ class TradingApiService:
             ),
         )
 
-    def context_analytics(self) -> ContextAnalyticsResponse:
+    def context_analytics(
+        self,
+        source: AnalyticsSource = "execution",
+    ) -> ContextAnalyticsResponse:
         """Return context/regime analytics grouped across key dimensions."""
-        snapshot = self._performance_snapshot()
+        snapshot = self._performance_snapshot(source=source)
         context = snapshot.context
         return ContextAnalyticsResponse(
             generated_at=pd.Timestamp(snapshot.generated_at).to_pydatetime(),
+            data_source=source,
             by_symbol=[_context_bucket_to_response(item) for item in context.by_symbol],
             by_timeframe=[_context_bucket_to_response(item) for item in context.by_timeframe],
             by_weekday=[_context_bucket_to_response(item) for item in context.by_weekday],
@@ -977,6 +1013,11 @@ class TradingApiService:
             if self.deployment_settings is not None
             else "static"
         )
+        dry_run_enabled = (
+            self.deployment_settings.worker_dry_run
+            if self.deployment_settings is not None
+            else True
+        )
         universe = (
             list(self.deployment_settings.worker_symbols)
             if self.deployment_settings is not None
@@ -997,12 +1038,16 @@ class TradingApiService:
                 worker_name=worker_name,
                 timeframe=timeframe,
                 universe_mode=universe_mode,
+                dry_run_enabled=dry_run_enabled,
                 universe_symbols=universe,
                 scanned_symbols=scanned_symbols,
                 shortlisted_symbols=shortlisted_symbols,
                 allow_multi_strategy_per_symbol=allow_multi,
                 selected_symbol=None,
                 selected_strategy=None,
+                last_selected_symbol=None,
+                last_selected_strategy=None,
+                last_no_trade_reason=None,
                 symbol_filter_reasons=symbol_filter_reasons,
                 active_strategy_by_symbol={},
                 symbols=[
@@ -1016,6 +1061,7 @@ class TradingApiService:
                         selected_strategy=None,
                         active_strategy=None,
                         selected_score=0.0,
+                        no_trade_reason=None,
                         rejection_reasons=[],
                         candidates=[],
                     )
@@ -1060,11 +1106,28 @@ class TradingApiService:
             if str(details.get("strategy") or "").strip()
         }
 
+        worker_runs = [
+            run
+            for run in self.repository.recent_runs(limit=500)
+            if str(run.get("service") or "").startswith("worker:")
+        ]
+        last_selected_symbol: str | None = None
+        last_selected_strategy: str | None = None
+        last_no_trade_reason: str | None = None
+        for run in worker_runs:
+            details = run.get("details")
+            details_map = dict(details) if isinstance(details, dict) else {}
+            selection = details_map.get("selection")
+            selection_map = dict(selection) if isinstance(selection, dict) else {}
+            if last_selected_strategy is None and selection_map.get("selected_strategy") is not None:
+                symbol_raw = str(run.get("symbol") or "").upper().strip()
+                last_selected_symbol = symbol_raw or None
+                last_selected_strategy = str(selection_map.get("selected_strategy") or "")
+            if last_no_trade_reason is None and details_map.get("no_trade_reason") is not None:
+                last_no_trade_reason = str(details_map.get("no_trade_reason") or "")
+
         latest_run_by_symbol: dict[str, dict[str, Any]] = {}
-        for run in self.repository.recent_runs(limit=500):
-            service = str(run.get("service") or "")
-            if not service.startswith("worker:"):
-                continue
+        for run in worker_runs:
             symbol = str(run.get("symbol") or "").upper()
             if not symbol or symbol in latest_run_by_symbol:
                 continue
@@ -1094,6 +1157,7 @@ class TradingApiService:
                         selected_strategy=None,
                         active_strategy=active_strategy_by_symbol.get(symbol),
                         selected_score=0.0,
+                        no_trade_reason=None,
                         rejection_reasons=[],
                         candidates=[],
                     )
@@ -1116,6 +1180,11 @@ class TradingApiService:
                 for item in details_map.get("rejection_reasons", [])
                 if str(item).strip()
             ]
+            no_trade_reason = (
+                str(details_map.get("no_trade_reason"))
+                if details_map.get("no_trade_reason") is not None
+                else None
+            )
             symbol_rows.append(
                 WorkerSymbolDecisionResponse(
                     symbol=symbol,
@@ -1143,6 +1212,7 @@ class TradingApiService:
                         else active_strategy_by_symbol.get(symbol)
                     ),
                     selected_score=float(selection_map.get("selected_score") or 0.0),
+                    no_trade_reason=no_trade_reason,
                     rejection_reasons=rejection_reasons,
                     candidates=candidate_rows,
                 )
@@ -1168,6 +1238,7 @@ class TradingApiService:
             worker_name=worker_name,
             timeframe=timeframe,
             universe_mode=universe_mode,
+            dry_run_enabled=dry_run_enabled,
             universe_symbols=list(universe),
             scanned_symbols=scanned_symbols,
             shortlisted_symbols=shortlisted_symbols,
@@ -1178,6 +1249,17 @@ class TradingApiService:
                 if selected_row is not None
                 else None
             ),
+            last_selected_symbol=(
+                last_selected_symbol
+                if last_selected_symbol is not None
+                else (selected_row.symbol if selected_row is not None else None)
+            ),
+            last_selected_strategy=(
+                last_selected_strategy
+                if last_selected_strategy is not None
+                else (selected_row.selected_strategy if selected_row is not None else None)
+            ),
+            last_no_trade_reason=last_no_trade_reason,
             symbol_filter_reasons=symbol_filter_reasons,
             active_strategy_by_symbol=active_strategy_by_symbol,
             symbols=symbol_rows,
