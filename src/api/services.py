@@ -945,10 +945,24 @@ class TradingApiService:
         """Return latest deterministic strategy selection decision when available."""
         generated_at = pd.Timestamp.utcnow().to_pydatetime()
         latest_selection: dict[str, Any] | None = None
+        worker_name = (
+            self.deployment_settings.worker_name
+            if self.deployment_settings is not None
+            else "default-worker"
+        )
+        timeframe = (
+            self.deployment_settings.worker_timeframe
+            if self.deployment_settings is not None
+            else "1d"
+        )
+        worker_service = f"worker:{worker_name}"
         if self.repository is not None:
             for run in self.repository.recent_runs(limit=50):
                 service = str(run.get("service") or "")
-                if not service.startswith("worker:"):
+                if service != worker_service:
+                    continue
+                run_timeframe = str(run.get("timeframe") or "").strip()
+                if run_timeframe and run_timeframe != timeframe:
                     continue
                 details = run.get("details")
                 details_map = dict(details) if isinstance(details, dict) else {}
@@ -1008,6 +1022,7 @@ class TradingApiService:
             if self.deployment_settings is not None
             else "1d"
         )
+        worker_service = f"worker:{worker_name}"
         universe_mode = (
             self.deployment_settings.worker_universe_mode
             if self.deployment_settings is not None
@@ -1074,6 +1089,12 @@ class TradingApiService:
             payload_map = dict(payload) if isinstance(payload, dict) else {}
             if str(payload_map.get("worker_name") or "") != worker_name:
                 continue
+            cycle_key = str(payload_map.get("cycle_key") or "").strip()
+            if cycle_key and not cycle_key.startswith(f"{timeframe}:"):
+                continue
+            payload_timeframe = str(payload_map.get("timeframe") or "").strip()
+            if payload_timeframe and payload_timeframe != timeframe:
+                continue
 
             scanned_raw = payload_map.get("scanned_symbols")
             shortlist_raw = payload_map.get("shortlisted_symbols")
@@ -1109,7 +1130,11 @@ class TradingApiService:
         worker_runs = [
             run
             for run in self.repository.recent_runs(limit=500)
-            if str(run.get("service") or "").startswith("worker:")
+            if str(run.get("service") or "") == worker_service
+            and (
+                not str(run.get("timeframe") or "").strip()
+                or str(run.get("timeframe") or "").strip() == timeframe
+            )
         ]
         last_selected_symbol: str | None = None
         last_selected_strategy: str | None = None
@@ -1217,8 +1242,19 @@ class TradingApiService:
                     candidates=candidate_rows,
                 )
             )
-            if updated_at is not None and updated_at > generated_at:
-                generated_at = updated_at
+            if updated_at is not None:
+                updated_ts = pd.Timestamp(updated_at)
+                generated_ts = pd.Timestamp(generated_at)
+                if updated_ts.tzinfo is None:
+                    updated_ts = updated_ts.tz_localize("UTC")
+                else:
+                    updated_ts = updated_ts.tz_convert("UTC")
+                if generated_ts.tzinfo is None:
+                    generated_ts = generated_ts.tz_localize("UTC")
+                else:
+                    generated_ts = generated_ts.tz_convert("UTC")
+                if updated_ts > generated_ts:
+                    generated_at = updated_ts.to_pydatetime()
 
         selected_row = next(
             (

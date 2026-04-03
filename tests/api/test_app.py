@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 from fastapi.testclient import TestClient
+from uuid import uuid4
 
 from src.api.app import app
 
@@ -238,6 +239,81 @@ def test_worker_execution_status_endpoint_exposes_universe_and_symbol_rows(
     assert isinstance(payload["symbol_filter_reasons"], dict)
     assert isinstance(payload["active_strategy_by_symbol"], dict)
     assert isinstance(payload["symbols"], list)
+
+
+def test_worker_status_and_selection_ignore_mismatched_timeframe_runs(
+    client: TestClient,
+) -> None:
+    service = app.state.api_service
+    repository = service.repository
+    deployment_settings = service.deployment_settings
+    assert repository is not None
+    assert deployment_settings is not None
+
+    worker_name = deployment_settings.worker_name
+    expected_timeframe = deployment_settings.worker_timeframe
+    worker_service = f"worker:{worker_name}"
+    current_run_id = f"worker-current-timeframe-run-{uuid4().hex}"
+    mismatch_run_id = f"worker-mismatched-timeframe-run-{uuid4().hex}"
+
+    repository.start_run(
+        run_id=current_run_id,
+        service=worker_service,
+        cycle_key=f"SPY:{expected_timeframe}:2026-01-01T10:00:00Z",
+        symbol="SPY",
+        timeframe=expected_timeframe,
+        strategy="strategy_selector",
+        details={
+            "selection": {
+                "selected_strategy": "moving_average_crossover",
+                "selected_score": 0.5,
+                "minimum_score_threshold": 0.05,
+                "sizing_multiplier": 1.0,
+                "allocation_fraction": 1.0,
+                "regime": "trending",
+                "regime_signals": {},
+                "candidates": [],
+            }
+        },
+    )
+    repository.finish_run(run_id=current_run_id, status="completed")
+
+    repository.start_run(
+        run_id=mismatch_run_id,
+        service=worker_service,
+        cycle_key="QQQ:15m:2026-01-01T10:15:00Z",
+        symbol="QQQ",
+        timeframe="15m",
+        strategy="strategy_selector",
+        details={
+            "selection": {
+                "selected_strategy": "breakout_momentum",
+                "selected_score": 0.9,
+                "minimum_score_threshold": 0.05,
+                "sizing_multiplier": 1.0,
+                "allocation_fraction": 1.0,
+                "regime": "trending",
+                "regime_signals": {},
+                "candidates": [],
+            }
+        },
+    )
+    repository.finish_run(run_id=mismatch_run_id, status="completed")
+
+    selection_response = client.get("/api/selection/status")
+    assert selection_response.status_code == 200
+    selection_payload = selection_response.json()
+    assert selection_payload["selected_strategy"] == "moving_average_crossover"
+
+    worker_status_response = client.get("/api/worker/execution-status")
+    assert worker_status_response.status_code == 200
+    worker_payload = worker_status_response.json()
+    assert worker_payload["timeframe"] == expected_timeframe
+    assert all(
+        symbol_row["timeframe"] == expected_timeframe
+        for symbol_row in worker_payload["symbols"]
+        if symbol_row["run_id"] is not None
+    )
 
 
 def test_backtest_missing_alpaca_credentials_returns_clear_error(

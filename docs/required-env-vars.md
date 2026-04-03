@@ -28,6 +28,8 @@ These are optional for MVP paper deployment:
 - Strategy/risk tuning vars (`WORKER_SYMBOL`, `WORKER_STRATEGY`, `MAX_DAILY_LOSS`, etc.) have safe defaults and can be added later.
 - Universe/selection controls (`WORKER_SYMBOLS`, `WORKER_ALLOW_MULTI_STRATEGY_PER_SYMBOL`) are optional and default to safe behavior.
 - `WORKER_DRY_RUN` is optional and defaults to `true` (full worker evaluation with no order submission).
+- `SELECTION_MIN_RECENT_TRADES` is optional and defaults to `5`.
+- `WORKER_STARTUP_WARMUP_CYCLES` is optional and defaults to `20` to avoid permanent cold-start blocking.
 - Universe scanner controls (`WORKER_UNIVERSE_MODE`, `WORKER_MAX_CANDIDATES`, `MIN_PRICE`, `MIN_AVG_VOLUME`, `MIN_RELATIVE_VOLUME`, `MAX_SPREAD_PCT`) are optional and default to deterministic safe values.
 
 ## Notes

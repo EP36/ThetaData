@@ -32,6 +32,7 @@ class GlobalSelectionState:
     worker_enable_trading: bool
     risk_budget_available: bool
     max_positions_breached: bool
+    warmup_mode: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -190,7 +191,10 @@ class StrategySelector:
             reasons.append("worker_trading_disabled")
         if not candidate.required_data_available:
             reasons.append("required_market_data_missing")
-        if candidate.recent_trades < self.config.min_recent_trades:
+        if (
+            candidate.recent_trades < self.config.min_recent_trades
+            and not global_state.warmup_mode
+        ):
             reasons.append("insufficient_recent_trades")
         if candidate.recent_drawdown > self.config.max_recent_drawdown:
             reasons.append("recent_drawdown_exceeded")

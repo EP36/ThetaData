@@ -43,6 +43,23 @@ from src.worker.universe import (
 
 LOGGER = logging.getLogger("theta.worker.service")
 EPSILON = 1e-12
+STRATEGY_LOGIC_REASONS = {
+    "strategy_disabled",
+    "required_market_data_missing",
+    "insufficient_recent_trades",
+    "recent_drawdown_exceeded",
+    "recent_expectancy_below_threshold",
+    "no_active_signal",
+    "regime_incompatible",
+    "score_below_threshold",
+}
+GLOBAL_GATE_REASONS = {
+    "kill_switch_enabled",
+    "paper_trading_disabled",
+    "worker_trading_disabled",
+    "insufficient_risk_budget",
+    "max_open_positions_breached",
+}
 
 
 def _build_loader(cache_dir: str) -> HistoricalDataLoader:
@@ -78,20 +95,30 @@ class TradingWorker:
     selector: StrategySelector = field(
         default_factory=lambda: StrategySelector(config=SelectionConfig())
     )
+    _execution_timeframe: str = field(init=False, default="1d", repr=False)
+    _worker_service_key: str = field(init=False, default="", repr=False)
     _last_universe_cycle_key: str | None = field(init=False, default=None, repr=False)
+    _registered_cycle_count: int = field(init=False, default=0, repr=False)
 
     def __post_init__(self) -> None:
+        self._execution_timeframe = self.settings.worker_timeframe.strip()
+        self._worker_service_key = f"worker:{self.settings.worker_name}"
         self.loader = _build_loader(cache_dir=self.settings.cache_dir)
         self.universe_scanner = UniverseScanner(
             loader=self.loader,
             config=UniverseScannerConfig(
-                timeframe=self.settings.worker_timeframe,
+                timeframe=self._execution_timeframe,
                 max_candidates=self.settings.worker_max_candidates,
                 min_price=self.settings.min_price,
                 min_average_volume=self.settings.min_avg_volume,
                 min_relative_volume=self.settings.min_relative_volume,
                 max_spread_pct=self.settings.max_spread_pct,
             ),
+        )
+        self.selector = StrategySelector(
+            config=SelectionConfig(
+                min_recent_trades=self.settings.selection_min_recent_trades,
+            )
         )
         self.repository.initialize(starting_cash=self.settings.initial_capital)
 
@@ -106,15 +133,18 @@ class TradingWorker:
             )
 
         LOGGER.info(
-            "worker_start service=%s worker_name=%s paper_trading=%s worker_enable_trading=%s worker_dry_run=%s poll_seconds=%d universe_mode=%s universe=%s",
+            "worker_start service=%s worker_name=%s timeframe=%s paper_trading=%s worker_enable_trading=%s worker_dry_run=%s poll_seconds=%d universe_mode=%s universe=%s selection_min_recent_trades=%d startup_warmup_cycles=%d",
             self.settings.service_name,
             self.settings.worker_name,
+            self._execution_timeframe,
             self.settings.paper_trading_enabled,
             self.settings.worker_enable_trading,
             self.settings.worker_dry_run,
             self.settings.worker_poll_seconds,
             self.settings.worker_universe_mode,
             ",".join(self.settings.worker_symbols),
+            self.settings.selection_min_recent_trades,
+            self.settings.worker_startup_warmup_cycles,
         )
         self.repository.append_log_event(
             level="INFO",
@@ -126,9 +156,12 @@ class TradingWorker:
                 "paper_trading_enabled": self.settings.paper_trading_enabled,
                 "worker_enable_trading": self.settings.worker_enable_trading,
                 "worker_dry_run": self.settings.worker_dry_run,
+                "timeframe": self._execution_timeframe,
                 "universe_mode": self.settings.worker_universe_mode,
                 "universe": list(self.settings.worker_symbols),
                 "worker_max_candidates": self.settings.worker_max_candidates,
+                "selection_min_recent_trades": self.settings.selection_min_recent_trades,
+                "worker_startup_warmup_cycles": self.settings.worker_startup_warmup_cycles,
                 "min_price": self.settings.min_price,
                 "min_avg_volume": self.settings.min_avg_volume,
                 "min_relative_volume": self.settings.min_relative_volume,
@@ -261,11 +294,19 @@ class TradingWorker:
             return
 
         self._last_universe_cycle_key = heartbeat_cycle_key
+        self._registered_cycle_count += 1
+        warmup_active = self._registered_cycle_count <= self.settings.worker_startup_warmup_cycles
+        effective_min_recent_trades = (
+            0 if warmup_active else self.settings.selection_min_recent_trades
+        )
         LOGGER.info(
-            "worker_universe_cycle_key_registered cycle_key=%s timeframe=%s poll_seconds=%d",
+            "worker_universe_cycle_key_registered cycle_key=%s timeframe=%s poll_seconds=%d cycle_number=%d warmup_active=%s effective_min_recent_trades=%d",
             heartbeat_cycle_key,
-            self.settings.worker_timeframe,
+            self._execution_timeframe,
             self.settings.worker_poll_seconds,
+            self._registered_cycle_count,
+            warmup_active,
+            effective_min_recent_trades,
         )
         self.repository.append_log_event(
             level="INFO",
@@ -274,8 +315,25 @@ class TradingWorker:
             payload={
                 "cycle_key": heartbeat_cycle_key,
                 "worker_name": self.settings.worker_name,
-                "timeframe": self.settings.worker_timeframe,
+                "timeframe": self._execution_timeframe,
                 "poll_seconds": self.settings.worker_poll_seconds,
+                "cycle_number": self._registered_cycle_count,
+                "warmup_active": warmup_active,
+                "effective_min_recent_trades": effective_min_recent_trades,
+            },
+        )
+        self.repository.append_log_event(
+            level="INFO",
+            logger_name=LOGGER.name,
+            event="worker_warmup_state",
+            payload={
+                "cycle_key": heartbeat_cycle_key,
+                "worker_name": self.settings.worker_name,
+                "cycle_number": self._registered_cycle_count,
+                "warmup_active": warmup_active,
+                "startup_warmup_cycles": self.settings.worker_startup_warmup_cycles,
+                "configured_min_recent_trades": self.settings.selection_min_recent_trades,
+                "effective_min_recent_trades": effective_min_recent_trades,
             },
         )
 
@@ -337,15 +395,20 @@ class TradingWorker:
             payload={
                 "worker_name": self.settings.worker_name,
                 "cycle_key": heartbeat_cycle_key,
+                "timeframe": self._execution_timeframe,
+                "warmup_active": warmup_active,
+                "effective_min_recent_trades": effective_min_recent_trades,
                 **scan_result.as_dict(),
             },
         )
         LOGGER.info(
-            "worker_universe_scan cycle_key=%s mode=%s scanned=%d shortlisted=%d",
+            "worker_universe_scan cycle_key=%s timeframe=%s mode=%s scanned=%d shortlisted=%d warmup_active=%s",
             heartbeat_cycle_key,
+            self._execution_timeframe,
             scan_result.mode,
             len(scan_result.scanned_symbols),
             len(scan_result.shortlisted_symbols),
+            warmup_active,
         )
         for symbol, reasons in sorted(scan_result.filtered_out_reasons.items()):
             self.repository.append_log_event(
@@ -355,12 +418,19 @@ class TradingWorker:
                 payload={
                     "worker_name": self.settings.worker_name,
                     "cycle_key": heartbeat_cycle_key,
+                    "timeframe": self._execution_timeframe,
                     "symbol": symbol,
                     "reasons": list(reasons),
                 },
             )
 
         if not universe:
+            LOGGER.info(
+                "worker_no_shortlist cycle_key=%s timeframe=%s scanned=%d reason=no_shortlisted_symbols",
+                heartbeat_cycle_key,
+                self._execution_timeframe,
+                len(scan_result.scanned_symbols),
+            )
             self.repository.record_worker_heartbeat(
                 worker_name=self.settings.worker_name,
                 status="idle",
@@ -374,6 +444,7 @@ class TradingWorker:
                 payload={
                     "cycle_key": heartbeat_cycle_key,
                     "reason": "no_shortlisted_symbols",
+                    "timeframe": self._execution_timeframe,
                     "universe_mode": self.settings.worker_universe_mode,
                     "configured_universe": list(configured_universe),
                     "scanned_symbols": list(scan_result.scanned_symbols),
@@ -383,15 +454,34 @@ class TradingWorker:
                     },
                 },
             )
+            self.repository.append_log_event(
+                level="INFO",
+                logger_name=LOGGER.name,
+                event="worker_no_shortlist",
+                payload={
+                    "cycle_key": heartbeat_cycle_key,
+                    "worker_name": self.settings.worker_name,
+                    "timeframe": self._execution_timeframe,
+                    "scanned_symbols": list(scan_result.scanned_symbols),
+                    "filtered_out_reasons": {
+                        symbol: list(reasons)
+                        for symbol, reasons in scan_result.filtered_out_reasons.items()
+                    },
+                    "warmup_active": warmup_active,
+                    "effective_min_recent_trades": effective_min_recent_trades,
+                },
+            )
             return
 
-        service_key = f"worker:{self.settings.worker_name}"
+        service_key = self._worker_service_key
         summaries: list[SymbolCycleSummary] = []
         for symbol in universe:
             summaries.append(
                 self._run_symbol_cycle(
                     symbol=symbol,
                     heartbeat_cycle_key=heartbeat_cycle_key,
+                    warmup_active=warmup_active,
+                    effective_min_recent_trades=effective_min_recent_trades,
                     service_key=service_key,
                     executor=executor,
                     analytics=performance_snapshot,
@@ -446,9 +536,12 @@ class TradingWorker:
             None,
         )
         LOGGER.info(
-            "worker_cycle_summary cycle_key=%s dry_run=%s scanned=%s shortlisted=%s selected_symbol=%s selected_strategy=%s no_trade_reason=%s",
+            "worker_cycle_summary cycle_key=%s timeframe=%s dry_run=%s warmup_active=%s effective_min_recent_trades=%d scanned=%s shortlisted=%s selected_symbol=%s selected_strategy=%s no_trade_reason=%s",
             heartbeat_cycle_key,
+            self._execution_timeframe,
             self.settings.worker_dry_run,
+            warmup_active,
+            effective_min_recent_trades,
             ",".join(scan_result.scanned_symbols),
             ",".join(scan_result.shortlisted_symbols),
             selected_summary.symbol if selected_summary is not None else "none",
@@ -462,7 +555,10 @@ class TradingWorker:
             payload={
                 "cycle_key": heartbeat_cycle_key,
                 "worker_name": self.settings.worker_name,
+                "timeframe": self._execution_timeframe,
                 "dry_run": self.settings.worker_dry_run,
+                "warmup_active": warmup_active,
+                "effective_min_recent_trades": effective_min_recent_trades,
                 "scanned_symbols": list(scan_result.scanned_symbols),
                 "shortlisted_symbols": list(scan_result.shortlisted_symbols),
                 "filtered_out_reasons": {
@@ -490,6 +586,8 @@ class TradingWorker:
         self,
         symbol: str,
         heartbeat_cycle_key: str,
+        warmup_active: bool,
+        effective_min_recent_trades: int,
         service_key: str,
         executor: PaperTradingExecutor,
         analytics: PerformanceAnalyticsSnapshot,
@@ -509,11 +607,14 @@ class TradingWorker:
             service=service_key,
             cycle_key=cycle_key,
             symbol=symbol,
-            timeframe=self.settings.worker_timeframe,
+            timeframe=self._execution_timeframe,
             strategy="strategy_selector",
             details={
                 "source": "worker_cycle",
                 "heartbeat_cycle_key": heartbeat_cycle_key,
+                "timeframe": self._execution_timeframe,
+                "warmup_active": warmup_active,
+                "effective_min_recent_trades": effective_min_recent_trades,
                 "universe_mode": self.settings.worker_universe_mode,
                 "configured_universe": list(self.settings.worker_symbols),
                 "scanned_symbols": list(scan_result.scanned_symbols),
@@ -598,7 +699,7 @@ class TradingWorker:
         try:
             data = self.loader.load(
                 symbol=symbol,
-                timeframe=self.settings.worker_timeframe,
+                timeframe=self._execution_timeframe,
                 force_refresh=False,
             )
             latest_price = float(data["close"].iloc[-1])
@@ -642,8 +743,12 @@ class TradingWorker:
                 executor=executor,
                 latest_price=latest_price,
                 symbol=symbol,
+                warmup_active=warmup_active,
             )
-            decision = self.selector.select(
+            selector_for_cycle = self._selector_for_cycle(
+                effective_min_recent_trades=effective_min_recent_trades
+            )
+            decision = selector_for_cycle.select(
                 regime=regime,
                 candidates=candidates,
                 global_state=selection_state,
@@ -725,7 +830,7 @@ class TradingWorker:
 
             if self.settings.worker_dry_run:
                 LOGGER.info(
-                    "worker_dry_run_order_skipped cycle_key=%s symbol=%s side=%s qty=%.6f price=%.6f selected_strategy=%s",
+                    "worker_order_eligible_but_skipped_dry_run cycle_key=%s symbol=%s side=%s qty=%.6f price=%.6f selected_strategy=%s",
                     cycle_key,
                     symbol,
                     order.side.upper(),
@@ -749,6 +854,8 @@ class TradingWorker:
                         },
                         "selection": decision.as_dict(),
                         "no_trade_reason": "dry_run_enabled",
+                        "skip_classification": "eligible_but_skipped_dry_run",
+                        "timeframe": self._execution_timeframe,
                     },
                 )
                 self.repository.finish_run(
@@ -1103,6 +1210,7 @@ class TradingWorker:
         executor: PaperTradingExecutor,
         latest_price: float,
         symbol: str,
+        warmup_active: bool,
     ) -> GlobalSelectionState:
         """Compute global gating state for deterministic eligibility checks."""
         current_equity = executor.current_equity()
@@ -1121,13 +1229,16 @@ class TradingWorker:
 
         return GlobalSelectionState(
             kill_switch_enabled=self.repository.get_global_kill_switch(),
-            paper_trading_enabled=self.settings.paper_trading_enabled,
+            paper_trading_enabled=(
+                self.settings.paper_trading_enabled or self.settings.worker_dry_run
+            ),
             worker_enable_trading=self.settings.worker_enable_trading,
             risk_budget_available=(
                 required_notional <= available_notional + EPSILON
                 and required_notional <= executor.cash + EPSILON
             ),
             max_positions_breached=max_positions_breached,
+            warmup_mode=warmup_active,
         )
 
     def _log_selection_decision(
@@ -1160,6 +1271,29 @@ class TradingWorker:
                     "reasons": list(candidate.reasons),
                 },
             )
+            if not candidate.eligible:
+                rejection_classification = self._classify_rejection_reasons(candidate.reasons)
+                if rejection_classification == "strategy_logic":
+                    LOGGER.info(
+                        "strategy_not_eligible cycle_key=%s symbol=%s strategy=%s reason_class=strategy_logic reasons=%s",
+                        cycle_key,
+                        symbol,
+                        candidate.strategy,
+                        ",".join(candidate.reasons) if candidate.reasons else "none",
+                    )
+                self.repository.append_log_event(
+                    level="INFO",
+                    logger_name=LOGGER.name,
+                    event="strategy_not_eligible",
+                    run_id=run_id,
+                    payload={
+                        "cycle_key": cycle_key,
+                        "symbol": symbol,
+                        "strategy": candidate.strategy,
+                        "reason_classification": rejection_classification,
+                        "reasons": list(candidate.reasons),
+                    },
+                )
 
             LOGGER.info(
                 "strategy_score cycle_key=%s symbol=%s strategy=%s score=%.6f expectancy=%.6f sharpe=%.6f win_rate=%.6f regime_fit=%.6f drawdown_penalty=%.6f",
@@ -1307,6 +1441,42 @@ class TradingWorker:
             return "sizing_multiplier_zero"
         return "no_order_condition_not_met"
 
+    def _selector_for_cycle(self, effective_min_recent_trades: int) -> StrategySelector:
+        """Return selector configured for the current cycle warm-up state."""
+        base = self.selector.config
+        if effective_min_recent_trades == base.min_recent_trades:
+            return self.selector
+        return StrategySelector(
+            config=SelectionConfig(
+                max_recent_drawdown=base.max_recent_drawdown,
+                min_recent_expectancy=base.min_recent_expectancy,
+                min_recent_trades=effective_min_recent_trades,
+                min_score_threshold=base.min_score_threshold,
+                mediocre_score_threshold=base.mediocre_score_threshold,
+                mediocre_size_multiplier=base.mediocre_size_multiplier,
+                top_n=base.top_n,
+            )
+        )
+
+    @staticmethod
+    def _classify_rejection_reasons(reasons: tuple[str, ...]) -> str:
+        """Classify rejection reasons for operational logging."""
+        if not reasons:
+            return "none"
+        has_global_gate = any(
+            reason in GLOBAL_GATE_REASONS
+            or reason.startswith("symbol_locked_by_active_strategy:")
+            for reason in reasons
+        )
+        has_strategy_logic = any(reason in STRATEGY_LOGIC_REASONS for reason in reasons)
+        if has_strategy_logic and not has_global_gate:
+            return "strategy_logic"
+        if has_global_gate and not has_strategy_logic:
+            return "global_gate"
+        if has_strategy_logic and has_global_gate:
+            return "mixed"
+        return "other"
+
     def _heartbeat_cycle_key(self, timestamp: pd.Timestamp) -> str:
         """Derive a cross-universe cycle key for worker heartbeat updates."""
         poll_seconds = max(1, int(self.settings.worker_poll_seconds))
@@ -1316,7 +1486,7 @@ class TradingWorker:
         else:
             ts = ts.tz_convert("UTC")
         bucketed = ts.floor(f"{poll_seconds}s")
-        return f"{self.settings.worker_timeframe}:{bucketed.strftime('%Y-%m-%dT%H:%M:%SZ')}"
+        return f"{self._execution_timeframe}:{bucketed.strftime('%Y-%m-%dT%H:%M:%SZ')}"
 
     def _cycle_key(self, symbol: str, heartbeat_cycle_key: str) -> str:
         """Derive per-symbol cycle key for idempotent symbol execution."""

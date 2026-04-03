@@ -229,6 +229,74 @@ def test_worker_dry_run_evaluates_without_submitting_orders(tmp_path) -> None:
     assert worker_runs
     details = dict(worker_runs[0].get("details") or {})
     assert details.get("action") in {"no_order", "dry_run_order_skipped", "duplicate_order_skipped"}
+    selection = dict(details.get("selection") or {})
+    candidate_rows = selection.get("candidates", [])
+    assert all(
+        "paper_trading_disabled" not in (candidate.get("reasons", []) if isinstance(candidate, dict) else [])
+        for candidate in candidate_rows
+    )
 
     fills = repository.recent_fills(limit=20, run_service_prefix="worker:")
     assert fills == []
+
+
+def test_worker_startup_warmup_bypasses_min_recent_trade_gate(tmp_path) -> None:
+    db_path = tmp_path / "theta.db"
+    settings = DeploymentSettings(
+        database_url=f"sqlite+pysqlite:///{db_path}",
+        worker_enable_trading=True,
+        paper_trading_enabled=False,
+        worker_dry_run=True,
+        worker_name="warmup-worker",
+        worker_symbols=("SPY",),
+        worker_timeframe="1d",
+        selection_min_recent_trades=10,
+        worker_startup_warmup_cycles=5,
+        app_env="development",
+        strict_env_validation=False,
+    )
+    repository = build_repository(db_path)
+    worker = TradingWorker(settings=settings, repository=repository)
+
+    worker.run_once()
+
+    runs = repository.recent_runs(limit=5)
+    assert runs
+    details = dict(runs[0].get("details") or {})
+    selection = dict(details.get("selection") or {})
+    candidates = selection.get("candidates", [])
+    assert all(
+        "insufficient_recent_trades" not in (candidate.get("reasons", []) if isinstance(candidate, dict) else [])
+        for candidate in candidates
+    )
+
+
+def test_worker_without_warmup_enforces_min_recent_trade_gate(tmp_path) -> None:
+    db_path = tmp_path / "theta.db"
+    settings = DeploymentSettings(
+        database_url=f"sqlite+pysqlite:///{db_path}",
+        worker_enable_trading=True,
+        paper_trading_enabled=False,
+        worker_dry_run=True,
+        worker_name="no-warmup-worker",
+        worker_symbols=("SPY",),
+        worker_timeframe="1d",
+        selection_min_recent_trades=10,
+        worker_startup_warmup_cycles=0,
+        app_env="development",
+        strict_env_validation=False,
+    )
+    repository = build_repository(db_path)
+    worker = TradingWorker(settings=settings, repository=repository)
+
+    worker.run_once()
+
+    runs = repository.recent_runs(limit=5)
+    assert runs
+    details = dict(runs[0].get("details") or {})
+    selection = dict(details.get("selection") or {})
+    candidates = selection.get("candidates", [])
+    assert any(
+        "insufficient_recent_trades" in (candidate.get("reasons", []) if isinstance(candidate, dict) else [])
+        for candidate in candidates
+    )

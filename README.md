@@ -266,10 +266,16 @@ Universe source of truth:
 - `WORKER_MAX_CANDIDATES` limits shortlist size for each worker cycle.
 - Default behavior is non-executing until `WORKER_ENABLE_TRADING=true`.
 - With `WORKER_DRY_RUN=true` (default), the worker runs full scan/filter/select logic but does not submit orders.
+- In dry-run mode, strategy eligibility is evaluated as if paper execution were available; order submission is skipped only at execution time.
+- Worker execution uses a single configured timeframe (`WORKER_TIMEFRAME`) per worker process; mixed timeframe execution is not enabled by default.
 - To place paper orders, set all of:
   - `WORKER_ENABLE_TRADING=true`
   - `PAPER_TRADING=true`
   - `WORKER_DRY_RUN=false`
+- Strategy minimum-history gating:
+  - `SELECTION_MIN_RECENT_TRADES` controls the required trade count for `insufficient_recent_trades`.
+  - `WORKER_STARTUP_WARMUP_CYCLES` bypasses that gate for the first N registered worker cycles so fresh deployments can start evaluating/trading.
+  - Set `WORKER_STARTUP_WARMUP_CYCLES=0` to disable warm-up bypass.
 
 Cycle behavior:
 1. Worker scans the configured symbol universe.
@@ -290,6 +296,10 @@ Duplicate-cycle model:
     - `valid`: same-cycle duplicate protection
     - `invalid`: stale key collision (should not happen under normal operation)
 - Order idempotency remains separate (`dedupe_key`) to prevent duplicate persisted orders.
+- Operational log distinction:
+  - `strategy_not_eligible` (`reason_classification=strategy_logic|global_gate|mixed`) for explicit ineligibility reasoning.
+  - `worker_dry_run_order_skipped` (`skip_classification=eligible_but_skipped_dry_run`) when a valid order opportunity is intentionally not submitted.
+  - `worker_no_shortlist` when scan/filter produced no shortlisted symbols.
 
 Multiple enabled strategies:
 - Enabled strategies are **eligible candidates**, not auto-executed orders.
@@ -341,7 +351,6 @@ WORKER_MAX_CANDIDATES=5
 
 Even when a strategy is enabled, it can still be blocked for safety/quality reasons such as:
 - kill switch enabled
-- paper trading disabled
 - worker trading gate disabled
 - no active signal
 - insufficient recent trades

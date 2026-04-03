@@ -113,6 +113,8 @@ class DeploymentSettings:
     worker_allow_multi_strategy_per_symbol: bool = False
     worker_universe_mode: str = "static"
     worker_max_candidates: int = 10
+    selection_min_recent_trades: int = 5
+    worker_startup_warmup_cycles: int = 20
     min_price: float = 1.0
     min_avg_volume: float = 100_000.0
     min_relative_volume: float = 0.0
@@ -164,6 +166,10 @@ class DeploymentSettings:
             )
         if self.worker_max_candidates <= 0:
             raise ValueError("worker_max_candidates must be positive")
+        if self.selection_min_recent_trades < 0:
+            raise ValueError("selection_min_recent_trades cannot be negative")
+        if self.worker_startup_warmup_cycles < 0:
+            raise ValueError("worker_startup_warmup_cycles cannot be negative")
         if self.min_price < 0:
             raise ValueError("min_price cannot be negative")
         if self.min_avg_volume < 0:
@@ -286,6 +292,8 @@ class DeploymentSettings:
             ),
             worker_universe_mode=os.getenv("WORKER_UNIVERSE_MODE", "static").strip().lower(),
             worker_max_candidates=int(os.getenv("WORKER_MAX_CANDIDATES", "10")),
+            selection_min_recent_trades=int(os.getenv("SELECTION_MIN_RECENT_TRADES", "5")),
+            worker_startup_warmup_cycles=int(os.getenv("WORKER_STARTUP_WARMUP_CYCLES", "20")),
             min_price=float(os.getenv("MIN_PRICE", "1.0")),
             min_avg_volume=float(os.getenv("MIN_AVG_VOLUME", "100000")),
             min_relative_volume=float(os.getenv("MIN_RELATIVE_VOLUME", "0.0")),

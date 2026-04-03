@@ -133,6 +133,23 @@ def test_from_env_reads_universe_scanner_config(
     assert settings.max_spread_pct == 0.05
 
 
+def test_from_env_reads_selection_warmup_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SELECTION_MIN_RECENT_TRADES", "2")
+    monkeypatch.setenv("WORKER_STARTUP_WARMUP_CYCLES", "8")
+    settings = DeploymentSettings.from_env()
+    assert settings.selection_min_recent_trades == 2
+    assert settings.worker_startup_warmup_cycles == 8
+
+
+def test_negative_selection_warmup_settings_are_rejected() -> None:
+    with pytest.raises(ValueError, match="selection_min_recent_trades"):
+        DeploymentSettings(selection_min_recent_trades=-1)
+    with pytest.raises(ValueError, match="worker_startup_warmup_cycles"):
+        DeploymentSettings(worker_startup_warmup_cycles=-1)
+
+
 def test_invalid_universe_mode_is_rejected() -> None:
     with pytest.raises(ValueError, match="worker_universe_mode"):
         DeploymentSettings(worker_universe_mode="unsupported-mode")

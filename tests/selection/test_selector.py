@@ -21,13 +21,14 @@ def _regime(state: str = "trending") -> RegimeClassification:
     )
 
 
-def _global_state() -> GlobalSelectionState:
+def _global_state(*, warmup_mode: bool = False) -> GlobalSelectionState:
     return GlobalSelectionState(
         kill_switch_enabled=False,
         paper_trading_enabled=True,
         worker_enable_trading=True,
         risk_budget_available=True,
         max_positions_breached=False,
+        warmup_mode=warmup_mode,
     )
 
 
@@ -209,3 +210,33 @@ def test_external_reasons_force_ineligibility() -> None:
         "symbol_locked_by_active_strategy:moving_average_crossover"
         in decision.candidates[0].reasons
     )
+
+
+def test_warmup_mode_bypasses_min_recent_trades_gate() -> None:
+    selector = StrategySelector(SelectionConfig(min_recent_trades=5, min_score_threshold=0.0))
+    candidate = StrategyCandidate(
+        strategy="moving_average_crossover",
+        enabled=True,
+        signal=1.0,
+        recent_expectancy=0.20,
+        recent_sharpe=0.40,
+        recent_win_rate=0.55,
+        recent_drawdown=0.05,
+        recent_trades=0,
+        required_data_available=True,
+        compatible_regimes=("trending",),
+    )
+
+    cold_decision = selector.select(
+        regime=_regime("trending"),
+        global_state=_global_state(warmup_mode=False),
+        candidates=[candidate],
+    )
+    assert "insufficient_recent_trades" in cold_decision.candidates[0].reasons
+
+    warmup_decision = selector.select(
+        regime=_regime("trending"),
+        global_state=_global_state(warmup_mode=True),
+        candidates=[candidate],
+    )
+    assert "insufficient_recent_trades" not in warmup_decision.candidates[0].reasons
