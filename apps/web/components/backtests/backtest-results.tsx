@@ -32,7 +32,7 @@ export function BacktestResults({ result }: BacktestResultsProps) {
 
   return (
     <section className="space-y-4">
-      <div className="glass-panel rounded-3xl p-4 md:px-5">
+      <div className="glass-panel rounded-2xl p-4 md:px-5">
         <h3 className="text-sm font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
           Summary Metrics
         </h3>

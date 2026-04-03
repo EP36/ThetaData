@@ -31,8 +31,8 @@ export default function TradesPage() {
   }, []);
 
   return (
-    <section className="space-y-5">
-      <div className="glass-panel rounded-3xl p-4 md:px-5 md:py-5">
+    <section className="space-y-4">
+      <div className="px-1">
         <h2 className="page-title font-semibold">Trades</h2>
         <p className="mt-1 text-sm text-[var(--muted)]">
           Review recent trade history with symbol, strategy, and date filters.

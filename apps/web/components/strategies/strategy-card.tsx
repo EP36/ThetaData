@@ -52,7 +52,7 @@ export function StrategyCard({ strategy, onSave }: StrategyCardProps) {
   };
 
   return (
-    <article className="glass-panel rounded-3xl p-4 md:px-5">
+    <article className="glass-panel rounded-2xl p-4 md:px-5">
       <header className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h3 className="text-base font-semibold">{strategy.name}</h3>

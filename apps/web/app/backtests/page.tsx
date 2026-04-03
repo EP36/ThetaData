@@ -50,8 +50,8 @@ export default function BacktestsPage() {
   };
 
   return (
-    <section className="space-y-5">
-      <div className="glass-panel rounded-3xl p-4 md:px-5 md:py-5">
+    <section className="space-y-4">
+      <div className="px-1">
         <h2 className="page-title font-semibold">Backtests</h2>
         <p className="mt-1 text-sm text-[var(--muted)]">
           Run parameterized strategy simulations and review outcome quality quickly.
@@ -61,7 +61,7 @@ export default function BacktestsPage() {
       <BacktestForm value={form} onChange={setForm} onRun={handleRun} isRunning={isRunning} />
 
       {error ? (
-        <div className="glass-panel rounded-2xl border border-[var(--danger)] p-4 text-sm text-[var(--danger)]">
+        <div className="glass-panel rounded-xl border border-[var(--danger)] p-4 text-sm text-[var(--danger)]">
           {error}
         </div>
       ) : null}

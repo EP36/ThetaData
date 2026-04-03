@@ -83,15 +83,15 @@ export default function SettingsPage() {
   };
 
   return (
-    <section className="space-y-5">
-      <div className="glass-panel rounded-3xl p-4 md:px-5 md:py-5">
+    <section className="space-y-4">
+      <div className="px-1">
         <h2 className="page-title font-semibold">Settings</h2>
         <p className="mt-1 text-sm text-[var(--muted)]">
           Manage appearance preferences and account security controls.
         </p>
       </div>
 
-      <article className="glass-panel rounded-3xl p-4 md:px-5 md:py-5">
+      <article className="glass-panel rounded-2xl p-4 md:px-5 md:py-5">
         <h3 className="text-sm font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
           Appearance
         </h3>
@@ -123,7 +123,7 @@ export default function SettingsPage() {
         </div>
       </article>
 
-      <article className="glass-panel rounded-3xl p-4 md:px-5 md:py-5">
+      <article className="glass-panel rounded-2xl p-4 md:px-5 md:py-5">
         <h3 className="text-sm font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
           Account Security
         </h3>

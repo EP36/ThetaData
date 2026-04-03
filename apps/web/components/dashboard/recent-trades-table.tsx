@@ -18,7 +18,7 @@ function formatMoney(value: number): string {
 
 export function RecentTradesTable({ trades }: RecentTradesTableProps) {
   return (
-    <article className="glass-panel rounded-3xl p-4">
+    <article className="glass-panel rounded-2xl p-4">
       <h3 className="text-sm font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
         Recent Trades
       </h3>

@@ -48,7 +48,7 @@ export default function DashboardPage() {
 
   if (loading || summary === null) {
     return (
-      <section className="glass-panel panel-animate rounded-3xl p-5 text-sm text-[var(--muted)]">
+      <section className="glass-panel panel-animate rounded-2xl p-4 text-sm text-[var(--muted)]">
         Loading dashboard...
       </section>
     );
@@ -58,8 +58,8 @@ export default function DashboardPage() {
   const totalTone = summary.totalPnl >= 0 ? "positive" : "negative";
 
   return (
-    <section className="space-y-5">
-      <div className="glass-panel flex flex-wrap items-center justify-between gap-3 rounded-3xl px-4 py-4 md:px-5">
+    <section className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-2 px-1">
         <div>
           <h2 className="page-title font-semibold">Operational Dashboard</h2>
           <p className="text-sm text-[var(--muted)]">
@@ -86,7 +86,7 @@ export default function DashboardPage() {
 
       <EquityDrawdownCharts equityCurve={equity} drawdownCurve={drawdown} />
 
-      <div className="grid gap-4 lg:grid-cols-[0.9fr_1.1fr]">
+      <div className="grid gap-3 lg:grid-cols-[0.9fr_1.1fr]">
         <RiskAlertsPanel alerts={summary.riskAlerts} />
         <RecentTradesTable trades={trades} />
       </div>

@@ -68,14 +68,16 @@ export default function StrategiesPage() {
   };
 
   return (
-    <section className="space-y-5">
-      <div className="glass-panel rounded-3xl p-4 md:px-5 md:py-5">
+    <section className="space-y-4">
+      <div className="px-1">
         <h2 className="page-title font-semibold">Strategies</h2>
         <p className="mt-1 text-sm text-[var(--muted)]">
           Configure strategy status and parameters with inline validation.
         </p>
+      </div>
 
-        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl bg-[var(--panel-soft)] px-4 py-3">
+      <div className="glass-panel rounded-2xl p-4 md:px-5">
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-[var(--panel-soft)] px-4 py-3">
           <div>
             <p className="text-xs uppercase tracking-[0.12em] text-[var(--muted)]">
               Paper Trading

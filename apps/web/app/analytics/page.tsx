@@ -74,7 +74,7 @@ export default function AnalyticsPage() {
 
   if (loading) {
     return (
-      <section className="glass-panel rounded-3xl p-5 text-sm text-[var(--muted)]">
+      <section className="glass-panel rounded-2xl p-4 text-sm text-[var(--muted)]">
         Loading analytics...
       </section>
     );
@@ -82,7 +82,7 @@ export default function AnalyticsPage() {
 
   if (error || !data) {
     return (
-      <section className="glass-panel rounded-3xl p-5">
+      <section className="glass-panel rounded-2xl p-4">
         <h2 className="page-title font-semibold">Analytics & Selection</h2>
         <p className="mt-2 text-sm text-[var(--danger)]">
           {error ?? "Unable to load analytics from backend."}
@@ -106,8 +106,8 @@ export default function AnalyticsPage() {
         : "No backtest runs yet";
 
   return (
-    <section className="space-y-5">
-      <div className="glass-panel rounded-3xl p-4 md:px-5 md:py-5">
+    <section className="space-y-4">
+      <div className="px-1">
         <h2 className="page-title font-semibold">Analytics & Selection</h2>
         <p className="mt-1 text-sm text-[var(--muted)]">
           Source-separated analytics for backtests, execution flow, and paper-trading performance.

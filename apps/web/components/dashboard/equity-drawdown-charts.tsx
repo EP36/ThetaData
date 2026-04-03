@@ -37,12 +37,12 @@ export function EquityDrawdownCharts({
   const hasDrawdown = drawdownCurve.length > 0;
 
   return (
-    <section className="grid gap-4 lg:grid-cols-2">
-      <article className="glass-panel rounded-3xl p-4">
+    <section className="grid gap-3 lg:grid-cols-2">
+      <article className="glass-panel rounded-2xl p-4">
         <h3 className="text-sm font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
           Equity Curve
         </h3>
-        <div className="mt-3 h-64 w-full">
+        <div className="mt-2.5 h-60 w-full">
           {!hasEquity ? (
             <div className="flex h-full items-center justify-center text-sm text-[var(--muted)]">
               No persisted equity curve yet.
@@ -99,11 +99,11 @@ export function EquityDrawdownCharts({
         </div>
       </article>
 
-      <article className="glass-panel rounded-3xl p-4">
+      <article className="glass-panel rounded-2xl p-4">
         <h3 className="text-sm font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
           Drawdown
         </h3>
-        <div className="mt-3 h-64 w-full">
+        <div className="mt-2.5 h-60 w-full">
           {!hasDrawdown ? (
             <div className="flex h-full items-center justify-center text-sm text-[var(--muted)]">
               No persisted drawdown curve yet.

@@ -4,7 +4,7 @@ type RiskAlertsPanelProps = {
 
 export function RiskAlertsPanel({ alerts }: RiskAlertsPanelProps) {
   return (
-    <article className="glass-panel rounded-3xl p-4">
+    <article className="glass-panel rounded-2xl p-4">
       <h3 className="text-sm font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
         Risk Alerts
       </h3>

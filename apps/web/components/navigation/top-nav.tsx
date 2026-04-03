@@ -17,9 +17,9 @@ export function TopNav() {
   const pathname = usePathname();
 
   return (
-    <nav aria-label="Primary navigation" className="w-full">
-      <div className="flex w-full justify-start lg:justify-center">
-        <div className="inline-flex max-w-full items-center gap-1 overflow-x-auto rounded-full border border-[var(--line)] bg-[var(--panel-soft)] p-1">
+    <nav aria-label="Primary navigation" className="w-full md:w-auto">
+      <div className="flex w-full justify-start md:justify-center">
+        <div className="inline-flex max-w-full items-center gap-1 overflow-x-auto rounded-lg border border-[var(--line-soft)] bg-[var(--panel-soft)] p-0.5">
           {navItems.map((item) => {
             const isActive = pathname === item.href;
             return (

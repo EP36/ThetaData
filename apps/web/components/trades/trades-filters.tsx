@@ -16,7 +16,7 @@ export function TradesFilters({
   isLoading
 }: TradesFiltersProps) {
   return (
-    <section className="glass-panel rounded-3xl p-4 md:px-5">
+    <section className="glass-panel rounded-2xl p-4 md:px-5">
       <h3 className="text-sm font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
         Trade Filters
       </h3>

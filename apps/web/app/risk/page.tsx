@@ -104,7 +104,7 @@ export default function RiskPage() {
 
   if (loading) {
     return (
-      <section className="glass-panel rounded-3xl p-6">
+      <section className="glass-panel rounded-2xl p-5">
         <h2 className="page-title font-semibold">Risk</h2>
         <p className="mt-2 text-sm text-[var(--muted)]">Loading risk state...</p>
       </section>
@@ -112,7 +112,7 @@ export default function RiskPage() {
   }
   if (loadError || !status) {
     return (
-      <section className="glass-panel rounded-3xl p-6">
+      <section className="glass-panel rounded-2xl p-5">
         <h2 className="page-title font-semibold">Risk</h2>
         <p className="mt-2 text-sm text-[var(--danger)]">
           {loadError ?? "Unable to load risk state."}
@@ -131,8 +131,8 @@ export default function RiskPage() {
     : "Emergency stop is OFF. Controls are in normal operating mode.";
 
   return (
-    <section className="space-y-5">
-      <div className="glass-panel rounded-3xl p-4 md:px-5 md:py-5">
+    <section className="space-y-4">
+      <div className="glass-panel rounded-2xl p-4 md:px-5 md:py-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="page-title font-semibold">Risk Operations</h2>
