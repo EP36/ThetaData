@@ -22,12 +22,23 @@ export function StrategyCard({ strategy, onSave }: StrategyCardProps) {
   const [errors, setErrors] = useState<StrategyValidationErrors>({});
   const [isSaving, setIsSaving] = useState(false);
 
+  const parameterTypes = useMemo(
+    () =>
+      Object.fromEntries(
+        Object.entries(strategy.parameters).map(([key, value]) => [key, typeof value])
+      ) as Record<string, "number" | "string">,
+    [strategy.parameters]
+  );
+
   const parsedParameters = useMemo(
     () =>
       Object.fromEntries(
-        Object.entries(parameters).map(([key, value]) => [key, Number(value)])
+        Object.entries(parameters).map(([key, value]) => [
+          key,
+          parameterTypes[key] === "number" ? Number(value) : value
+        ])
       ),
-    [parameters]
+    [parameterTypes, parameters]
   );
 
   const handleSave = async () => {

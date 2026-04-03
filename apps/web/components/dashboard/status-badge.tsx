@@ -5,18 +5,26 @@ type StatusBadgeProps = {
 const STATUS_LABELS: Record<string, string> = {
   paper_only_ready: "Paper Ready",
   paper_only_idle: "Paper Idle",
-  kill_switch_enabled: "Kill Switch"
+  kill_switch_enabled: "Kill Switch",
+  backend_unavailable: "Backend Offline"
 };
 
 export function StatusBadge({ status }: StatusBadgeProps) {
   const isDanger = status === "kill_switch_enabled";
-  const dotClass = isDanger ? "bg-[var(--danger)]" : "bg-[var(--accent)]";
+  const isWarning = status === "backend_unavailable";
+  const dotClass = isDanger
+    ? "bg-[var(--danger)]"
+    : isWarning
+      ? "bg-[var(--warning)]"
+      : "bg-[var(--accent)]";
 
   return (
     <span
       className={`ui-pill ${
         isDanger
           ? "border-[var(--danger)] bg-[color:color-mix(in_srgb,var(--danger),white_89%)] text-[var(--danger)]"
+          : isWarning
+            ? "border-[var(--warning)] bg-[color:color-mix(in_srgb,var(--warning),white_88%)] text-[var(--warning)]"
           : "border-[rgba(15,119,103,0.26)] bg-[var(--accent-soft)] text-[var(--accent-strong)]"
       }`}
     >

@@ -360,6 +360,48 @@ class PersistenceRepository:
                 positions=positions,
             )
 
+    def recent_fills(self, limit: int = 200) -> list[dict[str, Any]]:
+        """Return recent fills with lightweight run context for API consumers."""
+        with self.store.session() as session:
+            fill_rows = session.scalars(
+                select(FillModel).order_by(FillModel.timestamp.desc()).limit(limit)
+            ).all()
+
+            run_ids = sorted({row.run_id for row in fill_rows if row.run_id})
+            strategy_by_run: dict[str, str] = {}
+            if run_ids:
+                run_rows = session.scalars(
+                    select(RunHistoryModel).where(RunHistoryModel.run_id.in_(run_ids))
+                ).all()
+                strategy_by_run = {}
+                for row in run_rows:
+                    if not row.run_id:
+                        continue
+                    details = dict(row.details or {})
+                    selection = details.get("selection")
+                    selected_strategy = None
+                    if isinstance(selection, dict):
+                        selected_strategy = selection.get("selected_strategy")
+                    strategy_by_run[row.run_id] = str(
+                        selected_strategy or row.strategy or "paper_worker"
+                    )
+
+            records: list[dict[str, Any]] = []
+            for row in fill_rows:
+                records.append(
+                    {
+                        "order_id": row.order_id,
+                        "run_id": row.run_id,
+                        "timestamp": row.timestamp,
+                        "symbol": row.symbol,
+                        "side": row.side.upper(),
+                        "quantity": float(row.quantity),
+                        "price": float(row.price),
+                        "strategy": strategy_by_run.get(row.run_id or "", "paper_worker"),
+                    }
+                )
+            return records
+
     def append_log_event(
         self,
         level: str,

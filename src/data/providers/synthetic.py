@@ -11,6 +11,8 @@ from src.data.providers.base import DataRequest, MarketDataProvider
 
 TIMEFRAME_TO_FREQ = {
     "1d": "D",
+    "4h": "4H",
+    "2h": "2H",
     "1h": "H",
     "1m": "T",
 }

@@ -33,11 +33,17 @@ export default function BacktestsPage() {
     }
     setIsRunning(true);
     setError(null);
+    setResult(null);
     try {
       const nextResult = await runBacktest(form);
       setResult(nextResult);
-    } catch {
-      setError("Backtest failed. Please retry.");
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "";
+      if (detail) {
+        setError(`Backtest failed: ${detail}`);
+      } else {
+        setError("Backtest failed. Please retry.");
+      }
     } finally {
       setIsRunning(false);
     }
@@ -66,7 +72,7 @@ export default function BacktestsPage() {
         </div>
       ) : null}
 
-      {!isRunning && result === null ? (
+      {!isRunning && result === null && !error ? (
         <div className="glass-panel rounded-2xl p-5 text-sm text-[var(--muted)]">
           No run yet. Configure inputs and run a backtest.
         </div>

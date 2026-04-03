@@ -12,6 +12,7 @@ import pandas as pd
 from src.backtest.reporting import TRADE_LOG_COLUMNS, build_summary_metrics, trades_to_frame
 from src.backtest.types import Trade
 from src.risk.manager import RiskManager
+from src.risk.models import OrderRiskRequest, PortfolioRiskState
 from src.strategies.base import Strategy
 
 REQUIRED_OHLCV_COLUMNS = ("open", "high", "low", "close", "volume")
@@ -46,6 +47,7 @@ class BacktestEngine:
     slippage_pct: float = 0.0005
     stop_loss_pct: float | None = None
     take_profit_pct: float | None = None
+    trailing_stop_pct: float | None = None
 
     def __post_init__(self) -> None:
         """Validate backtest settings."""
@@ -63,6 +65,10 @@ class BacktestEngine:
             raise ValueError("stop_loss_pct must be in (0, 1)")
         if self.take_profit_pct is not None and self.take_profit_pct <= 0:
             raise ValueError("take_profit_pct must be positive")
+        if self.trailing_stop_pct is not None and (
+            self.trailing_stop_pct <= 0 or self.trailing_stop_pct >= 1
+        ):
+            raise ValueError("trailing_stop_pct must be in (0, 1)")
 
     def run(
         self,
@@ -103,13 +109,16 @@ class BacktestEngine:
         cash = self.initial_capital
         shares = 0.0
         entry_price: float | None = None
+        trailing_peak_price: float | None = None
 
         equity_values = [self.initial_capital]
         position_values = [0.0]
         trades: list[Trade] = []
+        rejected_order_count = 0
 
         current_day = market_data.index[0].date()
         day_start_equity = self.initial_capital
+        previous_signal = 0.0
 
         close_prices = market_data["close"].astype(float)
         high_prices = market_data["high"].astype(float)
@@ -124,9 +133,25 @@ class BacktestEngine:
                 current_day = timestamp.date()
                 day_start_equity = cash + shares * close_price
 
+            if shares > EPSILON:
+                trailing_peak_price = (
+                    high_price
+                    if trailing_peak_price is None
+                    else max(trailing_peak_price, high_price)
+                )
+            else:
+                trailing_peak_price = None
+
             stop_or_take_triggered = False
             if shares > EPSILON and entry_price is not None:
-                cash, shares, entry_price, protective_trade, stop_or_take_triggered = (
+                (
+                    cash,
+                    shares,
+                    entry_price,
+                    trailing_peak_price,
+                    protective_trade,
+                    stop_or_take_triggered,
+                ) = (
                     self._apply_protective_exit(
                         timestamp=timestamp,
                         low_price=low_price,
@@ -135,13 +160,30 @@ class BacktestEngine:
                         cash=cash,
                         shares=shares,
                         entry_price=entry_price,
+                        trailing_peak_price=trailing_peak_price,
                     )
                 )
                 if protective_trade is not None:
                     trades.append(protective_trade)
+                    LOGGER.info(
+                        "stop_exit_triggered symbol=%s timestamp=%s reason=%s fill_price=%.6f qty=%.6f",
+                        symbol,
+                        timestamp,
+                        protective_trade.reason,
+                        protective_trade.fill_price,
+                        protective_trade.quantity,
+                    )
 
             if not stop_or_take_triggered:
                 raw_signal = float(signals.iloc[i - 1])
+                if raw_signal > EPSILON and previous_signal <= EPSILON:
+                    LOGGER.info(
+                        "signal_triggered symbol=%s timestamp=%s signal=%.4f",
+                        symbol,
+                        timestamp,
+                        raw_signal,
+                    )
+                previous_signal = raw_signal
                 desired_position = raw_signal * self.position_size_pct
                 current_equity = cash + shares * close_price
 
@@ -160,31 +202,80 @@ class BacktestEngine:
                 delta_shares = target_shares - shares
 
                 if delta_shares > EPSILON:
-                    cash, shares, entry_price, buy_trade = self._execute_buy(
-                        timestamp=timestamp,
-                        reference_price=close_price,
-                        close_price=close_price,
-                        quantity=delta_shares,
-                        cash=cash,
-                        shares=shares,
-                        entry_price=entry_price,
-                        reason="signal",
-                    )
-                    if buy_trade is not None:
-                        trades.append(buy_trade)
+                    decision = None
+                    if risk_manager is not None:
+                        decision = self._validate_order_with_risk_manager(
+                            risk_manager=risk_manager,
+                            symbol=symbol,
+                            side="BUY",
+                            quantity=float(delta_shares),
+                            price=close_price,
+                            timestamp=timestamp,
+                            current_equity=current_equity,
+                            day_start_equity=day_start_equity,
+                            shares=shares,
+                            peak_equity=max(equity_values),
+                        )
+                    if decision is not None and not decision.approved:
+                        rejected_order_count += 1
+                        LOGGER.warning(
+                            "backtest_trade_rejected symbol=%s timestamp=%s side=BUY reasons=%s",
+                            symbol,
+                            timestamp,
+                            ",".join(decision.reasons),
+                        )
+                    else:
+                        cash, shares, entry_price, buy_trade = self._execute_buy(
+                            timestamp=timestamp,
+                            reference_price=close_price,
+                            close_price=close_price,
+                            quantity=delta_shares,
+                            cash=cash,
+                            shares=shares,
+                            entry_price=entry_price,
+                            reason="signal",
+                        )
+                        if buy_trade is not None:
+                            trailing_peak_price = max(high_price, buy_trade.fill_price)
+                            trades.append(buy_trade)
                 elif delta_shares < -EPSILON:
-                    cash, shares, entry_price, sell_trade = self._execute_sell(
-                        timestamp=timestamp,
-                        reference_price=close_price,
-                        close_price=close_price,
-                        quantity=abs(delta_shares),
-                        cash=cash,
-                        shares=shares,
-                        entry_price=entry_price,
-                        reason="signal",
-                    )
-                    if sell_trade is not None:
-                        trades.append(sell_trade)
+                    decision = None
+                    if risk_manager is not None:
+                        decision = self._validate_order_with_risk_manager(
+                            risk_manager=risk_manager,
+                            symbol=symbol,
+                            side="SELL",
+                            quantity=float(abs(delta_shares)),
+                            price=close_price,
+                            timestamp=timestamp,
+                            current_equity=current_equity,
+                            day_start_equity=day_start_equity,
+                            shares=shares,
+                            peak_equity=max(equity_values),
+                        )
+                    if decision is not None and not decision.approved:
+                        rejected_order_count += 1
+                        LOGGER.warning(
+                            "backtest_trade_rejected symbol=%s timestamp=%s side=SELL reasons=%s",
+                            symbol,
+                            timestamp,
+                            ",".join(decision.reasons),
+                        )
+                    else:
+                        cash, shares, entry_price, sell_trade = self._execute_sell(
+                            timestamp=timestamp,
+                            reference_price=close_price,
+                            close_price=close_price,
+                            quantity=abs(delta_shares),
+                            cash=cash,
+                            shares=shares,
+                            entry_price=entry_price,
+                            reason="signal",
+                        )
+                        if sell_trade is not None:
+                            if shares <= EPSILON:
+                                trailing_peak_price = None
+                            trades.append(sell_trade)
 
             equity = cash + shares * close_price
             position_pct = (shares * close_price / equity) if equity > 0 else 0.0
@@ -206,6 +297,7 @@ class BacktestEngine:
             strategy_returns=strategy_returns,
             trades=trades,
         )
+        metrics["rejected_orders"] = float(rejected_order_count)
         max_drawdown = float((equity_curve / equity_curve.cummax() - 1.0).min())
         LOGGER.info(
             "backtest_run_summary symbol=%s signals=%d trades=%d final_equity=%.2f max_drawdown=%.6f",
@@ -274,7 +366,8 @@ class BacktestEngine:
         cash: float,
         shares: float,
         entry_price: float,
-    ) -> tuple[float, float, float | None, Trade | None, bool]:
+        trailing_peak_price: float | None,
+    ) -> tuple[float, float, float | None, float | None, Trade | None, bool]:
         """Apply stop loss / take profit logic for an open position."""
         if self.stop_loss_pct is not None:
             stop_price = entry_price * (1.0 - self.stop_loss_pct)
@@ -289,7 +382,7 @@ class BacktestEngine:
                     entry_price=entry_price,
                     reason="stop_loss",
                 )
-                return cash, shares, entry_price, trade, True
+                return cash, shares, entry_price, None, trade, True
 
         if self.take_profit_pct is not None:
             take_profit_price = entry_price * (1.0 + self.take_profit_pct)
@@ -304,9 +397,24 @@ class BacktestEngine:
                     entry_price=entry_price,
                     reason="take_profit",
                 )
-                return cash, shares, entry_price, trade, True
+                return cash, shares, entry_price, None, trade, True
 
-        return cash, shares, entry_price, None, False
+        if self.trailing_stop_pct is not None and trailing_peak_price is not None:
+            trailing_stop_price = trailing_peak_price * (1.0 - self.trailing_stop_pct)
+            if low_price <= trailing_stop_price:
+                cash, shares, entry_price, trade = self._execute_sell(
+                    timestamp=timestamp,
+                    reference_price=trailing_stop_price,
+                    close_price=close_price,
+                    quantity=shares,
+                    cash=cash,
+                    shares=shares,
+                    entry_price=entry_price,
+                    reason="trailing_stop",
+                )
+                return cash, shares, entry_price, None, trade, True
+
+        return cash, shares, entry_price, trailing_peak_price, None, False
 
     def _execute_buy(
         self,
@@ -353,6 +461,13 @@ class BacktestEngine:
             shares_after=float(next_shares),
             equity_after=float(equity_after),
         )
+        LOGGER.info(
+            "trade_executed side=BUY timestamp=%s reason=%s qty=%.6f fill_price=%.6f",
+            timestamp,
+            reason,
+            fill_quantity,
+            fill_price,
+        )
         return next_cash, next_shares, next_entry_price, trade
 
     def _execute_sell(
@@ -394,4 +509,48 @@ class BacktestEngine:
             shares_after=float(next_shares),
             equity_after=float(equity_after),
         )
+        LOGGER.info(
+            "trade_executed side=SELL timestamp=%s reason=%s qty=%.6f fill_price=%.6f",
+            timestamp,
+            reason,
+            fill_quantity,
+            fill_price,
+        )
         return next_cash, next_shares, next_entry_price, trade
+
+    def _validate_order_with_risk_manager(
+        self,
+        risk_manager: RiskManager,
+        symbol: str,
+        side: str,
+        quantity: float,
+        price: float,
+        timestamp: pd.Timestamp,
+        current_equity: float,
+        day_start_equity: float,
+        shares: float,
+        peak_equity: float,
+    ):
+        """Validate one backtest fill request with shared risk manager rules."""
+        open_positions: dict[str, float] = {}
+        gross_exposure = max(shares, 0.0) * price
+        if shares > EPSILON:
+            open_positions[symbol] = gross_exposure
+
+        state = PortfolioRiskState(
+            equity=float(current_equity),
+            day_start_equity=float(day_start_equity),
+            peak_equity=float(peak_equity),
+            gross_exposure=float(gross_exposure),
+            open_positions=open_positions,
+        )
+        request = OrderRiskRequest(
+            symbol=symbol,
+            side=side,
+            quantity=float(quantity),
+            price=float(price),
+            timestamp=timestamp,
+            stop_loss_pct=self.stop_loss_pct,
+            trailing_stop_pct=self.trailing_stop_pct,
+        )
+        return risk_manager.validate_order(request=request, state=state)

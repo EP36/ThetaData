@@ -43,7 +43,9 @@ def build_parser() -> argparse.ArgumentParser:
     backtest.add_argument("--slippage-pct", type=float, default=0.0005)
     backtest.add_argument("--stop-loss-pct", default="")
     backtest.add_argument("--take-profit-pct", default="")
-    backtest.add_argument("--max-position-size", type=float, default=1.0)
+    backtest.add_argument("--trailing-stop-pct", default="")
+    backtest.add_argument("--max-position-size", type=float, default=0.25)
+    backtest.add_argument("--max-open-positions", type=int, default=3)
     backtest.add_argument("--max-daily-loss", type=float, default=2000.0)
     backtest.add_argument("--force-refresh", action="store_true")
 
@@ -63,7 +65,9 @@ def build_parser() -> argparse.ArgumentParser:
     report.add_argument("--slippage-pct", type=float, default=0.0005)
     report.add_argument("--stop-loss-pct", default="")
     report.add_argument("--take-profit-pct", default="")
-    report.add_argument("--max-position-size", type=float, default=1.0)
+    report.add_argument("--trailing-stop-pct", default="")
+    report.add_argument("--max-position-size", type=float, default=0.25)
+    report.add_argument("--max-open-positions", type=int, default=3)
     report.add_argument("--max-daily-loss", type=float, default=2000.0)
     report.add_argument("--force-refresh", action="store_true")
 
@@ -90,6 +94,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     strategy_params = parse_strategy_params(args.strategy_param)
     stop_loss_pct = parse_optional_float(args.stop_loss_pct)
     take_profit_pct = parse_optional_float(args.take_profit_pct)
+    trailing_stop_pct = parse_optional_float(args.trailing_stop_pct)
 
     backtest_result = run_backtest(
         symbol=args.symbol,
@@ -106,7 +111,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         slippage_pct=args.slippage_pct,
         stop_loss_pct=stop_loss_pct,
         take_profit_pct=take_profit_pct,
+        trailing_stop_pct=trailing_stop_pct,
         max_position_size=args.max_position_size,
+        max_open_positions=args.max_open_positions,
         max_daily_loss=args.max_daily_loss,
         force_refresh=args.force_refresh,
     )

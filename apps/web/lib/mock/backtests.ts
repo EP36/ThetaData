@@ -56,13 +56,40 @@ function computeDrawdown(equityCurve: TimeSeriesPoint[]): TimeSeriesPoint[] {
 }
 
 function strategyMetrics(strategy: BacktestFormInput["strategy"]): BacktestMetrics {
+  const baseRisk = {
+    riskPerTrade: 1_000,
+    riskPerTradePct: 0.01,
+    positionSizePct: strategy === "vwap_mean_reversion" ? 0.25 : 0.25
+  };
+
   if (strategy === "rsi_mean_reversion") {
     return {
       totalReturn: 0.0204,
       sharpe: 1.12,
       maxDrawdown: -0.013,
       winRate: 0.58,
-      profitFactor: 1.44
+      profitFactor: 1.44,
+      ...baseRisk
+    };
+  }
+  if (strategy === "breakout_momentum") {
+    return {
+      totalReturn: 0.0355,
+      sharpe: 1.42,
+      maxDrawdown: -0.02,
+      winRate: 0.57,
+      profitFactor: 1.61,
+      ...baseRisk
+    };
+  }
+  if (strategy === "vwap_mean_reversion") {
+    return {
+      totalReturn: 0.0181,
+      sharpe: 1.05,
+      maxDrawdown: -0.011,
+      winRate: 0.62,
+      profitFactor: 1.37,
+      ...baseRisk
     };
   }
   return {
@@ -70,7 +97,8 @@ function strategyMetrics(strategy: BacktestFormInput["strategy"]): BacktestMetri
     sharpe: 1.34,
     maxDrawdown: -0.016,
     winRate: 0.61,
-    profitFactor: 1.58
+    profitFactor: 1.58,
+    ...baseRisk
   };
 }
 

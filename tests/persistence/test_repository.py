@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from src.execution.models import Order
+from src.execution.models import Fill, Order
 from src.persistence import DatabaseStore, PersistenceRepository
 
 
@@ -71,3 +71,36 @@ def test_run_and_order_idempotency(tmp_path) -> None:
     )
     assert first_insert is True
     assert second_insert is False
+
+
+def test_recent_fills_returns_only_persisted_fill_rows(tmp_path) -> None:
+    db_path = tmp_path / "theta.db"
+    repository = PersistenceRepository(
+        store=DatabaseStore(database_url=f"sqlite+pysqlite:///{db_path}")
+    )
+    repository.initialize(starting_cash=50_000.0)
+
+    assert repository.recent_fills() == []
+
+    repository.start_run(
+        run_id="run-fill-1",
+        service="worker:test",
+        strategy="moving_average_crossover",
+    )
+    repository.record_fill(
+        Fill(
+            order_id="order-1",
+            symbol="SPY",
+            side="BUY",
+            quantity=2.0,
+            price=500.0,
+            timestamp=pd.Timestamp("2026-01-01T10:00:00Z"),
+            notional=1_000.0,
+        ),
+        run_id="run-fill-1",
+    )
+
+    rows = repository.recent_fills(limit=10)
+    assert len(rows) == 1
+    assert rows[0]["symbol"] == "SPY"
+    assert rows[0]["strategy"] == "moving_average_crossover"

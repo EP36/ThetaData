@@ -26,6 +26,11 @@ A modular Python 3.12 MVP for strategy research, backtesting, and paper-trading 
   - Sharpe ratio
   - max drawdown
   - win rate
+- Deterministic analytics + allocation layer:
+  - strategy-level performance analytics (including rolling windows)
+  - portfolio-level contribution/exposure analytics
+  - rule-based market regime classification
+  - deterministic strategy eligibility + scoring + selection
 - Analytics report artifacts:
   - equity curve plot
   - drawdown plot
@@ -81,6 +86,8 @@ Output files:
 Available registered strategies:
 - `moving_average_crossover`
 - `rsi_mean_reversion`
+- `breakout_momentum`
+- `vwap_mean_reversion`
 
 Example creation via registry:
 
@@ -89,7 +96,29 @@ from src.strategies import create_strategy
 
 ma = create_strategy("moving_average_crossover", short_window=20, long_window=50)
 rsi = create_strategy("rsi_mean_reversion", lookback=14, oversold=30, overbought=70)
+breakout = create_strategy(
+    "breakout_momentum",
+    lookback_period=20,
+    breakout_threshold=1.01,
+    volume_multiplier=1.5,
+    stop_loss_pct=0.02,
+    take_profit_pct=0.05,
+    trailing_stop_pct=0.02,
+)
+vwap = create_strategy(
+    "vwap_mean_reversion",
+    vwap_window=20,
+    vwap_deviation=0.02,
+    rsi_oversold=30,
+    rsi_overbought=70,
+    stop_loss_pct=0.015,
+    target="vwap",
+)
 ```
+
+Default profiles implemented:
+- `breakout_momentum`: lookback `20`, breakout threshold `1.01`, volume multiplier `1.5`, stop loss `2%`, take profit `5%`, trailing stop `2%`.
+- `vwap_mean_reversion`: VWAP deviation `2%`, RSI thresholds `30/70`, stop loss `1.5%`, target `VWAP`.
 
 ## Run Tests
 
@@ -128,9 +157,133 @@ Core endpoints:
 - `PATCH /api/strategies/{name}`
 - `GET /api/risk/status`
 - `GET /api/trades`
+- `GET /api/analytics/strategies`
+- `GET /api/analytics/portfolio`
+- `GET /api/analytics/context`
+- `GET /api/selection/status`
 - `POST /api/system/kill-switch`
 - `GET /healthz`
 - `GET /api/system/status`
+
+### Analytics Metrics
+
+Strategy analytics (`/api/analytics/strategies`) include:
+- total return
+- win rate
+- average win / average loss
+- profit factor
+- expectancy
+- Sharpe ratio
+- max drawdown
+- trade count
+- average hold time
+- rolling 20-trade metrics (win rate, expectancy, Sharpe)
+- recent windows (last 5 / 20 / 60 trades)
+
+Portfolio analytics (`/api/analytics/portfolio`) include:
+- equity curve
+- daily pnl
+- realized + unrealized pnl
+- rolling drawdown
+- contribution by strategy
+- exposure by symbol
+- open risk summary
+
+Context analytics (`/api/analytics/context`) include:
+- performance by symbol
+- performance by timeframe
+- performance by weekday
+- performance by hour
+- performance by regime
+
+If data is insufficient, analytics endpoints return empty arrays/zero-safe values (no fake demo metrics).
+
+### Deterministic Strategy Selection
+
+The worker uses a deterministic `StrategySelector` (rule-based, no ML) and does **not** trade all strategies equally.
+
+Selection flow:
+1. Build current market regime (`trending`, `mean_reverting`, `neutral`) from:
+   - moving-average slope
+   - price vs moving average
+   - ATR%
+   - directional persistence
+2. Apply eligibility gates per strategy:
+   - strategy enabled
+   - kill switch off
+   - paper/worker trading gates enabled
+   - sufficient recent trades/performance
+   - drawdown under threshold
+   - risk budget available
+   - required data available
+   - open-position constraints not breached
+   - regime compatibility
+3. Score eligible strategies with:
+   - recent expectancy (35%)
+   - recent Sharpe (25%)
+   - win rate (15%)
+   - regime fit (15%)
+   - drawdown penalty (10%)
+4. Select the highest-scoring strategy (default top-1).
+5. Apply size reduction when score is mediocre; if no strategy clears threshold, no trade is placed.
+
+Selection diagnostics are exposed via `/api/selection/status`, including:
+- current regime and regime signals
+- candidate scores
+- selected strategy
+- rejection reasons for non-selected strategies
+- sizing/allocation decision
+
+### Why a Strategy Can Be Blocked While Enabled
+
+Even when a strategy is enabled, it can still be blocked for safety/quality reasons such as:
+- kill switch enabled
+- paper trading disabled
+- worker trading gate disabled
+- no active signal
+- insufficient recent trades
+- recent expectancy below threshold
+- recent drawdown above threshold
+- insufficient risk budget
+- max open positions breached
+- required market data missing
+- regime incompatibility
+- score below threshold
+
+### Backtest Data Source
+
+`POST /api/backtests/run` executes the real backend backtest engine and uses the
+request payload inputs directly:
+- `symbol`
+- `timeframe`
+- `start`
+- `end`
+- `strategy`
+
+Historical data is loaded through `HistoricalDataLoader` and a provider interface.
+
+Provider selection:
+- `DATA_PROVIDER=synthetic` (default, deterministic synthetic OHLCV)
+- `DATA_PROVIDER=alpaca` (real historical bars from Alpaca data API)
+
+For Alpaca mode, set:
+- `ALPACA_API_KEY` and `ALPACA_API_SECRET`
+  - fallback supported: `BROKER_API_KEY` and `BROKER_API_SECRET`
+- optional: `ALPACA_DATA_BASE_URL` and `ALPACA_DATA_FEED` (default `iex`)
+
+Current timeframe support in Alpaca mode:
+- `1m`, `5m`, `15m`, `30m`, `1h`, `2h`, `4h`, `1d`
+
+Limitations:
+- Alpaca data availability depends on account/feed and market hours.
+- If data is unavailable for a symbol/date range, the endpoint returns an error instead of synthetic substitution.
+
+Backtest risk + sizing defaults:
+- `risk_per_trade = 1%` of account equity
+- `position_size_pct = risk_per_trade_pct / stop_loss_pct`
+- hard cap `max_position_size = 25%`
+- hard cap `max_open_positions = 3`
+- orders violating risk checks are rejected and logged
 
 ## Render Deployment (Web + Worker + Postgres)
 
@@ -238,7 +391,8 @@ Deployment checklist:
 
 ## Frontend (Dashboard Shell)
 
-The frontend lives in `apps/web` and is currently mock-data first.
+The frontend lives in `apps/web` and is API-first.
+Demo/mock values are disabled by default and only load when explicitly enabled.
 
 ```bash
 cd apps/web
@@ -261,6 +415,16 @@ Required frontend env var:
   - local example: `http://127.0.0.1:8000`
   - Render example: `https://<your-backend-service>.onrender.com`
 
+Optional frontend env var:
+- `NEXT_PUBLIC_DEMO_MODE=false` (recommended):
+  - keep `false` (or unset) in production so UI shows persisted backend data only
+  - set `true` only for explicit demo/development scenarios where synthetic UI data is desired
+
+Backtests page behavior:
+- In normal mode (`NEXT_PUBLIC_DEMO_MODE=false`), backtest results come only from backend `POST /api/backtests/run`.
+- When backend execution/data fails, the page shows an error state (no fake results).
+- Demo backtest results are available only when `NEXT_PUBLIC_DEMO_MODE=true`.
+
 Notes:
 - The UI calls the backend from the browser, so backend CORS must allow your Static Site origin.
 - Backend CORS is environment-driven via `CORS_ALLOWED_ORIGINS` (for example: `https://thetadata.onrender.com`).
@@ -269,6 +433,7 @@ Notes:
 
 Routes:
 - `/dashboard`
+- `/analytics`
 - `/backtests`
 - `/strategies`
 - `/risk`
@@ -306,7 +471,8 @@ Overfitting caution:
   - simplified fill assumptions
   - no partial-fill depth/latency model
 - Data provider layer defaults to synthetic/local patterns unless a real provider is implemented and configured.
-- Frontend uses API-first with mock fallback; if backend is unavailable, UI can still render synthetic values.
+- Real historical backtest mode is available via `DATA_PROVIDER=alpaca` and Alpaca credentials.
+- Frontend demo data is controlled by `NEXT_PUBLIC_DEMO_MODE`; keep it false in production.
 - No authentication/authorization on API endpoints yet (acceptable for local MVP, unsafe for exposed deployments).
 - Frontend dependency maintenance:
   - keep `apps/web` dependencies patched regularly, especially Next.js security advisories.

@@ -12,12 +12,13 @@ from src.analytics.reporting import AnalyticsReport, generate_analytics_report
 from src.backtest.engine import BacktestEngine, BacktestResult
 from src.data.cache import DataCache
 from src.data.loaders import HistoricalDataLoader
-from src.data.providers.synthetic import SyntheticMarketDataProvider
+from src.data.providers.factory import make_market_data_provider_from_env
 from src.observability import clear_run, configure_logging, start_run
 from src.risk.manager import RiskManager
 from src.strategies import create_strategy
 
 LOGGER = logging.getLogger("theta.cli.services")
+RISK_PER_TRADE_PCT = 0.01
 
 
 @dataclass(slots=True)
@@ -29,8 +30,8 @@ class DownloadDataResult:
 
 
 def make_default_loader(cache_dir: str | Path) -> HistoricalDataLoader:
-    """Create default loader backed by synthetic provider + parquet cache."""
-    provider = SyntheticMarketDataProvider()
+    """Create default loader backed by configured provider + parquet cache."""
+    provider = make_market_data_provider_from_env()
     cache = DataCache(root_dir=Path(cache_dir))
     return HistoricalDataLoader(provider=provider, cache=cache)
 
@@ -91,8 +92,10 @@ def run_backtest(
     slippage_pct: float,
     stop_loss_pct: float | None,
     take_profit_pct: float | None,
+    trailing_stop_pct: float | None,
     max_position_size: float,
     max_daily_loss: float,
+    max_open_positions: int,
     force_refresh: bool,
     run_id: str | None = None,
 ) -> BacktestResult:
@@ -117,17 +120,34 @@ def run_backtest(
     )
 
     strategy = create_strategy(strategy_name, **strategy_params)
+    if stop_loss_pct is not None and stop_loss_pct > 0:
+        raw_position_size_pct = RISK_PER_TRADE_PCT / stop_loss_pct
+    else:
+        raw_position_size_pct = position_size_pct
+    effective_position_size_pct = min(raw_position_size_pct, max_position_size)
+    LOGGER.info(
+        "position_size_calculated symbol=%s strategy=%s risk_per_trade_pct=%.4f stop_loss_pct=%s raw_position_size_pct=%.6f capped_position_size_pct=%.6f",
+        symbol,
+        strategy_name,
+        RISK_PER_TRADE_PCT,
+        f"{stop_loss_pct:.6f}" if stop_loss_pct is not None else "none",
+        raw_position_size_pct,
+        effective_position_size_pct,
+    )
     risk = RiskManager(
         max_position_size=max_position_size,
         max_daily_loss=max_daily_loss,
+        max_open_positions=max_open_positions,
+        allow_after_hours=True,
     )
     engine = BacktestEngine(
         initial_capital=initial_capital,
-        position_size_pct=position_size_pct,
+        position_size_pct=effective_position_size_pct,
         fixed_fee=fixed_fee,
         slippage_pct=slippage_pct,
         stop_loss_pct=stop_loss_pct,
         take_profit_pct=take_profit_pct,
+        trailing_stop_pct=trailing_stop_pct,
     )
     try:
         result = engine.run(

@@ -5,6 +5,7 @@ import {
   equityCurve,
   recentTrades
 } from "@/lib/mock/dashboard";
+import { isDemoModeEnabled } from "@/lib/runtime/demo-mode";
 import type { DashboardSummary, TimeSeriesPoint, TradeRow } from "@/lib/types";
 
 export type DashboardData = {
@@ -14,7 +15,46 @@ export type DashboardData = {
   recentTrades: TradeRow[];
 };
 
+const EMPTY_DASHBOARD_SUMMARY: DashboardSummary = {
+  equity: 0,
+  dailyPnl: 0,
+  totalPnl: 0,
+  openPositions: 0,
+  systemStatus: "paper_only_idle",
+  riskAlerts: []
+};
+
+const BACKEND_UNAVAILABLE_SUMMARY: DashboardSummary = {
+  ...EMPTY_DASHBOARD_SUMMARY,
+  systemStatus: "backend_unavailable",
+  riskAlerts: ["backend_unavailable"]
+};
+
 export async function getDashboardData(): Promise<DashboardData> {
+  const demoModeEnabled = isDemoModeEnabled();
+
+  if (demoModeEnabled) {
+    try {
+      const [summary, trades] = await Promise.all([
+        getDashboardSummaryFromApi(),
+        getTrades()
+      ]);
+      return {
+        summary,
+        equityCurve,
+        drawdownCurve,
+        recentTrades: trades.length > 0 ? trades.slice(0, 8) : recentTrades
+      };
+    } catch {
+      return {
+        summary: dashboardSummaryMock,
+        equityCurve,
+        drawdownCurve,
+        recentTrades
+      };
+    }
+  }
+
   try {
     const [summary, trades] = await Promise.all([
       getDashboardSummaryFromApi(),
@@ -22,16 +62,16 @@ export async function getDashboardData(): Promise<DashboardData> {
     ]);
     return {
       summary,
-      equityCurve,
-      drawdownCurve,
-      recentTrades: trades.length > 0 ? trades.slice(0, 8) : recentTrades
+      equityCurve: [],
+      drawdownCurve: [],
+      recentTrades: trades.slice(0, 8)
     };
   } catch {
     return {
-      summary: dashboardSummaryMock,
-      equityCurve,
-      drawdownCurve,
-      recentTrades
+      summary: BACKEND_UNAVAILABLE_SUMMARY,
+      equityCurve: [],
+      drawdownCurve: [],
+      recentTrades: []
     };
   }
 }

@@ -19,5 +19,32 @@ export const mockStrategyConfigs: StrategyConfig[] = [
       oversold: 30,
       overbought: 70
     }
+  },
+  {
+    name: "breakout_momentum",
+    description: "Breakout entries with volume confirmation and protective exits.",
+    status: "enabled",
+    parameters: {
+      lookback_period: 20,
+      breakout_threshold: 1.01,
+      volume_multiplier: 1.5,
+      stop_loss_pct: 0.02,
+      take_profit_pct: 0.05,
+      trailing_stop_pct: 0.02
+    }
+  },
+  {
+    name: "vwap_mean_reversion",
+    description: "VWAP pullback entries with RSI confirmation and VWAP target exits.",
+    status: "enabled",
+    parameters: {
+      vwap_window: 20,
+      vwap_deviation: 0.02,
+      rsi_lookback: 14,
+      rsi_oversold: 30,
+      rsi_overbought: 70,
+      stop_loss_pct: 0.015,
+      target: "vwap"
+    }
   }
 ];

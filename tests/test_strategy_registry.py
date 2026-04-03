@@ -14,6 +14,8 @@ from src.strategies.registry import clear_registry, register_strategy
 def test_registry_contains_default_strategy() -> None:
     assert "moving_average_crossover" in list_strategies()
     assert "rsi_mean_reversion" in list_strategies()
+    assert "breakout_momentum" in list_strategies()
+    assert "vwap_mean_reversion" in list_strategies()
     strategy_cls = get_strategy_class("moving_average_crossover")
     strategy = strategy_cls(short_window=5, long_window=10)
     assert strategy.name == "moving_average_crossover"
@@ -65,10 +67,17 @@ def test_register_duplicate_strategy_name_raises() -> None:
 
     # Restore default strategies for other tests.
     clear_registry()
-    from src.strategies import MovingAverageCrossoverStrategy, RSIMeanReversionStrategy
+    from src.strategies import (
+        BreakoutMomentumStrategy,
+        MovingAverageCrossoverStrategy,
+        RSIMeanReversionStrategy,
+        VWAPMeanReversionStrategy,
+    )
 
     register_strategy(MovingAverageCrossoverStrategy)
     register_strategy(RSIMeanReversionStrategy)
+    register_strategy(BreakoutMomentumStrategy)
+    register_strategy(VWAPMeanReversionStrategy)
 
 
 def test_engine_uses_strategy_required_column_validation() -> None:
@@ -123,9 +132,15 @@ def test_both_sample_strategies_run_through_backtester() -> None:
 
     ma = create_strategy("moving_average_crossover", short_window=5, long_window=20)
     rsi = create_strategy("rsi_mean_reversion", lookback=5, oversold=30, overbought=70)
+    breakout = create_strategy("breakout_momentum", lookback_period=5)
+    vwap = create_strategy("vwap_mean_reversion", vwap_window=5)
 
     ma_result = engine.run(data=data, strategy=ma)
     rsi_result = engine.run(data=data, strategy=rsi)
+    breakout_result = engine.run(data=data, strategy=breakout)
+    vwap_result = engine.run(data=data, strategy=vwap)
 
     assert len(ma_result.equity_curve) == len(data)
     assert len(rsi_result.equity_curve) == len(data)
+    assert len(breakout_result.equity_curve) == len(data)
+    assert len(vwap_result.equity_curve) == len(data)

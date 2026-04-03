@@ -9,9 +9,11 @@ import {
   setPaperTradingEnabled,
   updateStrategy
 } from "@/lib/strategies/service";
+import { isDemoModeEnabled } from "@/lib/runtime/demo-mode";
 import type { StrategyConfig, StrategyValidationErrors } from "@/lib/types";
 
 export default function StrategiesPage() {
+  const demoModeEnabled = isDemoModeEnabled();
   const [strategies, setStrategies] = useState<StrategyConfig[]>([]);
   const [paperTradingEnabled, setPaperTrading] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -79,18 +81,28 @@ export default function StrategiesPage() {
               Paper Trading
             </p>
             <p className="text-sm">
-              {paperTradingEnabled ? "Enabled (mock)" : "Disabled (safe default)"}
+              {demoModeEnabled
+                ? paperTradingEnabled
+                  ? "Enabled (demo-only)"
+                  : "Disabled (safe default)"
+                : "Controlled by backend environment"}
             </p>
           </div>
-          <button
-            type="button"
-            onClick={handlePaperToggle}
-            className={`ui-button ${
-              paperTradingEnabled ? "ui-button-danger" : "ui-button-primary"
-            }`}
-          >
-            {paperTradingEnabled ? "Disable Paper Trading" : "Enable Paper Trading"}
-          </button>
+          {demoModeEnabled ? (
+            <button
+              type="button"
+              onClick={handlePaperToggle}
+              className={`ui-button ${
+                paperTradingEnabled ? "ui-button-danger" : "ui-button-primary"
+              }`}
+            >
+              {paperTradingEnabled ? "Disable Paper Trading" : "Enable Paper Trading"}
+            </button>
+          ) : (
+            <span className="text-xs text-[var(--muted)]">
+              Set `PAPER_TRADING` and `WORKER_ENABLE_TRADING` on the backend.
+            </span>
+          )}
         </div>
 
         {message ? <p className="mt-3 text-sm text-[var(--muted)]">{message}</p> : null}
@@ -99,6 +111,10 @@ export default function StrategiesPage() {
       {loading ? (
         <div className="glass-panel rounded-2xl p-5 text-sm text-[var(--muted)]">
           Loading strategies...
+        </div>
+      ) : strategies.length === 0 ? (
+        <div className="glass-panel rounded-2xl p-5 text-sm text-[var(--muted)]">
+          No persisted strategy configuration is available yet.
         </div>
       ) : (
         <div className="grid gap-4 lg:grid-cols-2">

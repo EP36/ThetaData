@@ -52,7 +52,8 @@ export default function TradesPage() {
         </div>
       ) : rows.length === 0 ? (
         <div className="glass-panel rounded-2xl p-5 text-sm text-[var(--muted)]">
-          No trades matched the selected filters.
+          No persisted paper trades yet. Keep paper trading disabled for safety, or enable it
+          intentionally when you are ready to simulate execution.
         </div>
       ) : (
         <TradesTable rows={rows} />

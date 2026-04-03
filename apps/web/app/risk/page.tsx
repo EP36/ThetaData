@@ -7,7 +7,7 @@ import { RiskMetricCard } from "@/components/risk/risk-metric-card";
 import {
   getRiskEvents,
   getRiskStatus,
-  triggerEmergencyStop
+  setEmergencyStop
 } from "@/lib/risk/service";
 import type { RiskEvent, RiskStatusData } from "@/lib/types";
 
@@ -28,20 +28,36 @@ export default function RiskPage() {
   const [events, setEvents] = useState<RiskEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [isTriggeringStop, setIsTriggeringStop] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
 
     async function loadRiskData() {
       setLoading(true);
-      const [riskStatus, riskEvents] = await Promise.all([
-        getRiskStatus(),
-        getRiskEvents()
-      ]);
-      if (!cancelled) {
-        setStatus(riskStatus);
-        setEvents(riskEvents);
-        setLoading(false);
+      setLoadError(null);
+      try {
+        const [riskStatus, riskEvents] = await Promise.all([
+          getRiskStatus(),
+          getRiskEvents()
+        ]);
+        if (!cancelled) {
+          setStatus(riskStatus);
+          setEvents(riskEvents);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setLoadError(
+            error instanceof Error && error.message
+              ? error.message
+              : "Unable to load risk state."
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
       }
     }
 
@@ -52,15 +68,41 @@ export default function RiskPage() {
   }, []);
 
   const handleEmergencyStop = async () => {
+    if (!status) {
+      return;
+    }
+    const enableKillSwitch = !status.killSwitchEnabled;
+    if (!enableKillSwitch) {
+      const confirmed = window.confirm(
+        "Disable Emergency Stop and allow the worker to resume paper-trading activity?"
+      );
+      if (!confirmed) {
+        return;
+      }
+    }
+
+    const previousStatus = status;
+    setActionError(null);
     setIsTriggeringStop(true);
-    const nextStatus = await triggerEmergencyStop();
-    const nextEvents = await getRiskEvents();
-    setStatus(nextStatus);
-    setEvents(nextEvents);
-    setIsTriggeringStop(false);
+    setStatus({ ...status, killSwitchEnabled: enableKillSwitch });
+    try {
+      const nextStatus = await setEmergencyStop(enableKillSwitch);
+      const nextEvents = await getRiskEvents();
+      setStatus(nextStatus);
+      setEvents(nextEvents);
+    } catch (error) {
+      setStatus(previousStatus);
+      setActionError(
+        error instanceof Error && error.message
+          ? error.message
+          : "Unable to update kill switch state."
+      );
+    } finally {
+      setIsTriggeringStop(false);
+    }
   };
 
-  if (loading || !status) {
+  if (loading) {
     return (
       <section className="glass-panel rounded-3xl p-6">
         <h2 className="page-title font-semibold">Risk</h2>
@@ -68,9 +110,25 @@ export default function RiskPage() {
       </section>
     );
   }
+  if (loadError || !status) {
+    return (
+      <section className="glass-panel rounded-3xl p-6">
+        <h2 className="page-title font-semibold">Risk</h2>
+        <p className="mt-2 text-sm text-[var(--danger)]">
+          {loadError ?? "Unable to load risk state."}
+        </p>
+      </section>
+    );
+  }
 
   const drawdownTone = status.currentDrawdown > 0.02 ? "warning" : "neutral";
   const killTone = status.killSwitchEnabled ? "critical" : "neutral";
+  const killSwitchIndicatorClass = status.killSwitchEnabled
+    ? "border-[var(--danger)] bg-[color:color-mix(in_srgb,var(--danger),white_90%)] text-[var(--danger)]"
+    : "border-[rgba(0,200,5,0.28)] bg-[var(--accent-soft)] text-[var(--accent-strong)]";
+  const killSwitchMessage = status.killSwitchEnabled
+    ? "Emergency stop is ON. New paper orders should be blocked until this is disabled."
+    : "Emergency stop is OFF. Controls are in normal operating mode.";
 
   return (
     <section className="space-y-4">
@@ -81,20 +139,33 @@ export default function RiskPage() {
             <p className="mt-1 text-sm text-[var(--muted)]">
               Monitor limits, rejected orders, and emergency controls.
             </p>
+            <p className="mt-2">
+              <span className={`ui-pill ${killSwitchIndicatorClass}`}>
+                {status.killSwitchEnabled ? "Emergency Stop ON" : "Emergency Stop OFF"}
+              </span>
+            </p>
           </div>
           <button
             type="button"
             onClick={handleEmergencyStop}
-            disabled={isTriggeringStop || status.killSwitchEnabled}
-            className="ui-button ui-button-danger"
+            disabled={isTriggeringStop}
+            className={`ui-button ${
+              status.killSwitchEnabled ? "ui-button-primary" : "ui-button-danger"
+            }`}
           >
-            {status.killSwitchEnabled
-              ? "Emergency Stop Active"
-              : isTriggeringStop
-                ? "Stopping..."
-                : "Emergency Stop"}
+            {isTriggeringStop
+              ? "Updating..."
+              : status.killSwitchEnabled
+                ? "Disable Emergency Stop"
+                : "Activate Emergency Stop"}
           </button>
         </div>
+        <p className="mt-3 text-sm text-[var(--muted)]">{killSwitchMessage}</p>
+        {actionError ? (
+          <p className="mt-2 rounded-xl border border-[var(--danger)] bg-[color:color-mix(in_srgb,var(--danger),white_92%)] px-3 py-2 text-sm text-[var(--danger)]">
+            {actionError}
+          </p>
+        ) : null}
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">

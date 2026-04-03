@@ -83,10 +83,10 @@ class DeploymentSettings:
     worker_force_refresh: bool = False
 
     initial_capital: float = 100_000.0
-    max_position_size: float = 1.0
+    max_position_size: float = 0.25
     max_daily_loss: float = 2_000.0
     max_notional_per_trade: float = 100_000.0
-    max_open_positions: int = 10
+    max_open_positions: int = 3
     executor_daily_loss_cap: float = 2_000.0
     trading_start: str = "09:30"
     trading_end: str = "16:00"
@@ -209,10 +209,10 @@ class DeploymentSettings:
             worker_order_quantity=float(os.getenv("WORKER_ORDER_QUANTITY", "1.0")),
             worker_force_refresh=_read_bool("WORKER_FORCE_REFRESH", default=False),
             initial_capital=float(os.getenv("INITIAL_CAPITAL", "100000")),
-            max_position_size=float(os.getenv("MAX_POSITION_SIZE", "1.0")),
+            max_position_size=float(os.getenv("MAX_POSITION_SIZE", "0.25")),
             max_daily_loss=float(os.getenv("MAX_DAILY_LOSS", "2000")),
             max_notional_per_trade=float(os.getenv("MAX_NOTIONAL_PER_TRADE", "100000")),
-            max_open_positions=int(os.getenv("MAX_OPEN_POSITIONS", "10")),
+            max_open_positions=int(os.getenv("MAX_OPEN_POSITIONS", "3")),
             executor_daily_loss_cap=float(os.getenv("EXECUTOR_DAILY_LOSS_CAP", "2000")),
             trading_start=os.getenv("TRADING_START", "09:30").strip(),
             trading_end=os.getenv("TRADING_END", "16:00").strip(),

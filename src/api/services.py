@@ -8,28 +8,52 @@ from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 
+import numpy as np
 import pandas as pd
 
 from src.config.deployment import DeploymentSettings
 from src.api.schemas import (
     BacktestRunRequest,
     BacktestRunResponse,
+    ContextAnalyticsResponse,
+    ContextBucketPerformanceResponse,
     DashboardSummaryResponse,
     EquityPoint,
     KillSwitchResponse,
+    OpenRiskSummaryResponse,
+    PortfolioAnalyticsResponse,
     RiskStatusResponse,
+    RollingMetricPointResponse,
+    RecentWindowMetricsResponse,
+    SelectionStatusResponse,
     ServiceStatusResponse,
+    StrategyAnalyticsRecordResponse,
+    StrategyAnalyticsResponse,
+    StrategyContributionResponse,
+    StrategyScoreResponse,
     StrategySummary,
+    SymbolExposureResponse,
     TradeRecord,
     TradesResponse,
 )
+from src.analytics.performance_layer import (
+    ContextBucketPerformance,
+    PerformanceAnalyticsSnapshot,
+    StrategyAnalytics,
+    build_performance_snapshot,
+    empty_snapshot,
+)
 from src.backtest.engine import BacktestResult
 from src.cli.services import run_backtest as run_backtest_workflow
+from src.execution.models import Fill
 from src.observability import clear_run, configure_logging, start_run
 from src.persistence import PersistenceRepository
 from src.strategies import get_strategy_class, list_strategies
 
 LOGGER = logging.getLogger("theta.api.services")
+RISK_PER_TRADE_PCT = 0.01
+MAX_POSITION_SIZE_CAP_PCT = 0.25
+MAX_OPEN_POSITIONS_CAP = 3
 
 
 def _drawdown_series(equity_curve: pd.Series) -> pd.Series:
@@ -73,6 +97,19 @@ def _strategy_defaults(strategy_name: str) -> dict[str, Any]:
     return defaults
 
 
+def _optional_float(value: Any) -> float | None:
+    """Best-effort conversion to optional float."""
+    if value is None:
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(parsed):
+        return None
+    return float(parsed)
+
+
 def _to_trade_records(
     result: BacktestResult,
     symbol: str,
@@ -109,6 +146,63 @@ def _to_trade_records(
     return trade_records
 
 
+def _window_to_response(window: Any) -> RecentWindowMetricsResponse:
+    """Convert analytics window dataclass to API schema."""
+    return RecentWindowMetricsResponse(
+        trades=int(window.trades),
+        total_return=float(window.total_return),
+        win_rate=float(window.win_rate),
+        expectancy=float(window.expectancy),
+        sharpe=float(window.sharpe),
+    )
+
+
+def _strategy_analytics_to_response(item: StrategyAnalytics) -> StrategyAnalyticsRecordResponse:
+    """Convert strategy analytics dataclass to API schema."""
+    return StrategyAnalyticsRecordResponse(
+        strategy=item.strategy,
+        total_return=float(item.total_return),
+        win_rate=float(item.win_rate),
+        average_win=float(item.average_win),
+        average_loss=float(item.average_loss),
+        profit_factor=float(item.profit_factor),
+        expectancy=float(item.expectancy),
+        sharpe=float(item.sharpe),
+        max_drawdown=float(item.max_drawdown),
+        num_trades=int(item.num_trades),
+        average_hold_time_hours=float(item.average_hold_time_hours),
+        rolling_20_win_rate=float(item.rolling_20_win_rate),
+        rolling_20_expectancy=float(item.rolling_20_expectancy),
+        rolling_20_sharpe=float(item.rolling_20_sharpe),
+        rolling_20_series=[
+            RollingMetricPointResponse(
+                trade_index=int(point.trade_index),
+                timestamp=pd.Timestamp(point.timestamp).to_pydatetime(),
+                win_rate=float(point.win_rate),
+                expectancy=float(point.expectancy),
+                sharpe=float(point.sharpe),
+            )
+            for point in item.rolling_20_series
+        ],
+        last_5=_window_to_response(item.last_5),
+        last_20=_window_to_response(item.last_20),
+        last_60=_window_to_response(item.last_60),
+    )
+
+
+def _context_bucket_to_response(item: ContextBucketPerformance) -> ContextBucketPerformanceResponse:
+    """Convert context bucket analytics dataclass to API schema."""
+    return ContextBucketPerformanceResponse(
+        key=item.key,
+        trades=int(item.trades),
+        total_return=float(item.total_return),
+        win_rate=float(item.win_rate),
+        expectancy=float(item.expectancy),
+        sharpe=float(item.sharpe),
+        total_pnl=float(item.total_pnl),
+    )
+
+
 @dataclass(slots=True)
 class StrategyState:
     """Mutable runtime state for one strategy."""
@@ -135,8 +229,8 @@ class TradingApiService:
     last_risk_config: dict[str, float] = field(
         default_factory=lambda: {
             "max_daily_loss": 2_000.0,
-            "max_position_size": 1.0,
-            "max_open_positions": 10.0,
+            "max_position_size": 0.25,
+            "max_open_positions": 3.0,
             "max_gross_exposure": 1.0,
         }
     )
@@ -164,8 +258,8 @@ class TradingApiService:
         self.last_backtest_strategy = "moving_average_crossover"
         self.last_risk_config = {
             "max_daily_loss": 2_000.0,
-            "max_position_size": 1.0,
-            "max_open_positions": 10.0,
+            "max_position_size": 0.25,
+            "max_open_positions": 3.0,
             "max_gross_exposure": 1.0,
         }
         self._initialize_strategy_state(use_persisted=False)
@@ -181,6 +275,70 @@ class TradingApiService:
         if self.deployment_settings is not None:
             return self.deployment_settings.log_dir
         return "logs"
+
+    def _performance_snapshot(self) -> PerformanceAnalyticsSnapshot:
+        """Build analytics snapshot from persisted runtime state when available."""
+        starting_equity = self._initial_capital_for_bootstrap()
+        if self.repository is None:
+            from src.persistence.repository import PortfolioSnapshot
+
+            if self.last_backtest is None:
+                empty = PortfolioSnapshot(
+                    cash=starting_equity,
+                    day_start_equity=starting_equity,
+                    peak_equity=starting_equity,
+                    positions={},
+                )
+                return empty_snapshot(empty, starting_equity=starting_equity)
+
+            fills: list[dict[str, Any]] = []
+            for trade in self.last_backtest.trades:
+                fills.append(
+                    {
+                        "run_id": self.last_run_id or "in_memory_run",
+                        "timestamp": pd.Timestamp(trade.timestamp),
+                        "symbol": self.last_backtest_symbol,
+                        "side": str(trade.side).upper(),
+                        "quantity": float(trade.quantity),
+                        "price": float(trade.fill_price),
+                        "strategy": self.last_backtest_strategy,
+                    }
+                )
+            last_equity = (
+                float(self.last_backtest.equity_curve.iloc[-1])
+                if not self.last_backtest.equity_curve.empty
+                else starting_equity
+            )
+            portfolio = PortfolioSnapshot(
+                cash=last_equity,
+                day_start_equity=starting_equity,
+                peak_equity=max(last_equity, starting_equity),
+                positions={},
+            )
+            runs = [
+                {
+                    "run_id": self.last_run_id or "in_memory_run",
+                    "strategy": self.last_backtest_strategy,
+                    "timeframe": "unknown",
+                    "details": {},
+                }
+            ]
+            return build_performance_snapshot(
+                fills=fills,
+                runs=runs,
+                portfolio_snapshot=portfolio,
+                starting_equity=starting_equity,
+            )
+
+        snapshot = self.repository.load_portfolio_snapshot(default_cash=starting_equity)
+        fills = self.repository.recent_fills(limit=5000)
+        runs = self.repository.recent_runs(limit=2000)
+        return build_performance_snapshot(
+            fills=fills,
+            runs=runs,
+            portfolio_snapshot=snapshot,
+            starting_equity=starting_equity,
+        )
 
     def _initialize_strategy_state(self, use_persisted: bool) -> None:
         """Initialize or reset strategy state from the strategy registry."""
@@ -281,6 +439,39 @@ class TradingApiService:
         strategy_params = dict(strategy_state.parameters)
         strategy_params.update(request.strategy_params)
 
+        strategy_stop_loss = _optional_float(strategy_params.get("stop_loss_pct"))
+        strategy_take_profit = _optional_float(strategy_params.get("take_profit_pct"))
+        strategy_trailing_stop = _optional_float(strategy_params.get("trailing_stop_pct"))
+
+        effective_stop_loss_pct = (
+            float(request.stop_loss_pct)
+            if request.stop_loss_pct is not None
+            else strategy_stop_loss
+        )
+        effective_take_profit_pct = (
+            float(request.take_profit_pct)
+            if request.take_profit_pct is not None
+            else strategy_take_profit
+        )
+        effective_trailing_stop_pct = (
+            float(request.trailing_stop_pct)
+            if request.trailing_stop_pct is not None
+            else strategy_trailing_stop
+        )
+
+        effective_max_position_size = float(
+            min(MAX_POSITION_SIZE_CAP_PCT, request.max_position_size)
+        )
+        effective_max_open_positions = int(min(MAX_OPEN_POSITIONS_CAP, request.max_open_positions))
+        risk_per_trade_amount = float(request.initial_capital * RISK_PER_TRADE_PCT)
+        if effective_stop_loss_pct is not None and effective_stop_loss_pct > 0:
+            raw_position_size_pct = float(RISK_PER_TRADE_PCT / effective_stop_loss_pct)
+        else:
+            raw_position_size_pct = float(request.position_size_pct)
+        effective_position_size_pct = float(
+            min(raw_position_size_pct, effective_max_position_size)
+        )
+
         run_id = uuid4().hex
         configure_logging(log_dir=self._log_dir())
         start_run(run_id=run_id)
@@ -311,6 +502,17 @@ class TradingApiService:
             request.timeframe,
             request.strategy,
         )
+        LOGGER.info(
+            "position_size_calculated run_id=%s symbol=%s risk_per_trade_pct=%.4f risk_per_trade=%.2f stop_loss_pct=%s raw_position_size_pct=%.6f capped_position_size_pct=%.6f max_open_positions=%d",
+            run_id,
+            request.symbol,
+            RISK_PER_TRADE_PCT,
+            risk_per_trade_amount,
+            f"{effective_stop_loss_pct:.6f}" if effective_stop_loss_pct is not None else "none",
+            raw_position_size_pct,
+            effective_position_size_pct,
+            effective_max_open_positions,
+        )
         trade_log_path = (
             self.trade_log_dir / f"{request.symbol}_{request.strategy}_api_trades.csv"
         )
@@ -325,12 +527,14 @@ class TradingApiService:
                 cache_dir=self.cache_dir,
                 trade_log_path=trade_log_path,
                 initial_capital=request.initial_capital,
-                position_size_pct=request.position_size_pct,
+                position_size_pct=effective_position_size_pct,
                 fixed_fee=request.fixed_fee,
                 slippage_pct=request.slippage_pct,
-                stop_loss_pct=request.stop_loss_pct,
-                take_profit_pct=request.take_profit_pct,
-                max_position_size=request.max_position_size,
+                stop_loss_pct=effective_stop_loss_pct,
+                take_profit_pct=effective_take_profit_pct,
+                trailing_stop_pct=effective_trailing_stop_pct,
+                max_position_size=effective_max_position_size,
+                max_open_positions=effective_max_open_positions,
                 max_daily_loss=request.max_daily_loss,
                 force_refresh=request.force_refresh,
                 run_id=run_id,
@@ -342,8 +546,8 @@ class TradingApiService:
             self.last_backtest_strategy = request.strategy
             self.last_risk_config = {
                 "max_daily_loss": float(request.max_daily_loss),
-                "max_position_size": float(request.max_position_size),
-                "max_open_positions": float(10),
+                "max_position_size": float(effective_max_position_size),
+                "max_open_positions": float(effective_max_open_positions),
                 "max_gross_exposure": float(1.0),
             }
 
@@ -360,6 +564,20 @@ class TradingApiService:
                 len(trade_records),
             )
             if self.repository is not None:
+                for index, trade in enumerate(result.trades):
+                    timestamp = pd.Timestamp(trade.timestamp)
+                    self.repository.record_fill(
+                        fill=Fill(
+                            order_id=f"{run_id}-bt-{index}",
+                            symbol=request.symbol,
+                            side=str(trade.side).upper(),
+                            quantity=float(trade.quantity),
+                            price=float(trade.fill_price),
+                            timestamp=timestamp,
+                            notional=float(trade.quantity * trade.fill_price),
+                        ),
+                        run_id=run_id,
+                    )
                 self.repository.finish_run(
                     run_id=run_id,
                     status="completed",
@@ -384,7 +602,17 @@ class TradingApiService:
                 symbol=request.symbol,
                 timeframe=request.timeframe,
                 strategy=request.strategy,
-                metrics={key: float(value) for key, value in result.metrics.items()},
+                metrics={
+                    **{key: float(value) for key, value in result.metrics.items()},
+                    "risk_per_trade_pct": float(RISK_PER_TRADE_PCT),
+                    "risk_per_trade": float(risk_per_trade_amount),
+                    "position_size_pct": float(effective_position_size_pct),
+                    "stop_loss_pct_used": (
+                        float(effective_stop_loss_pct) if effective_stop_loss_pct is not None else 0.0
+                    ),
+                    "max_position_size_pct": float(effective_max_position_size),
+                    "max_open_positions": float(effective_max_open_positions),
+                },
                 equity_curve=_series_to_points(result.equity_curve),
                 drawdown_curve=_series_to_points(drawdown),
                 trades=trade_records,
@@ -408,9 +636,47 @@ class TradingApiService:
             clear_run()
 
     def dashboard_summary(self) -> DashboardSummaryResponse:
-        """Return current dashboard summary from latest backtest snapshot."""
+        """Return current dashboard summary from persisted paper state when available."""
         if self.repository is not None:
             self.kill_switch_enabled = self.repository.get_global_kill_switch()
+
+            snapshot = self.repository.load_portfolio_snapshot(
+                default_cash=self._initial_capital_for_bootstrap()
+            )
+            open_positions = sum(
+                1 for position in snapshot.positions.values() if float(position.quantity) > 0.0
+            )
+            position_value = sum(
+                (float(position.quantity) * float(position.avg_price)) + float(position.unrealized_pnl)
+                for position in snapshot.positions.values()
+            )
+            equity = float(snapshot.cash + position_value)
+            daily_pnl = float(equity - snapshot.day_start_equity)
+            total_pnl = float(equity - self._initial_capital_for_bootstrap())
+            alerts = ["kill_switch_enabled"] if self.kill_switch_enabled else []
+
+            last_run_id = self.last_run_id
+            if last_run_id is None:
+                recent_runs = self.repository.recent_runs(limit=1)
+                if recent_runs:
+                    last_run_id = str(recent_runs[0].get("run_id") or "")
+                    if not last_run_id:
+                        last_run_id = None
+
+            return DashboardSummaryResponse(
+                equity=equity,
+                daily_pnl=daily_pnl,
+                total_pnl=total_pnl,
+                open_positions=int(open_positions),
+                system_status=(
+                    "kill_switch_enabled"
+                    if self.kill_switch_enabled
+                    else ("paper_only_ready" if open_positions > 0 else "paper_only_idle")
+                ),
+                risk_alerts=alerts,
+                last_run_id=last_run_id,
+            )
+
         if self.last_backtest is None or self.last_backtest.equity_curve.empty:
             alerts = ["kill_switch_enabled"] if self.kill_switch_enabled else []
             return DashboardSummaryResponse(
@@ -468,7 +734,26 @@ class TradingApiService:
         )
 
     def trades(self) -> TradesResponse:
-        """Return serialized trades from most recent backtest."""
+        """Return serialized trade records from persistence or latest in-memory backtest."""
+        if self.repository is not None:
+            persisted_fills = self.repository.recent_fills(limit=200)
+            records = [
+                TradeRecord(
+                    timestamp=pd.Timestamp(fill["timestamp"]).to_pydatetime(),
+                    symbol=str(fill["symbol"]),
+                    side=str(fill["side"]).upper(),
+                    quantity=float(fill["quantity"]),
+                    entry_price=float(fill["price"]),
+                    exit_price=float(fill["price"]),
+                    # Fill-level realized PnL is not available in current schema.
+                    realized_pnl=0.0,
+                    strategy=str(fill["strategy"]),
+                    status="filled",
+                )
+                for fill in persisted_fills
+            ]
+            return TradesResponse(trades=records, total=len(records))
+
         if self.last_backtest is None:
             return TradesResponse(trades=[], total=0)
         records = _to_trade_records(
@@ -477,6 +762,159 @@ class TradingApiService:
             strategy_name=self.last_backtest_strategy,
         )
         return TradesResponse(trades=records, total=len(records))
+
+    def strategy_analytics(self) -> StrategyAnalyticsResponse:
+        """Return strategy-level analytics built from persisted fills/runs."""
+        snapshot = self._performance_snapshot()
+        return StrategyAnalyticsResponse(
+            generated_at=pd.Timestamp(snapshot.generated_at).to_pydatetime(),
+            strategies=[_strategy_analytics_to_response(item) for item in snapshot.strategies],
+        )
+
+    def portfolio_analytics(self) -> PortfolioAnalyticsResponse:
+        """Return portfolio-level analytics built from persisted state."""
+        snapshot = self._performance_snapshot()
+        portfolio = snapshot.portfolio
+        return PortfolioAnalyticsResponse(
+            generated_at=pd.Timestamp(snapshot.generated_at).to_pydatetime(),
+            equity_curve=[
+                EquityPoint(
+                    timestamp=pd.Timestamp(point.timestamp).to_pydatetime(),
+                    value=float(point.value),
+                )
+                for point in portfolio.equity_curve
+            ],
+            daily_pnl=[
+                EquityPoint(
+                    timestamp=pd.Timestamp(point.timestamp).to_pydatetime(),
+                    value=float(point.value),
+                )
+                for point in portfolio.daily_pnl
+            ],
+            realized_pnl=float(portfolio.realized_pnl),
+            unrealized_pnl=float(portfolio.unrealized_pnl),
+            rolling_drawdown=[
+                EquityPoint(
+                    timestamp=pd.Timestamp(point.timestamp).to_pydatetime(),
+                    value=float(point.value),
+                )
+                for point in portfolio.rolling_drawdown
+            ],
+            strategy_contribution=[
+                StrategyContributionResponse(
+                    strategy=item.strategy,
+                    realized_pnl=float(item.realized_pnl),
+                    return_pct=float(item.return_pct),
+                    trades=int(item.trades),
+                )
+                for item in portfolio.strategy_contribution
+            ],
+            exposure_by_symbol=[
+                SymbolExposureResponse(
+                    symbol=item.symbol,
+                    quantity=float(item.quantity),
+                    avg_price=float(item.avg_price),
+                    notional=float(item.notional),
+                    unrealized_pnl=float(item.unrealized_pnl),
+                )
+                for item in portfolio.exposure_by_symbol
+            ],
+            open_risk_summary=OpenRiskSummaryResponse(
+                open_positions=int(portfolio.open_risk_summary.open_positions),
+                gross_exposure=float(portfolio.open_risk_summary.gross_exposure),
+                largest_position_notional=float(portfolio.open_risk_summary.largest_position_notional),
+                cash=float(portfolio.open_risk_summary.cash),
+                day_start_equity=float(portfolio.open_risk_summary.day_start_equity),
+                peak_equity=float(portfolio.open_risk_summary.peak_equity),
+            ),
+        )
+
+    def context_analytics(self) -> ContextAnalyticsResponse:
+        """Return context/regime analytics grouped across key dimensions."""
+        snapshot = self._performance_snapshot()
+        context = snapshot.context
+        return ContextAnalyticsResponse(
+            generated_at=pd.Timestamp(snapshot.generated_at).to_pydatetime(),
+            by_symbol=[_context_bucket_to_response(item) for item in context.by_symbol],
+            by_timeframe=[_context_bucket_to_response(item) for item in context.by_timeframe],
+            by_weekday=[_context_bucket_to_response(item) for item in context.by_weekday],
+            by_hour=[_context_bucket_to_response(item) for item in context.by_hour],
+            by_regime=[_context_bucket_to_response(item) for item in context.by_regime],
+        )
+
+    def selection_status(self) -> SelectionStatusResponse:
+        """Return latest deterministic strategy selection decision when available."""
+        generated_at = pd.Timestamp.utcnow().to_pydatetime()
+        latest_selection: dict[str, Any] | None = None
+        if self.repository is not None:
+            for run in self.repository.recent_runs(limit=50):
+                service = str(run.get("service") or "")
+                if not service.startswith("worker:"):
+                    continue
+                details = run.get("details")
+                details_map = dict(details) if isinstance(details, dict) else {}
+                selection = details_map.get("selection")
+                if isinstance(selection, dict):
+                    latest_selection = selection
+                    generated_at = pd.Timestamp(
+                        run.get("completed_at") or run.get("started_at") or pd.Timestamp.utcnow()
+                    ).to_pydatetime()
+                    break
+
+        if latest_selection is None:
+            return SelectionStatusResponse(
+                generated_at=generated_at,
+                regime="unknown",
+                regime_signals={},
+                selected_strategy=None,
+                selected_score=0.0,
+                minimum_score_threshold=0.0,
+                sizing_multiplier=0.0,
+                allocation_fraction=0.0,
+                candidates=[],
+            )
+
+        candidates = latest_selection.get("candidates")
+        candidate_rows: list[StrategyScoreResponse] = []
+        if isinstance(candidates, list):
+            for item in candidates:
+                if not isinstance(item, dict):
+                    continue
+                candidate_rows.append(
+                    StrategyScoreResponse(
+                        strategy=str(item.get("strategy") or ""),
+                        signal=float(item.get("signal") or 0.0),
+                        eligible=bool(item.get("eligible", False)),
+                        reasons=[str(reason) for reason in item.get("reasons", [])],
+                        score=float(item.get("score") or 0.0),
+                        recent_expectancy=float(item.get("recent_expectancy") or 0.0),
+                        recent_sharpe=float(item.get("recent_sharpe") or 0.0),
+                        win_rate=float(item.get("win_rate") or 0.0),
+                        drawdown_penalty=float(item.get("drawdown_penalty") or 0.0),
+                        regime_fit=float(item.get("regime_fit") or 0.0),
+                        sizing_multiplier=float(item.get("sizing_multiplier") or 0.0),
+                    )
+                )
+
+        regime_signals = latest_selection.get("regime_signals")
+        return SelectionStatusResponse(
+            generated_at=generated_at,
+            regime=str(latest_selection.get("regime") or "unknown"),
+            regime_signals={
+                str(key): float(value)
+                for key, value in (regime_signals.items() if isinstance(regime_signals, dict) else [])
+            },
+            selected_strategy=(
+                str(latest_selection.get("selected_strategy"))
+                if latest_selection.get("selected_strategy") is not None
+                else None
+            ),
+            selected_score=float(latest_selection.get("selected_score") or 0.0),
+            minimum_score_threshold=float(latest_selection.get("minimum_score_threshold") or 0.0),
+            sizing_multiplier=float(latest_selection.get("sizing_multiplier") or 0.0),
+            allocation_fraction=float(latest_selection.get("allocation_fraction") or 0.0),
+            candidates=candidate_rows,
+        )
 
     def system_status(self) -> ServiceStatusResponse:
         """Return service-level operational status for deployment checks."""

@@ -10,12 +10,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from src.api.schemas import (
     BacktestRunRequest,
     BacktestRunResponse,
+    ContextAnalyticsResponse,
     DashboardSummaryResponse,
     HealthResponse,
     KillSwitchRequest,
     KillSwitchResponse,
+    PortfolioAnalyticsResponse,
     RiskStatusResponse,
+    SelectionStatusResponse,
     ServiceStatusResponse,
+    StrategyAnalyticsResponse,
     StrategySummary,
     StrategyUpdateRequest,
     TradesResponse,
@@ -126,6 +130,30 @@ def post_backtest_run(payload: BacktestRunRequest) -> BacktestRunResponse:
 def get_strategies() -> list[StrategySummary]:
     """List available strategies and current config."""
     return _service().list_strategies()
+
+
+@app.get("/api/analytics/strategies", response_model=StrategyAnalyticsResponse)
+def get_strategy_analytics() -> StrategyAnalyticsResponse:
+    """Return strategy-level analytics computed from persisted trading data."""
+    return _service().strategy_analytics()
+
+
+@app.get("/api/analytics/portfolio", response_model=PortfolioAnalyticsResponse)
+def get_portfolio_analytics() -> PortfolioAnalyticsResponse:
+    """Return portfolio-level analytics computed from persisted trading data."""
+    return _service().portfolio_analytics()
+
+
+@app.get("/api/analytics/context", response_model=ContextAnalyticsResponse)
+def get_context_analytics() -> ContextAnalyticsResponse:
+    """Return context/regime analytics grouped by symbol/time and regime."""
+    return _service().context_analytics()
+
+
+@app.get("/api/selection/status", response_model=SelectionStatusResponse)
+def get_selection_status() -> SelectionStatusResponse:
+    """Return latest deterministic selection and allocation decision."""
+    return _service().selection_status()
 
 
 @app.patch("/api/strategies/{name}", response_model=StrategySummary)

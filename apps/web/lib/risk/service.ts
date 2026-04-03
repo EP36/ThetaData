@@ -1,9 +1,21 @@
 import { mockRiskEvents, mockRiskStatus } from "@/lib/mock/risk";
 import { getRiskStatus as getRiskStatusFromApi, triggerKillSwitch } from "@/lib/api/client";
+import { isDemoModeEnabled } from "@/lib/runtime/demo-mode";
 import type { RiskEvent, RiskStatusData } from "@/lib/types";
 
-let riskStatusStore: RiskStatusData = structuredClone(mockRiskStatus);
-let riskEventStore: RiskEvent[] = structuredClone(mockRiskEvents);
+const EMPTY_RISK_STATUS: RiskStatusData = {
+  maxDailyLoss: 0,
+  currentDrawdown: 0,
+  maxPositionSize: 0,
+  grossExposure: 0,
+  killSwitchEnabled: false,
+  rejectedOrders: []
+};
+
+let riskStatusStore: RiskStatusData = isDemoModeEnabled()
+  ? structuredClone(mockRiskStatus)
+  : structuredClone(EMPTY_RISK_STATUS);
+let riskEventStore: RiskEvent[] = isDemoModeEnabled() ? structuredClone(mockRiskEvents) : [];
 
 export async function getRiskStatus(): Promise<RiskStatusData> {
   try {
@@ -11,51 +23,56 @@ export async function getRiskStatus(): Promise<RiskStatusData> {
     riskStatusStore = structuredClone(fromApi);
     return fromApi;
   } catch {
-    await new Promise((resolve) => {
-      setTimeout(resolve, 160);
-    });
+    if (!isDemoModeEnabled()) {
+      throw new Error("Unable to load risk status from backend.");
+    }
     return structuredClone(riskStatusStore);
   }
 }
 
 export async function getRiskEvents(): Promise<RiskEvent[]> {
-  await new Promise((resolve) => {
-    setTimeout(resolve, 120);
-  });
+  if (!isDemoModeEnabled()) {
+    return [];
+  }
   return structuredClone(riskEventStore);
 }
 
-export async function triggerEmergencyStop(): Promise<RiskStatusData> {
+export async function setEmergencyStop(enabled: boolean): Promise<RiskStatusData> {
+  const demoModeEnabled = isDemoModeEnabled();
   try {
-    const killSwitchEnabled = await triggerKillSwitch(true);
-    riskStatusStore = {
-      ...riskStatusStore,
-      killSwitchEnabled,
-      rejectedOrders: [...riskStatusStore.rejectedOrders, "kill_switch_enabled"]
-    };
-  } catch {
-    await new Promise((resolve) => {
-      setTimeout(resolve, 180);
-    });
-    riskStatusStore = {
-      ...riskStatusStore,
-      killSwitchEnabled: true,
-      rejectedOrders: [...riskStatusStore.rejectedOrders, "kill_switch_enabled"]
-    };
+    await triggerKillSwitch(enabled);
+    const refreshedStatus = await getRiskStatusFromApi();
+    riskStatusStore = structuredClone(refreshedStatus);
+  } catch (error) {
+    if (!demoModeEnabled) {
+      if (error instanceof Error && error.message) {
+        throw error;
+      }
+      throw new Error("Unable to update kill switch state.");
+    }
+    riskStatusStore = { ...riskStatusStore, killSwitchEnabled: enabled };
   }
 
-  riskEventStore = [
-    {
-      timestamp: new Date().toISOString(),
-      reason: "manual_emergency_stop",
-      severity: "critical"
-    },
-    ...riskEventStore
-  ];
+  if (demoModeEnabled) {
+    riskEventStore = [
+      {
+        timestamp: new Date().toISOString(),
+        reason: enabled ? "manual_emergency_stop_enabled" : "manual_emergency_stop_disabled",
+        severity: enabled ? "critical" : "info"
+      },
+      ...riskEventStore
+    ];
+  }
   return structuredClone(riskStatusStore);
 }
 
+export async function triggerEmergencyStop(): Promise<RiskStatusData> {
+  return setEmergencyStop(true);
+}
+
 export function resetRiskMockState(): void {
-  riskStatusStore = structuredClone(mockRiskStatus);
-  riskEventStore = structuredClone(mockRiskEvents);
+  riskStatusStore = isDemoModeEnabled()
+    ? structuredClone(mockRiskStatus)
+    : structuredClone(EMPTY_RISK_STATUS);
+  riskEventStore = isDemoModeEnabled() ? structuredClone(mockRiskEvents) : [];
 }

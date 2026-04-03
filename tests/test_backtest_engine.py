@@ -7,6 +7,7 @@ import pytest
 
 from src.backtest.engine import BacktestEngine
 from src.backtest.reporting import TRADE_LOG_COLUMNS
+from src.risk.manager import RiskManager
 from src.strategies.base import Strategy
 
 
@@ -119,6 +120,43 @@ def test_stop_loss_exit_is_applied() -> None:
     result = engine.run(data=data, strategy=strategy)
     assert result.trades[-1].reason == "stop_loss"
     assert result.equity_curve.iloc[-1] == pytest.approx(9_500.0)
+
+
+def test_trailing_stop_exit_is_applied() -> None:
+    data = make_ohlcv([100.0, 110.0, 107.0, 106.0])
+    data.loc[data.index[2], "low"] = 106.5
+    strategy = SeriesSignalStrategy([1.0, 1.0, 1.0, 1.0])
+    engine = BacktestEngine(
+        initial_capital=10_000.0,
+        position_size_pct=1.0,
+        fixed_fee=0.0,
+        slippage_pct=0.0,
+        trailing_stop_pct=0.03,
+    )
+
+    result = engine.run(data=data, strategy=strategy)
+    assert any(trade.reason == "trailing_stop" for trade in result.trades)
+
+
+def test_risk_rejections_are_counted_when_order_not_allowed() -> None:
+    data = make_ohlcv([100.0, 101.0, 102.0])
+    strategy = SeriesSignalStrategy([1.0, 1.0, 1.0])
+    risk = RiskManager(
+        max_position_size=1.0,
+        max_daily_loss=1_000.0,
+        allow_after_hours=False,
+        trading_start="09:30",
+        trading_end="16:00",
+    )
+    engine = BacktestEngine(
+        initial_capital=10_000.0,
+        position_size_pct=1.0,
+        fixed_fee=0.0,
+        slippage_pct=0.0,
+    )
+
+    result = engine.run(data=data, strategy=strategy, risk_manager=risk, symbol="TEST")
+    assert result.metrics["rejected_orders"] >= 1
 
 
 def test_trade_log_schema_when_no_trades(tmp_path) -> None:

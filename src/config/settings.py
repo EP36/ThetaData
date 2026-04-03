@@ -94,11 +94,11 @@ class Settings:
             slippage_pct=float(os.getenv("SLIPPAGE_PCT", "0.0005")),
             stop_loss_pct=read_optional_float("STOP_LOSS_PCT"),
             take_profit_pct=read_optional_float("TAKE_PROFIT_PCT"),
-            max_position_size=float(os.getenv("MAX_POSITION_SIZE", "1.0")),
+            max_position_size=float(os.getenv("MAX_POSITION_SIZE", "0.25")),
             max_daily_loss=float(os.getenv("MAX_DAILY_LOSS", "2000")),
             paper_trading_enabled=read_bool("PAPER_TRADING", default=False),
             max_notional_per_trade=float(os.getenv("MAX_NOTIONAL_PER_TRADE", "100000")),
-            executor_max_open_positions=int(os.getenv("MAX_OPEN_POSITIONS", "10")),
+            executor_max_open_positions=int(os.getenv("MAX_OPEN_POSITIONS", "3")),
             executor_daily_loss_cap=float(os.getenv("EXECUTOR_DAILY_LOSS_CAP", "2000")),
             trade_log_path=os.getenv("TRADE_LOG_PATH", "logs/trades.csv"),
         )

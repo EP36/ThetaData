@@ -70,7 +70,9 @@ class BacktestRunRequest(BaseModel):
     slippage_pct: float = 0.0005
     stop_loss_pct: Optional[float] = None
     take_profit_pct: Optional[float] = None
-    max_position_size: float = 1.0
+    trailing_stop_pct: Optional[float] = None
+    max_position_size: float = 0.25
+    max_open_positions: int = 3
     max_daily_loss: float = 2_000.0
     force_refresh: bool = False
 
@@ -88,6 +90,177 @@ class BacktestRunResponse(BaseModel):
     equity_curve: list[EquityPoint]
     drawdown_curve: list[EquityPoint]
     trades: list[TradeRecord]
+
+
+class RollingMetricPointResponse(BaseModel):
+    """Rolling metric point aligned to closed-trade progression."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    trade_index: int
+    timestamp: datetime
+    win_rate: float
+    expectancy: float
+    sharpe: float
+
+
+class RecentWindowMetricsResponse(BaseModel):
+    """Recent-trades window summary metrics."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    trades: int
+    total_return: float
+    win_rate: float
+    expectancy: float
+    sharpe: float
+
+
+class StrategyAnalyticsRecordResponse(BaseModel):
+    """Strategy-level analytics payload."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    strategy: str
+    total_return: float
+    win_rate: float
+    average_win: float
+    average_loss: float
+    profit_factor: float
+    expectancy: float
+    sharpe: float
+    max_drawdown: float
+    num_trades: int
+    average_hold_time_hours: float
+    rolling_20_win_rate: float
+    rolling_20_expectancy: float
+    rolling_20_sharpe: float
+    rolling_20_series: list[RollingMetricPointResponse]
+    last_5: RecentWindowMetricsResponse
+    last_20: RecentWindowMetricsResponse
+    last_60: RecentWindowMetricsResponse
+
+
+class StrategyAnalyticsResponse(BaseModel):
+    """Top-level strategy analytics response."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    generated_at: datetime
+    strategies: list[StrategyAnalyticsRecordResponse]
+
+
+class StrategyContributionResponse(BaseModel):
+    """Per-strategy realized contribution summary."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    strategy: str
+    realized_pnl: float
+    return_pct: float
+    trades: int
+
+
+class SymbolExposureResponse(BaseModel):
+    """Open exposure summary for one symbol."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    symbol: str
+    quantity: float
+    avg_price: float
+    notional: float
+    unrealized_pnl: float
+
+
+class OpenRiskSummaryResponse(BaseModel):
+    """Portfolio open-risk summary."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    open_positions: int
+    gross_exposure: float
+    largest_position_notional: float
+    cash: float
+    day_start_equity: float
+    peak_equity: float
+
+
+class PortfolioAnalyticsResponse(BaseModel):
+    """Portfolio-level analytics response."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    generated_at: datetime
+    equity_curve: list[EquityPoint]
+    daily_pnl: list[EquityPoint]
+    realized_pnl: float
+    unrealized_pnl: float
+    rolling_drawdown: list[EquityPoint]
+    strategy_contribution: list[StrategyContributionResponse]
+    exposure_by_symbol: list[SymbolExposureResponse]
+    open_risk_summary: OpenRiskSummaryResponse
+
+
+class ContextBucketPerformanceResponse(BaseModel):
+    """Grouped context bucket performance row."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    key: str
+    trades: int
+    total_return: float
+    win_rate: float
+    expectancy: float
+    sharpe: float
+    total_pnl: float
+
+
+class ContextAnalyticsResponse(BaseModel):
+    """Context/regime analytics response."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    generated_at: datetime
+    by_symbol: list[ContextBucketPerformanceResponse]
+    by_timeframe: list[ContextBucketPerformanceResponse]
+    by_weekday: list[ContextBucketPerformanceResponse]
+    by_hour: list[ContextBucketPerformanceResponse]
+    by_regime: list[ContextBucketPerformanceResponse]
+
+
+class StrategyScoreResponse(BaseModel):
+    """Selection score and eligibility details for one strategy."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    strategy: str
+    signal: float
+    eligible: bool
+    reasons: list[str]
+    score: float
+    recent_expectancy: float
+    recent_sharpe: float
+    win_rate: float
+    drawdown_penalty: float
+    regime_fit: float
+    sizing_multiplier: float
+
+
+class SelectionStatusResponse(BaseModel):
+    """Current deterministic selection/allocation decision payload."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    generated_at: datetime
+    regime: str
+    regime_signals: dict[str, float]
+    selected_strategy: Optional[str]
+    selected_score: float
+    minimum_score_threshold: float
+    sizing_multiplier: float
+    allocation_fraction: float
+    candidates: list[StrategyScoreResponse]
 
 
 class DashboardSummaryResponse(BaseModel):

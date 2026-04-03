@@ -1,16 +1,14 @@
 import { mockTrades } from "@/lib/mock/trades";
 import { getTrades as getTradesFromApi } from "@/lib/api/client";
+import { isDemoModeEnabled } from "@/lib/runtime/demo-mode";
 import type { TradeRow, TradesFilter } from "@/lib/types";
 
 export async function getTrades(filters: TradesFilter): Promise<TradeRow[]> {
-  let sourceTrades: TradeRow[] = [];
+  let sourceTrades: TradeRow[];
   try {
     sourceTrades = await getTradesFromApi();
   } catch {
-    await new Promise((resolve) => {
-      setTimeout(resolve, 180);
-    });
-    sourceTrades = mockTrades;
+    sourceTrades = isDemoModeEnabled() ? mockTrades : [];
   }
 
   const symbol = filters.symbol.trim().toUpperCase();

@@ -29,7 +29,11 @@ export type BacktestFormInput = {
   timeframe: string;
   startDate: string;
   endDate: string;
-  strategy: "moving_average_crossover" | "rsi_mean_reversion";
+  strategy:
+    | "moving_average_crossover"
+    | "rsi_mean_reversion"
+    | "breakout_momentum"
+    | "vwap_mean_reversion";
 };
 
 export type BacktestMetrics = {
@@ -38,6 +42,9 @@ export type BacktestMetrics = {
   maxDrawdown: number;
   winRate: number;
   profitFactor: number;
+  riskPerTrade: number;
+  riskPerTradePct: number;
+  positionSizePct: number;
 };
 
 export type BacktestResultData = {
@@ -51,10 +58,14 @@ export type BacktestResultData = {
 export type StrategyStatus = "enabled" | "disabled";
 
 export type StrategyConfig = {
-  name: "moving_average_crossover" | "rsi_mean_reversion";
+  name:
+    | "moving_average_crossover"
+    | "rsi_mean_reversion"
+    | "breakout_momentum"
+    | "vwap_mean_reversion";
   description: string;
   status: StrategyStatus;
-  parameters: Record<string, number>;
+  parameters: Record<string, number | string>;
 };
 
 export type StrategyValidationErrors = Record<string, string>;
@@ -84,4 +95,127 @@ export type TradesFilter = {
   strategy: string;
   startDate: string;
   endDate: string;
+};
+
+export type RollingMetricPoint = {
+  tradeIndex: number;
+  timestamp: string;
+  winRate: number;
+  expectancy: number;
+  sharpe: number;
+};
+
+export type RecentWindowMetrics = {
+  trades: number;
+  totalReturn: number;
+  winRate: number;
+  expectancy: number;
+  sharpe: number;
+};
+
+export type StrategyAnalyticsRecord = {
+  strategy: string;
+  totalReturn: number;
+  winRate: number;
+  averageWin: number;
+  averageLoss: number;
+  profitFactor: number;
+  expectancy: number;
+  sharpe: number;
+  maxDrawdown: number;
+  numTrades: number;
+  averageHoldTimeHours: number;
+  rolling20WinRate: number;
+  rolling20Expectancy: number;
+  rolling20Sharpe: number;
+  rolling20Series: RollingMetricPoint[];
+  last5: RecentWindowMetrics;
+  last20: RecentWindowMetrics;
+  last60: RecentWindowMetrics;
+};
+
+export type StrategyAnalyticsData = {
+  generatedAt: string;
+  strategies: StrategyAnalyticsRecord[];
+};
+
+export type StrategyContribution = {
+  strategy: string;
+  realizedPnl: number;
+  returnPct: number;
+  trades: number;
+};
+
+export type SymbolExposure = {
+  symbol: string;
+  quantity: number;
+  avgPrice: number;
+  notional: number;
+  unrealizedPnl: number;
+};
+
+export type OpenRiskSummary = {
+  openPositions: number;
+  grossExposure: number;
+  largestPositionNotional: number;
+  cash: number;
+  dayStartEquity: number;
+  peakEquity: number;
+};
+
+export type PortfolioAnalyticsData = {
+  generatedAt: string;
+  equityCurve: TimeSeriesPoint[];
+  dailyPnl: TimeSeriesPoint[];
+  realizedPnl: number;
+  unrealizedPnl: number;
+  rollingDrawdown: TimeSeriesPoint[];
+  strategyContribution: StrategyContribution[];
+  exposureBySymbol: SymbolExposure[];
+  openRiskSummary: OpenRiskSummary;
+};
+
+export type ContextBucketPerformance = {
+  key: string;
+  trades: number;
+  totalReturn: number;
+  winRate: number;
+  expectancy: number;
+  sharpe: number;
+  totalPnl: number;
+};
+
+export type ContextAnalyticsData = {
+  generatedAt: string;
+  bySymbol: ContextBucketPerformance[];
+  byTimeframe: ContextBucketPerformance[];
+  byWeekday: ContextBucketPerformance[];
+  byHour: ContextBucketPerformance[];
+  byRegime: ContextBucketPerformance[];
+};
+
+export type StrategyScore = {
+  strategy: string;
+  signal: number;
+  eligible: boolean;
+  reasons: string[];
+  score: number;
+  recentExpectancy: number;
+  recentSharpe: number;
+  winRate: number;
+  drawdownPenalty: number;
+  regimeFit: number;
+  sizingMultiplier: number;
+};
+
+export type SelectionStatusData = {
+  generatedAt: string;
+  regime: string;
+  regimeSignals: Record<string, number>;
+  selectedStrategy: string | null;
+  selectedScore: number;
+  minimumScoreThreshold: number;
+  sizingMultiplier: number;
+  allocationFraction: number;
+  candidates: StrategyScore[];
 };
