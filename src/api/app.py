@@ -23,6 +23,7 @@ from src.api.schemas import (
     StrategySummary,
     StrategyUpdateRequest,
     TradesResponse,
+    WorkerExecutionStatusResponse,
 )
 from src.api.services import TradingApiService
 from src.config.deployment import DeploymentSettings
@@ -154,6 +155,12 @@ def get_context_analytics() -> ContextAnalyticsResponse:
 def get_selection_status() -> SelectionStatusResponse:
     """Return latest deterministic selection and allocation decision."""
     return _service().selection_status()
+
+
+@app.get("/api/worker/execution-status", response_model=WorkerExecutionStatusResponse)
+def get_worker_execution_status() -> WorkerExecutionStatusResponse:
+    """Return worker universe, active strategy locks, and latest per-symbol decisions."""
+    return _service().worker_execution_status()
 
 
 @app.patch("/api/strategies/{name}", response_model=StrategySummary)

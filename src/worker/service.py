@@ -6,11 +6,15 @@ from dataclasses import dataclass, field
 import logging
 from pathlib import Path
 import time
+from typing import cast
 from uuid import uuid4
 
 import pandas as pd
 
-from src.analytics.performance_layer import PerformanceAnalyticsSnapshot, build_performance_snapshot
+from src.analytics.performance_layer import (
+    PerformanceAnalyticsSnapshot,
+    build_performance_snapshot,
+)
 from src.config.deployment import DeploymentSettings
 from src.data.cache import DataCache
 from src.data.loaders import HistoricalDataLoader
@@ -30,6 +34,12 @@ from src.selection import (
     strategy_compatible_regimes,
 )
 from src.strategies import create_strategy, list_strategies
+from src.worker.universe import (
+    UniverseMode,
+    UniverseScanResult,
+    UniverseScanner,
+    UniverseScannerConfig,
+)
 
 LOGGER = logging.getLogger("theta.worker.service")
 EPSILON = 1e-12
@@ -42,6 +52,20 @@ def _build_loader(cache_dir: str) -> HistoricalDataLoader:
     return HistoricalDataLoader(provider=provider, cache=cache)
 
 
+@dataclass(frozen=True, slots=True)
+class SymbolCycleSummary:
+    """Result summary for one symbol processed in one worker cycle."""
+
+    symbol: str
+    run_id: str | None
+    status: str
+    action: str
+    selected_strategy: str | None
+    active_strategy: str | None
+    order_status: str | None
+    rejection_reasons: tuple[str, ...]
+
+
 @dataclass(slots=True)
 class TradingWorker:
     """Run a continuous paper-trading loop with persistence and risk guards."""
@@ -49,12 +73,24 @@ class TradingWorker:
     settings: DeploymentSettings
     repository: PersistenceRepository
     loader: HistoricalDataLoader = field(init=False)
+    universe_scanner: UniverseScanner = field(init=False)
     selector: StrategySelector = field(
         default_factory=lambda: StrategySelector(config=SelectionConfig())
     )
 
     def __post_init__(self) -> None:
         self.loader = _build_loader(cache_dir=self.settings.cache_dir)
+        self.universe_scanner = UniverseScanner(
+            loader=self.loader,
+            config=UniverseScannerConfig(
+                timeframe=self.settings.worker_timeframe,
+                max_candidates=self.settings.worker_max_candidates,
+                min_price=self.settings.min_price,
+                min_average_volume=self.settings.min_avg_volume,
+                min_relative_volume=self.settings.min_relative_volume,
+                max_spread_pct=self.settings.max_spread_pct,
+            ),
+        )
         self.repository.initialize(starting_cash=self.settings.initial_capital)
 
     def run_forever(self) -> None:
@@ -68,12 +104,14 @@ class TradingWorker:
             )
 
         LOGGER.info(
-            "worker_start service=%s worker_name=%s paper_trading=%s worker_enable_trading=%s poll_seconds=%d",
+            "worker_start service=%s worker_name=%s paper_trading=%s worker_enable_trading=%s poll_seconds=%d universe_mode=%s universe=%s",
             self.settings.service_name,
             self.settings.worker_name,
             self.settings.paper_trading_enabled,
             self.settings.worker_enable_trading,
             self.settings.worker_poll_seconds,
+            self.settings.worker_universe_mode,
+            ",".join(self.settings.worker_symbols),
         )
         self.repository.append_log_event(
             level="INFO",
@@ -84,6 +122,14 @@ class TradingWorker:
                 "worker_name": self.settings.worker_name,
                 "paper_trading_enabled": self.settings.paper_trading_enabled,
                 "worker_enable_trading": self.settings.worker_enable_trading,
+                "universe_mode": self.settings.worker_universe_mode,
+                "universe": list(self.settings.worker_symbols),
+                "worker_max_candidates": self.settings.worker_max_candidates,
+                "min_price": self.settings.min_price,
+                "min_avg_volume": self.settings.min_avg_volume,
+                "min_relative_volume": self.settings.min_relative_volume,
+                "max_spread_pct": self.settings.max_spread_pct,
+                "allow_multi_strategy_per_symbol": self.settings.worker_allow_multi_strategy_per_symbol,
             },
         )
 
@@ -92,30 +138,41 @@ class TradingWorker:
             time.sleep(self.settings.worker_poll_seconds)
 
     def run_once(self) -> None:
-        """Execute one worker cycle with idempotency and error capture."""
+        """Execute one worker cycle across the configured symbol universe."""
         cycle_timestamp = pd.Timestamp.utcnow()
-        cycle_key = self._cycle_key(cycle_timestamp)
-        service_key = f"worker:{self.settings.worker_name}"
+        heartbeat_cycle_key = self._heartbeat_cycle_key(cycle_timestamp)
+        configured_universe = tuple(self.settings.worker_symbols)
 
         self.repository.record_worker_heartbeat(
             worker_name=self.settings.worker_name,
             status="heartbeat",
-            last_cycle_key=cycle_key,
-            message="cycle_start",
+            last_cycle_key=heartbeat_cycle_key,
+            message=(
+                f"cycle_start mode={self.settings.worker_universe_mode} "
+                f"configured={','.join(configured_universe)}"
+            ),
         )
 
         if self.repository.get_global_kill_switch():
-            LOGGER.warning("worker_cycle_skipped reason=kill_switch_enabled cycle_key=%s", cycle_key)
+            LOGGER.warning(
+                "worker_cycle_skipped reason=kill_switch_enabled cycle_key=%s",
+                heartbeat_cycle_key,
+            )
             self.repository.append_log_event(
                 level="WARNING",
                 logger_name=LOGGER.name,
                 event="worker_cycle_skipped",
-                payload={"cycle_key": cycle_key, "reason": "kill_switch_enabled"},
+                payload={
+                    "cycle_key": heartbeat_cycle_key,
+                    "reason": "kill_switch_enabled",
+                    "universe_mode": self.settings.worker_universe_mode,
+                    "configured_universe": list(configured_universe),
+                },
             )
             self.repository.record_worker_heartbeat(
                 worker_name=self.settings.worker_name,
                 status="paused",
-                last_cycle_key=cycle_key,
+                last_cycle_key=heartbeat_cycle_key,
                 message="kill_switch_enabled",
             )
             return
@@ -123,7 +180,7 @@ class TradingWorker:
         if not self.settings.paper_trading_enabled or not self.settings.worker_enable_trading:
             LOGGER.info(
                 "worker_cycle_skipped reason=paper_or_worker_disabled cycle_key=%s paper=%s worker=%s",
-                cycle_key,
+                heartbeat_cycle_key,
                 self.settings.paper_trading_enabled,
                 self.settings.worker_enable_trading,
             )
@@ -132,88 +189,261 @@ class TradingWorker:
                 logger_name=LOGGER.name,
                 event="worker_cycle_skipped",
                 payload={
-                    "cycle_key": cycle_key,
+                    "cycle_key": heartbeat_cycle_key,
                     "reason": "paper_or_worker_disabled",
                     "paper_trading_enabled": self.settings.paper_trading_enabled,
                     "worker_enable_trading": self.settings.worker_enable_trading,
+                    "universe_mode": self.settings.worker_universe_mode,
+                    "configured_universe": list(configured_universe),
                 },
             )
             self.repository.record_worker_heartbeat(
                 worker_name=self.settings.worker_name,
                 status="idle",
-                last_cycle_key=cycle_key,
+                last_cycle_key=heartbeat_cycle_key,
                 message="paper_or_worker_disabled",
             )
             return
 
-        run_id = f"worker-{uuid4().hex}"
-        if not self.repository.start_run(
-            run_id=run_id,
-            service=service_key,
-            cycle_key=cycle_key,
-            symbol=self.settings.worker_symbol,
-            timeframe=self.settings.worker_timeframe,
-            strategy="strategy_selector",
-            details={"source": "worker_cycle"},
-        ):
-            LOGGER.info("worker_cycle_skipped reason=duplicate_cycle cycle_key=%s", cycle_key)
+        risk_manager = RiskManager(
+            max_position_size=self.settings.max_position_size,
+            max_daily_loss=self.settings.max_daily_loss,
+            max_open_positions=self.settings.max_open_positions,
+            trading_start=self.settings.trading_start,
+            trading_end=self.settings.trading_end,
+            allow_after_hours=self.settings.allow_after_hours,
+        )
+        executor = PaperTradingExecutor(
+            starting_cash=self.settings.initial_capital,
+            risk_manager=risk_manager,
+            paper_trading_enabled=self.settings.paper_trading_enabled,
+            max_notional_per_trade=self.settings.max_notional_per_trade,
+            max_open_positions=self.settings.max_open_positions,
+            daily_loss_cap=self.settings.executor_daily_loss_cap,
+        )
+
+        snapshot = self.repository.load_portfolio_snapshot(
+            default_cash=self.settings.initial_capital
+        )
+        executor.restore_state(
+            cash=snapshot.cash,
+            day_start_equity=snapshot.day_start_equity,
+            peak_equity=snapshot.peak_equity,
+            positions=snapshot.positions,
+            kill_switch_enabled=self.repository.get_global_kill_switch(),
+        )
+
+        performance_snapshot = self._build_performance_snapshot(snapshot)
+        lock_rows = self.repository.list_symbol_strategy_locks()
+        symbol_strategy_locks: dict[str, str] = {
+            symbol: str(details.get("strategy") or "")
+            for symbol, details in lock_rows.items()
+            if str(details.get("strategy") or "").strip()
+        }
+
+        self._release_stale_locks(
+            executor=executor,
+            symbol_strategy_locks=symbol_strategy_locks,
+        )
+
+        scan_result = self.universe_scanner.scan(
+            mode=cast(UniverseMode, self.settings.worker_universe_mode),
+            configured_symbols=configured_universe,
+            force_refresh=self.settings.worker_force_refresh,
+            now=cycle_timestamp,
+        )
+        universe = tuple(scan_result.shortlisted_symbols)
+
+        self.repository.append_log_event(
+            level="INFO",
+            logger_name=LOGGER.name,
+            event="worker_universe_scan",
+            payload={
+                "worker_name": self.settings.worker_name,
+                "cycle_key": heartbeat_cycle_key,
+                **scan_result.as_dict(),
+            },
+        )
+        LOGGER.info(
+            "worker_universe_scan cycle_key=%s mode=%s scanned=%d shortlisted=%d",
+            heartbeat_cycle_key,
+            scan_result.mode,
+            len(scan_result.scanned_symbols),
+            len(scan_result.shortlisted_symbols),
+        )
+        for symbol, reasons in sorted(scan_result.filtered_out_reasons.items()):
+            self.repository.append_log_event(
+                level="INFO",
+                logger_name=LOGGER.name,
+                event="worker_symbol_filtered",
+                payload={
+                    "worker_name": self.settings.worker_name,
+                    "cycle_key": heartbeat_cycle_key,
+                    "symbol": symbol,
+                    "reasons": list(reasons),
+                },
+            )
+
+        if not universe:
+            self.repository.record_worker_heartbeat(
+                worker_name=self.settings.worker_name,
+                status="idle",
+                last_cycle_key=heartbeat_cycle_key,
+                message="no_shortlisted_symbols",
+            )
             self.repository.append_log_event(
                 level="INFO",
                 logger_name=LOGGER.name,
                 event="worker_cycle_skipped",
-                payload={"cycle_key": cycle_key, "reason": "duplicate_cycle"},
-            )
-            self.repository.record_worker_heartbeat(
-                worker_name=self.settings.worker_name,
-                status="duplicate",
-                last_cycle_key=cycle_key,
-                message="duplicate_cycle",
+                payload={
+                    "cycle_key": heartbeat_cycle_key,
+                    "reason": "no_shortlisted_symbols",
+                    "universe_mode": self.settings.worker_universe_mode,
+                    "configured_universe": list(configured_universe),
+                    "scanned_symbols": list(scan_result.scanned_symbols),
+                    "filtered_out_reasons": {
+                        symbol: list(reasons)
+                        for symbol, reasons in scan_result.filtered_out_reasons.items()
+                    },
+                },
             )
             return
+
+        service_key = f"worker:{self.settings.worker_name}"
+        summaries: list[SymbolCycleSummary] = []
+        for symbol in universe:
+            summaries.append(
+                self._run_symbol_cycle(
+                    symbol=symbol,
+                    cycle_timestamp=cycle_timestamp,
+                    service_key=service_key,
+                    executor=executor,
+                    analytics=performance_snapshot,
+                    symbol_strategy_locks=symbol_strategy_locks,
+                    scan_result=scan_result,
+                )
+            )
+
+        cash, day_start_equity, peak_equity, positions = executor.snapshot_state()
+        self.repository.save_portfolio_snapshot(
+            PortfolioSnapshot(
+                cash=cash,
+                day_start_equity=day_start_equity,
+                peak_equity=peak_equity,
+                positions=positions,
+            )
+        )
+
+        self._release_stale_locks(
+            executor=executor,
+            symbol_strategy_locks=symbol_strategy_locks,
+        )
+
+        if executor.kill_switch_enabled:
+            self.repository.set_global_kill_switch(
+                True,
+                reason="worker_runtime_kill_switch",
+            )
+
+        error_count = sum(1 for row in summaries if row.status == "failed")
+        duplicate_count = sum(1 for row in summaries if row.status == "duplicate")
+        if error_count > 0:
+            status = "error"
+            message = f"errors={error_count} duplicates={duplicate_count}"
+        elif duplicate_count == len(summaries):
+            status = "duplicate"
+            message = f"all_duplicates={duplicate_count}"
+        else:
+            status = "ok"
+            selected = [
+                f"{row.symbol}:{row.selected_strategy or 'none'}"
+                for row in summaries
+            ]
+            message = ",".join(selected)
+
+        self.repository.record_worker_heartbeat(
+            worker_name=self.settings.worker_name,
+            status=status,
+            last_cycle_key=heartbeat_cycle_key,
+            message=message[:250],
+        )
+
+    def _run_symbol_cycle(
+        self,
+        symbol: str,
+        cycle_timestamp: pd.Timestamp,
+        service_key: str,
+        executor: PaperTradingExecutor,
+        analytics: PerformanceAnalyticsSnapshot,
+        symbol_strategy_locks: dict[str, str],
+        scan_result: UniverseScanResult,
+    ) -> SymbolCycleSummary:
+        """Execute one symbol cycle and return a structured summary."""
+        cycle_key = self._cycle_key(symbol=symbol, timestamp=cycle_timestamp)
+        run_id = f"worker-{uuid4().hex}"
+        symbol_snapshot = scan_result.snapshots_by_symbol.get(symbol)
+
+        if not self.repository.start_run(
+            run_id=run_id,
+            service=service_key,
+            cycle_key=cycle_key,
+            symbol=symbol,
+            timeframe=self.settings.worker_timeframe,
+            strategy="strategy_selector",
+            details={
+                "source": "worker_cycle",
+                "universe_mode": self.settings.worker_universe_mode,
+                "configured_universe": list(self.settings.worker_symbols),
+                "scanned_symbols": list(scan_result.scanned_symbols),
+                "shortlisted_symbols": list(scan_result.shortlisted_symbols),
+                "symbol_snapshot": (
+                    symbol_snapshot.as_dict()
+                    if symbol_snapshot is not None
+                    else None
+                ),
+            },
+        ):
+            LOGGER.info(
+                "worker_symbol_cycle_skipped reason=duplicate_cycle symbol=%s cycle_key=%s",
+                symbol,
+                cycle_key,
+            )
+            self.repository.append_log_event(
+                level="INFO",
+                logger_name=LOGGER.name,
+                event="worker_symbol_cycle_skipped",
+                payload={
+                    "cycle_key": cycle_key,
+                    "symbol": symbol,
+                    "reason": "duplicate_cycle",
+                },
+            )
+            return SymbolCycleSummary(
+                symbol=symbol,
+                run_id=None,
+                status="duplicate",
+                action="duplicate_cycle",
+                selected_strategy=None,
+                active_strategy=symbol_strategy_locks.get(symbol),
+                order_status=None,
+                rejection_reasons=(),
+            )
 
         start_run(run_id=run_id)
         try:
             data = self.loader.load(
-                symbol=self.settings.worker_symbol,
+                symbol=symbol,
                 timeframe=self.settings.worker_timeframe,
-                force_refresh=self.settings.worker_force_refresh,
+                force_refresh=False,
             )
             latest_price = float(data["close"].iloc[-1])
             latest_timestamp = pd.Timestamp(data.index[-1])
 
-            risk_manager = RiskManager(
-                max_position_size=self.settings.max_position_size,
-                max_daily_loss=self.settings.max_daily_loss,
-                max_open_positions=self.settings.max_open_positions,
-                trading_start=self.settings.trading_start,
-                trading_end=self.settings.trading_end,
-                allow_after_hours=self.settings.allow_after_hours,
-            )
-            executor = PaperTradingExecutor(
-                starting_cash=self.settings.initial_capital,
-                risk_manager=risk_manager,
-                paper_trading_enabled=self.settings.paper_trading_enabled,
-                max_notional_per_trade=self.settings.max_notional_per_trade,
-                max_open_positions=self.settings.max_open_positions,
-                daily_loss_cap=self.settings.executor_daily_loss_cap,
-            )
-
-            snapshot = self.repository.load_portfolio_snapshot(
-                default_cash=self.settings.initial_capital
-            )
-            executor.restore_state(
-                cash=snapshot.cash,
-                day_start_equity=snapshot.day_start_equity,
-                peak_equity=snapshot.peak_equity,
-                positions=snapshot.positions,
-                kill_switch_enabled=self.repository.get_global_kill_switch(),
-            )
-
-            performance_snapshot = self._build_performance_snapshot(snapshot)
             regime = classify_regime(data)
             LOGGER.info(
-                "regime_classified cycle_key=%s regime=%s ma_slope=%.6f price_vs_ma=%.6f atr_pct=%.6f persistence=%.6f",
+                "regime_classified cycle_key=%s symbol=%s regime=%s ma_slope=%.6f price_vs_ma=%.6f atr_pct=%.6f persistence=%.6f",
                 cycle_key,
+                symbol,
                 regime.state,
                 regime.moving_average_slope,
                 regime.price_vs_moving_average,
@@ -227,18 +457,26 @@ class TradingWorker:
                 run_id=run_id,
                 payload={
                     "cycle_key": cycle_key,
+                    "symbol": symbol,
                     "regime": regime.state,
                     **regime.as_signals(),
                 },
             )
 
+            locked_strategy = None
+            if not self.settings.worker_allow_multi_strategy_per_symbol:
+                locked_strategy = symbol_strategy_locks.get(symbol)
+
             candidates = self._build_strategy_candidates(
                 data=data,
-                analytics=performance_snapshot,
+                analytics=analytics,
+                symbol=symbol,
+                locked_strategy=locked_strategy,
             )
             selection_state = self._build_global_selection_state(
                 executor=executor,
                 latest_price=latest_price,
+                symbol=symbol,
             )
             decision = self.selector.select(
                 regime=regime,
@@ -246,7 +484,12 @@ class TradingWorker:
                 global_state=selection_state,
             )
 
-            self._log_selection_decision(run_id=run_id, cycle_key=cycle_key, decision=decision)
+            self._log_selection_decision(
+                run_id=run_id,
+                cycle_key=cycle_key,
+                symbol=symbol,
+                decision=decision,
+            )
 
             selected_signal = 0.0
             if decision.selected_strategy is not None:
@@ -257,16 +500,25 @@ class TradingWorker:
                 if selected_entry is not None:
                     selected_signal = float(selected_entry.signal)
 
+            current_position = executor.positions.get(symbol)
             order = self._build_order(
+                symbol=symbol,
                 selected_strategy=decision.selected_strategy,
                 selected_signal=selected_signal,
                 latest_price=latest_price,
                 latest_timestamp=latest_timestamp,
-                current_position=executor.positions.get(self.settings.worker_symbol),
+                current_position=current_position,
                 sizing_multiplier=decision.sizing_multiplier,
             )
 
             if order is None:
+                self._sync_lock_on_no_order(
+                    symbol=symbol,
+                    current_position=executor.positions.get(symbol),
+                    selected_strategy=decision.selected_strategy,
+                    run_id=run_id,
+                    symbol_strategy_locks=symbol_strategy_locks,
+                )
                 self.repository.append_log_event(
                     level="INFO",
                     logger_name=LOGGER.name,
@@ -274,6 +526,7 @@ class TradingWorker:
                     run_id=run_id,
                     payload={
                         "cycle_key": cycle_key,
+                        "symbol": symbol,
                         "selection": decision.as_dict(),
                     },
                 )
@@ -283,15 +536,19 @@ class TradingWorker:
                     details={
                         "selection": decision.as_dict(),
                         "action": "no_order",
+                        "active_strategy": symbol_strategy_locks.get(symbol),
                     },
                 )
-                self.repository.record_worker_heartbeat(
-                    worker_name=self.settings.worker_name,
-                    status="ok",
-                    last_cycle_key=cycle_key,
-                    message="no_order",
+                return SymbolCycleSummary(
+                    symbol=symbol,
+                    run_id=run_id,
+                    status="completed",
+                    action="no_order",
+                    selected_strategy=decision.selected_strategy,
+                    active_strategy=symbol_strategy_locks.get(symbol),
+                    order_status=None,
+                    rejection_reasons=(),
                 )
-                return
 
             dedupe_key = self.repository.compute_order_dedupe_key(cycle_key, order)
             if self.repository.order_exists_by_dedupe_key(dedupe_key):
@@ -302,6 +559,7 @@ class TradingWorker:
                     run_id=run_id,
                     payload={
                         "cycle_key": cycle_key,
+                        "symbol": symbol,
                         "dedupe_key": dedupe_key,
                         "selection": decision.as_dict(),
                     },
@@ -312,15 +570,19 @@ class TradingWorker:
                     details={
                         "selection": decision.as_dict(),
                         "action": "duplicate_order_skipped",
+                        "active_strategy": symbol_strategy_locks.get(symbol),
                     },
                 )
-                self.repository.record_worker_heartbeat(
-                    worker_name=self.settings.worker_name,
+                return SymbolCycleSummary(
+                    symbol=symbol,
+                    run_id=run_id,
                     status="duplicate",
-                    last_cycle_key=cycle_key,
-                    message="duplicate_order_skipped",
+                    action="duplicate_order_skipped",
+                    selected_strategy=decision.selected_strategy,
+                    active_strategy=symbol_strategy_locks.get(symbol),
+                    order_status=None,
+                    rejection_reasons=(),
                 )
-                return
 
             self.repository.record_order(
                 order=order,
@@ -338,6 +600,16 @@ class TradingWorker:
                 fill = executor.filled_orders[-1]
                 self.repository.record_fill(fill=fill, run_id=run_id)
 
+            self._sync_lock_after_execution(
+                symbol=symbol,
+                decision=decision,
+                order=order,
+                result_status=result.status,
+                executor=executor,
+                run_id=run_id,
+                symbol_strategy_locks=symbol_strategy_locks,
+            )
+
             self.repository.append_log_event(
                 level="INFO" if result.status == "FILLED" else "WARNING",
                 logger_name=LOGGER.name,
@@ -345,67 +617,151 @@ class TradingWorker:
                 run_id=run_id,
                 payload={
                     "cycle_key": cycle_key,
+                    "symbol": symbol,
                     "order_id": result.order_id,
                     "status": result.status,
                     "rejection_reasons": list(result.rejection_reasons),
                     "selection": decision.as_dict(),
+                    "active_strategy": symbol_strategy_locks.get(symbol),
                 },
             )
-
-            cash, day_start_equity, peak_equity, positions = executor.snapshot_state()
-            self.repository.save_portfolio_snapshot(
-                PortfolioSnapshot(
-                    cash=cash,
-                    day_start_equity=day_start_equity,
-                    peak_equity=peak_equity,
-                    positions=positions,
-                )
-            )
-
-            if executor.kill_switch_enabled:
-                self.repository.set_global_kill_switch(
-                    True,
-                    reason="worker_runtime_kill_switch",
-                )
 
             self.repository.finish_run(
                 run_id=run_id,
                 status="completed",
                 details={
                     "selection": decision.as_dict(),
+                    "action": "order_processed",
                     "order_id": result.order_id,
                     "order_status": result.status,
                     "rejection_reasons": list(result.rejection_reasons),
+                    "active_strategy": symbol_strategy_locks.get(symbol),
                 },
             )
-            self.repository.record_worker_heartbeat(
-                worker_name=self.settings.worker_name,
-                status="ok",
-                last_cycle_key=cycle_key,
-                message=f"strategy={decision.selected_strategy or 'none'} order={result.status}",
+            return SymbolCycleSummary(
+                symbol=symbol,
+                run_id=run_id,
+                status="completed",
+                action="order_processed",
+                selected_strategy=decision.selected_strategy,
+                active_strategy=symbol_strategy_locks.get(symbol),
+                order_status=result.status,
+                rejection_reasons=tuple(result.rejection_reasons),
             )
         except Exception as exc:
-            LOGGER.exception("worker_cycle_failed cycle_key=%s error=%s", cycle_key, exc)
+            LOGGER.exception(
+                "worker_symbol_cycle_failed symbol=%s cycle_key=%s error=%s",
+                symbol,
+                cycle_key,
+                exc,
+            )
             self.repository.finish_run(
                 run_id=run_id,
                 status="failed",
                 error_message=str(exc),
+                details={
+                    "action": "cycle_failed",
+                    "symbol": symbol,
+                },
             )
             self.repository.append_log_event(
                 level="ERROR",
                 logger_name=LOGGER.name,
-                event="worker_cycle_failed",
+                event="worker_symbol_cycle_failed",
                 run_id=run_id,
-                payload={"cycle_key": cycle_key, "error": str(exc)},
+                payload={
+                    "cycle_key": cycle_key,
+                    "symbol": symbol,
+                    "error": str(exc),
+                },
             )
-            self.repository.record_worker_heartbeat(
-                worker_name=self.settings.worker_name,
-                status="error",
-                last_cycle_key=cycle_key,
-                message=str(exc)[:250],
+            return SymbolCycleSummary(
+                symbol=symbol,
+                run_id=run_id,
+                status="failed",
+                action="cycle_failed",
+                selected_strategy=None,
+                active_strategy=symbol_strategy_locks.get(symbol),
+                order_status=None,
+                rejection_reasons=(),
             )
         finally:
             clear_run()
+
+    def _sync_lock_on_no_order(
+        self,
+        symbol: str,
+        current_position: Position | None,
+        selected_strategy: str | None,
+        run_id: str,
+        symbol_strategy_locks: dict[str, str],
+    ) -> None:
+        """Maintain symbol strategy lock state when no order was submitted."""
+        if self.settings.worker_allow_multi_strategy_per_symbol:
+            return
+
+        current_qty = 0.0 if current_position is None else float(current_position.quantity)
+        if current_qty <= EPSILON:
+            if symbol in symbol_strategy_locks:
+                self.repository.release_symbol_strategy_lock(symbol)
+                symbol_strategy_locks.pop(symbol, None)
+            return
+
+        if symbol not in symbol_strategy_locks and selected_strategy is not None:
+            self.repository.upsert_symbol_strategy_lock(
+                symbol=symbol,
+                strategy=selected_strategy,
+                run_id=run_id,
+                reason="position_open",
+            )
+            symbol_strategy_locks[symbol] = selected_strategy
+
+    def _sync_lock_after_execution(
+        self,
+        symbol: str,
+        decision: SelectionDecision,
+        order: Order,
+        result_status: str,
+        executor: PaperTradingExecutor,
+        run_id: str,
+        symbol_strategy_locks: dict[str, str],
+    ) -> None:
+        """Maintain symbol strategy lock state after order processing."""
+        if self.settings.worker_allow_multi_strategy_per_symbol or result_status != "FILLED":
+            return
+
+        if order.side.upper() == "BUY" and decision.selected_strategy is not None:
+            self.repository.upsert_symbol_strategy_lock(
+                symbol=symbol,
+                strategy=decision.selected_strategy,
+                run_id=run_id,
+                reason="buy_fill",
+            )
+            symbol_strategy_locks[symbol] = decision.selected_strategy
+            return
+
+        position = executor.positions.get(symbol)
+        if order.side.upper() == "SELL" and (
+            position is None or float(position.quantity) <= EPSILON
+        ):
+            self.repository.release_symbol_strategy_lock(symbol)
+            symbol_strategy_locks.pop(symbol, None)
+
+    def _release_stale_locks(
+        self,
+        executor: PaperTradingExecutor,
+        symbol_strategy_locks: dict[str, str],
+    ) -> None:
+        """Release any lock whose symbol no longer has an open position."""
+        stale_symbols: list[str] = []
+        for symbol in symbol_strategy_locks:
+            position = executor.positions.get(symbol)
+            if position is None or float(position.quantity) <= EPSILON:
+                stale_symbols.append(symbol)
+
+        for symbol in stale_symbols:
+            self.repository.release_symbol_strategy_lock(symbol)
+            symbol_strategy_locks.pop(symbol, None)
 
     def _build_performance_snapshot(
         self,
@@ -425,6 +781,8 @@ class TradingWorker:
         self,
         data: pd.DataFrame,
         analytics: PerformanceAnalyticsSnapshot,
+        symbol: str,
+        locked_strategy: str | None,
     ) -> list[StrategyCandidate]:
         """Build normalized candidate inputs for all registered strategies."""
         persisted_configs = self.repository.load_strategy_configs()
@@ -446,6 +804,14 @@ class TradingWorker:
                 except Exception:
                     required_data_available = False
                     latest_signal = 0.0
+
+            external_reasons: tuple[str, ...] = ()
+            if (
+                locked_strategy is not None
+                and strategy_name != locked_strategy
+                and not self.settings.worker_allow_multi_strategy_per_symbol
+            ):
+                external_reasons = (f"symbol_locked_by_active_strategy:{locked_strategy}",)
 
             strategy_metrics = metrics_by_strategy.get(strategy_name)
             if strategy_metrics is None:
@@ -474,6 +840,7 @@ class TradingWorker:
                     required_data_available=required_data_available,
                     compatible_regimes=strategy_compatible_regimes(strategy_name),
                     signal_confidence=min(max(abs(latest_signal), 0.0), 1.0),
+                    external_reasons=external_reasons,
                 )
             )
 
@@ -498,6 +865,7 @@ class TradingWorker:
         self,
         executor: PaperTradingExecutor,
         latest_price: float,
+        symbol: str,
     ) -> GlobalSelectionState:
         """Compute global gating state for deterministic eligibility checks."""
         current_equity = executor.current_equity()
@@ -506,12 +874,12 @@ class TradingWorker:
         available_notional = float(min(self.settings.max_notional_per_trade, max_position_notional))
 
         active_positions = sum(1 for item in executor.positions.values() if item.quantity > EPSILON)
-        has_worker_symbol_position = (
-            executor.positions.get(self.settings.worker_symbol) is not None
-            and float(executor.positions[self.settings.worker_symbol].quantity) > EPSILON
+        has_symbol_position = (
+            executor.positions.get(symbol) is not None
+            and float(executor.positions[symbol].quantity) > EPSILON
         )
         max_positions_breached = (
-            active_positions >= self.settings.max_open_positions and not has_worker_symbol_position
+            active_positions >= self.settings.max_open_positions and not has_symbol_position
         )
 
         return GlobalSelectionState(
@@ -529,13 +897,15 @@ class TradingWorker:
         self,
         run_id: str,
         cycle_key: str,
+        symbol: str,
         decision: SelectionDecision,
     ) -> None:
         """Emit structured selection logs for auditability and debugging."""
         for candidate in decision.candidates:
             LOGGER.info(
-                "strategy_eligibility_decision cycle_key=%s strategy=%s eligible=%s reasons=%s",
+                "strategy_eligibility_decision cycle_key=%s symbol=%s strategy=%s eligible=%s reasons=%s",
                 cycle_key,
+                symbol,
                 candidate.strategy,
                 candidate.eligible,
                 ",".join(candidate.reasons) if candidate.reasons else "none",
@@ -547,6 +917,7 @@ class TradingWorker:
                 run_id=run_id,
                 payload={
                     "cycle_key": cycle_key,
+                    "symbol": symbol,
                     "strategy": candidate.strategy,
                     "eligible": candidate.eligible,
                     "reasons": list(candidate.reasons),
@@ -554,8 +925,9 @@ class TradingWorker:
             )
 
             LOGGER.info(
-                "strategy_score cycle_key=%s strategy=%s score=%.6f expectancy=%.6f sharpe=%.6f win_rate=%.6f regime_fit=%.6f drawdown_penalty=%.6f",
+                "strategy_score cycle_key=%s symbol=%s strategy=%s score=%.6f expectancy=%.6f sharpe=%.6f win_rate=%.6f regime_fit=%.6f drawdown_penalty=%.6f",
                 cycle_key,
+                symbol,
                 candidate.strategy,
                 candidate.score,
                 candidate.recent_expectancy,
@@ -571,6 +943,7 @@ class TradingWorker:
                 run_id=run_id,
                 payload={
                     "cycle_key": cycle_key,
+                    "symbol": symbol,
                     "strategy": candidate.strategy,
                     "score": float(candidate.score),
                     "expectancy": float(candidate.recent_expectancy),
@@ -589,14 +962,16 @@ class TradingWorker:
                     run_id=run_id,
                     payload={
                         "cycle_key": cycle_key,
+                        "symbol": symbol,
                         "strategy": candidate.strategy,
                         "reasons": list(candidate.reasons),
                     },
                 )
 
         LOGGER.info(
-            "strategy_selected cycle_key=%s strategy=%s score=%.6f",
+            "strategy_selected cycle_key=%s symbol=%s strategy=%s score=%.6f",
             cycle_key,
+            symbol,
             decision.selected_strategy or "none",
             decision.selected_score,
         )
@@ -607,6 +982,7 @@ class TradingWorker:
             run_id=run_id,
             payload={
                 "cycle_key": cycle_key,
+                "symbol": symbol,
                 "selected_strategy": decision.selected_strategy,
                 "selected_score": float(decision.selected_score),
                 "regime": decision.regime,
@@ -614,8 +990,9 @@ class TradingWorker:
         )
 
         LOGGER.info(
-            "sizing_decision cycle_key=%s strategy=%s sizing_multiplier=%.4f allocation_fraction=%.4f",
+            "sizing_decision cycle_key=%s symbol=%s strategy=%s sizing_multiplier=%.4f allocation_fraction=%.4f",
             cycle_key,
+            symbol,
             decision.selected_strategy or "none",
             decision.sizing_multiplier,
             decision.allocation_fraction,
@@ -627,6 +1004,7 @@ class TradingWorker:
             run_id=run_id,
             payload={
                 "cycle_key": cycle_key,
+                "symbol": symbol,
                 "selected_strategy": decision.selected_strategy,
                 "sizing_multiplier": float(decision.sizing_multiplier),
                 "allocation_fraction": float(decision.allocation_fraction),
@@ -635,6 +1013,7 @@ class TradingWorker:
 
     def _build_order(
         self,
+        symbol: str,
         selected_strategy: str | None,
         selected_signal: float,
         latest_price: float,
@@ -650,7 +1029,7 @@ class TradingWorker:
             if quantity <= EPSILON:
                 return None
             return Order(
-                symbol=self.settings.worker_symbol,
+                symbol=symbol,
                 side="BUY",
                 quantity=quantity,
                 price=latest_price,
@@ -659,7 +1038,7 @@ class TradingWorker:
 
         if (selected_strategy is None or selected_signal <= EPSILON) and current_qty > EPSILON:
             return Order(
-                symbol=self.settings.worker_symbol,
+                symbol=symbol,
                 side="SELL",
                 quantity=current_qty,
                 price=latest_price,
@@ -667,11 +1046,17 @@ class TradingWorker:
             )
         return None
 
-    def _cycle_key(self, timestamp: pd.Timestamp) -> str:
-        """Derive cycle key for idempotency based on timeframe granularity."""
+    def _heartbeat_cycle_key(self, timestamp: pd.Timestamp) -> str:
+        """Derive a cross-universe cycle key for worker heartbeat updates."""
         if self.settings.worker_timeframe.endswith("d"):
-            return f"{self.settings.worker_symbol}:{self.settings.worker_timeframe}:{timestamp.strftime('%Y-%m-%d')}"
+            return f"{self.settings.worker_timeframe}:{timestamp.strftime('%Y-%m-%d')}"
+        return f"{self.settings.worker_timeframe}:{timestamp.floor('min').strftime('%Y-%m-%dT%H:%M')}"
+
+    def _cycle_key(self, symbol: str, timestamp: pd.Timestamp) -> str:
+        """Derive per-symbol cycle key for idempotent symbol execution."""
+        if self.settings.worker_timeframe.endswith("d"):
+            return f"{symbol}:{self.settings.worker_timeframe}:{timestamp.strftime('%Y-%m-%d')}"
         return (
-            f"{self.settings.worker_symbol}:{self.settings.worker_timeframe}:"
+            f"{symbol}:{self.settings.worker_timeframe}:"
             f"{timestamp.floor('min').strftime('%Y-%m-%dT%H:%M')}"
         )

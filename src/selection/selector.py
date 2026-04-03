@@ -49,6 +49,7 @@ class StrategyCandidate:
     required_data_available: bool
     compatible_regimes: tuple[str, ...]
     signal_confidence: float = 0.0
+    external_reasons: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -178,6 +179,9 @@ class StrategySelector:
 
         if not candidate.enabled:
             reasons.append("strategy_disabled")
+        for reason in candidate.external_reasons:
+            if reason.strip():
+                reasons.append(reason.strip())
         if global_state.kill_switch_enabled:
             reasons.append("kill_switch_enabled")
         if not global_state.paper_trading_enabled:

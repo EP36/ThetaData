@@ -161,6 +161,7 @@ Core endpoints:
 - `GET /api/analytics/portfolio`
 - `GET /api/analytics/context`
 - `GET /api/selection/status`
+- `GET /api/worker/execution-status`
 - `POST /api/system/kill-switch`
 - `GET /healthz`
 - `GET /api/system/status`
@@ -234,6 +235,76 @@ Selection diagnostics are exposed via `/api/selection/status`, including:
 - rejection reasons for non-selected strategies
 - sizing/allocation decision
 
+### Worker Execution Model (Universe + Conflict Rules)
+
+Universe source of truth:
+- `WORKER_SYMBOLS` (comma-separated) provides the explicit candidate universe.
+- If `WORKER_SYMBOLS` is blank, fallback is `WORKER_SYMBOL` (single-symbol compatibility mode).
+- `WORKER_UNIVERSE_MODE` controls shortlist behavior:
+  - `static`
+  - `top_gainers`
+  - `top_losers`
+  - `high_relative_volume`
+  - `index_constituents` (uses explicit `WORKER_SYMBOLS` as deterministic constituent input)
+- Scanner applies deterministic filters before strategy evaluation:
+  - `MIN_PRICE`
+  - `MIN_AVG_VOLUME`
+  - `MIN_RELATIVE_VOLUME`
+  - `MAX_SPREAD_PCT` (only when quote columns exist)
+  - stale intraday-data exclusion
+- `WORKER_MAX_CANDIDATES` limits shortlist size for each worker cycle.
+- Default behavior is paper-only and non-executing until both `PAPER_TRADING=true` and `WORKER_ENABLE_TRADING=true`.
+
+Cycle behavior:
+1. Worker scans the configured symbol universe.
+2. Scanner filters/ranks symbols and produces a deterministic shortlist.
+3. Only shortlisted symbols are evaluated by enabled strategies.
+4. For each shortlisted symbol, one strategy is selected (or none) by the selector.
+5. Orders are generated only from the selected strategy outcome.
+
+Multiple enabled strategies:
+- Enabled strategies are **eligible candidates**, not auto-executed orders.
+- The selector chooses one strategy per symbol decision context.
+- Rejected/deprioritized strategies include explicit reasons in logs and API payloads.
+
+Same-symbol conflict prevention:
+- By default, only one strategy can actively manage an open position per symbol.
+- The worker persists a per-symbol active strategy lock and blocks other strategies with reason:
+  - `symbol_locked_by_active_strategy:<strategy>`
+- Lock is released when the symbol position is fully closed.
+- Override is explicit: `WORKER_ALLOW_MULTI_STRATEGY_PER_SYMBOL=true`.
+
+Operational visibility:
+- `GET /api/worker/execution-status` returns:
+  - universe mode
+  - configured universe symbols
+  - scanned symbols
+  - shortlisted symbols
+  - selected symbol + strategy summary
+  - symbol-level filter reasons
+  - per-symbol active strategy lock
+  - latest per-symbol action/order status
+  - rejected/skipped strategy reasons from the latest decision
+
+Universe mode examples:
+```bash
+# 1) Static watchlist
+WORKER_UNIVERSE_MODE=static
+WORKER_SYMBOLS=SPY,QQQ,AAPL,MSFT
+
+# 2) Top gainers/losers from configured universe
+WORKER_UNIVERSE_MODE=top_gainers
+# or: WORKER_UNIVERSE_MODE=top_losers
+WORKER_SYMBOLS=SPY,QQQ,NVDA,TSLA,AMD,AAPL,META,AMZN,MSFT,GOOGL
+WORKER_MAX_CANDIDATES=5
+
+# 3) High relative volume mode
+WORKER_UNIVERSE_MODE=high_relative_volume
+WORKER_SYMBOLS=SPY,QQQ,NVDA,TSLA,AMD,AAPL,META,AMZN,MSFT,GOOGL
+MIN_RELATIVE_VOLUME=1.5
+WORKER_MAX_CANDIDATES=5
+```
+
 ### Why a Strategy Can Be Blocked While Enabled
 
 Even when a strategy is enabled, it can still be blocked for safety/quality reasons such as:
@@ -268,7 +339,6 @@ Provider selection:
 
 For Alpaca mode, set:
 - `ALPACA_API_KEY` and `ALPACA_API_SECRET`
-  - fallback supported: `BROKER_API_KEY` and `BROKER_API_SECRET`
 - optional: `ALPACA_DATA_BASE_URL` and `ALPACA_DATA_FEED` (default `iex`)
 
 Current timeframe support in Alpaca mode:
@@ -284,6 +354,41 @@ Backtest risk + sizing defaults:
 - hard cap `max_position_size = 25%`
 - hard cap `max_open_positions = 3`
 - orders violating risk checks are rejected and logged
+
+### Environment Contract: Market Data vs Execution
+
+Canonical market-data env vars:
+- `ALPACA_API_KEY`
+- `ALPACA_API_SECRET`
+- `ALPACA_DATA_BASE_URL`
+- `ALPACA_DATA_FEED`
+
+Canonical execution env vars:
+- `ALPACA_API_KEY`
+- `ALPACA_API_SECRET`
+- `ALPACA_BASE_URL`
+
+Current behavior:
+- Execution is still paper-only (`PaperTradingExecutor` + `SimulatedPaperBroker`).
+- `ALPACA_BASE_URL` is now part of the canonical execution config contract and is loaded by runtime settings for worker/web services.
+- No live trading path is enabled by default.
+
+Backward compatibility:
+- `ALPACA_SECRET_KEY` is accepted as a temporary fallback for `ALPACA_API_SECRET`.
+- Canonical name remains `ALPACA_API_SECRET`; prefer it in all new deployments.
+
+### Web Service vs Worker Service Alpaca Env Table
+
+| Env Var | Web Service | Worker Service | Notes |
+|---|---|---|---|
+| `ALPACA_API_KEY` | Required if `DATA_PROVIDER=alpaca` | Required if `DATA_PROVIDER=alpaca` | Shared Alpaca credential |
+| `ALPACA_API_SECRET` | Required if `DATA_PROVIDER=alpaca` | Required if `DATA_PROVIDER=alpaca` | Shared Alpaca credential |
+| `ALPACA_DATA_BASE_URL` | Optional | Optional | Default: `https://data.alpaca.markets` |
+| `ALPACA_DATA_FEED` | Optional | Optional | Default: `iex` |
+| `ALPACA_BASE_URL` | Optional (recommended for parity) | Recommended | Canonical execution base URL, default `https://paper-api.alpaca.markets` |
+| `ALPACA_SECRET_KEY` | Optional (legacy only) | Optional (legacy only) | Deprecated fallback alias for `ALPACA_API_SECRET` |
+
+Full contract reference: [`docs/alpaca-env-contract.md`](docs/alpaca-env-contract.md)
 
 ## Render Deployment (Web + Worker + Postgres)
 
@@ -339,9 +444,17 @@ Recommended:
 - `STRICT_ENV_VALIDATION=true`
 - `WORKER_POLL_SECONDS=60`
 - `WORKER_SYMBOL=SPY`
+- `WORKER_UNIVERSE_MODE=static`
+- `WORKER_MAX_CANDIDATES=10`
 - `WORKER_TIMEFRAME=1d`
 - `WORKER_STRATEGY=moving_average_crossover`
 - `WORKER_STRATEGY_PARAMS_JSON={}`
+- `WORKER_SYMBOLS=SPY,QQQ`
+- `WORKER_ALLOW_MULTI_STRATEGY_PER_SYMBOL=false`
+- `MIN_PRICE=1.0`
+- `MIN_AVG_VOLUME=100000`
+- `MIN_RELATIVE_VOLUME=0.0`
+- `MAX_SPREAD_PCT=1.0`
 
 ### Worker and Web Separation
 

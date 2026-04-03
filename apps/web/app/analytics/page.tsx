@@ -129,6 +129,94 @@ export default function AnalyticsPage() {
 
       <article className="glass-panel rounded-2xl p-4">
         <h3 className="text-sm font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
+          Worker Universe & Active Strategy Locks
+        </h3>
+        <p className="mt-2 text-sm text-[var(--muted)]">
+          Worker <strong>{data.execution.workerName}</strong> on timeframe{" "}
+          <strong>{data.execution.timeframe}</strong>. Mode:{" "}
+          <strong>{data.execution.universeMode}</strong>. Configured universe:{" "}
+          {data.execution.universeSymbols.length > 0
+            ? data.execution.universeSymbols.join(", ")
+            : "none configured"}
+          . Scanned:{" "}
+          {data.execution.scannedSymbols.length > 0
+            ? data.execution.scannedSymbols.join(", ")
+            : "none"}
+          . Shortlisted:{" "}
+          {data.execution.shortlistedSymbols.length > 0
+            ? data.execution.shortlistedSymbols.join(", ")
+            : "none"}
+          . Selected symbol/strategy:{" "}
+          <strong>
+            {data.execution.selectedSymbol ?? "none"} / {data.execution.selectedStrategy ?? "none"}
+          </strong>
+          . Per-symbol multi-strategy:{" "}
+          {data.execution.allowMultiStrategyPerSymbol ? "enabled" : "disabled"}.
+        </p>
+        {Object.keys(data.execution.symbolFilterReasons).length > 0 && (
+          <div className="mt-3 overflow-x-auto">
+            <table className="data-table text-sm">
+              <thead>
+                <tr>
+                  <th>Filtered Symbol</th>
+                  <th>Filter Reasons</th>
+                </tr>
+              </thead>
+              <tbody>
+                {Object.entries(data.execution.symbolFilterReasons).map(([symbol, reasons]) => (
+                  <tr key={symbol}>
+                    <td>{symbol}</td>
+                    <td>{reasons.length > 0 ? reasons.join(", ") : "none"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {data.execution.symbols.length === 0 ? (
+          <p className="mt-3 text-sm text-[var(--muted)]">No worker execution data yet.</p>
+        ) : (
+          <div className="mt-3 overflow-x-auto">
+            <table className="data-table text-sm">
+              <thead>
+                <tr>
+                  <th>Symbol</th>
+                  <th>Active Strategy</th>
+                  <th>Latest Selected</th>
+                  <th>Action</th>
+                  <th>Order Status</th>
+                  <th>Rejected/Skipped Reasons</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.execution.symbols.map((row) => {
+                  const rejected = row.candidates.filter(
+                    (item) => !item.eligible || item.reasons.length > 0
+                  );
+                  const reasons = [
+                    ...row.rejectionReasons,
+                    ...rejected.flatMap((item) => item.reasons)
+                  ];
+                  const uniqueReasons = [...new Set(reasons)];
+                  return (
+                    <tr key={row.symbol}>
+                      <td>{row.symbol}</td>
+                      <td>{row.activeStrategy ?? "none"}</td>
+                      <td>{row.selectedStrategy ?? "none"}</td>
+                      <td>{row.action}</td>
+                      <td>{row.orderStatus ?? "n/a"}</td>
+                      <td>{uniqueReasons.length > 0 ? uniqueReasons.join(", ") : "none"}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </article>
+
+      <article className="glass-panel rounded-2xl p-4">
+        <h3 className="text-sm font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
           Strategy Scores
         </h3>
         {data.selection.candidates.length === 0 ? (

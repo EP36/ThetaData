@@ -263,6 +263,44 @@ class SelectionStatusResponse(BaseModel):
     candidates: list[StrategyScoreResponse]
 
 
+class WorkerSymbolDecisionResponse(BaseModel):
+    """Latest worker execution decision for one symbol."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    symbol: str
+    timeframe: str
+    run_id: Optional[str]
+    updated_at: Optional[datetime]
+    action: str
+    order_status: Optional[str]
+    selected_strategy: Optional[str]
+    active_strategy: Optional[str]
+    selected_score: float
+    rejection_reasons: list[str]
+    candidates: list[StrategyScoreResponse]
+
+
+class WorkerExecutionStatusResponse(BaseModel):
+    """Worker execution model visibility for universe, locks, and recent decisions."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    generated_at: datetime
+    worker_name: str
+    timeframe: str
+    universe_mode: str
+    universe_symbols: list[str]
+    scanned_symbols: list[str]
+    shortlisted_symbols: list[str]
+    allow_multi_strategy_per_symbol: bool
+    selected_symbol: Optional[str]
+    selected_strategy: Optional[str]
+    symbol_filter_reasons: dict[str, list[str]]
+    active_strategy_by_symbol: dict[str, str]
+    symbols: list[WorkerSymbolDecisionResponse]
+
+
 class DashboardSummaryResponse(BaseModel):
     """Top-level dashboard summary data."""
 

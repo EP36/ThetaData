@@ -8,7 +8,8 @@ import type {
   SelectionStatusData,
   StrategyAnalyticsData,
   StrategyConfig,
-  TradeRow
+  TradeRow,
+  WorkerExecutionStatusData
 } from "@/lib/types";
 
 type ApiPoint = {
@@ -191,6 +192,36 @@ type ApiSelectionStatusResponse = {
   sizing_multiplier: number;
   allocation_fraction: number;
   candidates: ApiStrategyScore[];
+};
+
+type ApiWorkerSymbolDecision = {
+  symbol: string;
+  timeframe: string;
+  run_id: string | null;
+  updated_at: string | null;
+  action: string;
+  order_status: string | null;
+  selected_strategy: string | null;
+  active_strategy: string | null;
+  selected_score: number;
+  rejection_reasons: string[];
+  candidates: ApiStrategyScore[];
+};
+
+type ApiWorkerExecutionStatusResponse = {
+  generated_at: string;
+  worker_name: string;
+  timeframe: string;
+  universe_mode: string;
+  universe_symbols: string[];
+  scanned_symbols: string[];
+  shortlisted_symbols: string[];
+  allow_multi_strategy_per_symbol: boolean;
+  selected_symbol: string | null;
+  selected_strategy: string | null;
+  symbol_filter_reasons: Record<string, string[]>;
+  active_strategy_by_symbol: Record<string, string>;
+  symbols: ApiWorkerSymbolDecision[];
 };
 
 function apiBaseUrl(): string {
@@ -427,6 +458,19 @@ export async function getContextAnalytics(): Promise<ContextAnalyticsData> {
 
 export async function getSelectionStatus(): Promise<SelectionStatusData> {
   const payload = await fetchJson<ApiSelectionStatusResponse>("/api/selection/status");
+  const mapScore = (item: ApiStrategyScore) => ({
+    strategy: item.strategy,
+    signal: item.signal,
+    eligible: item.eligible,
+    reasons: item.reasons,
+    score: item.score,
+    recentExpectancy: item.recent_expectancy,
+    recentSharpe: item.recent_sharpe,
+    winRate: item.win_rate,
+    drawdownPenalty: item.drawdown_penalty,
+    regimeFit: item.regime_fit,
+    sizingMultiplier: item.sizing_multiplier
+  });
   return {
     generatedAt: payload.generated_at,
     regime: payload.regime,
@@ -436,18 +480,50 @@ export async function getSelectionStatus(): Promise<SelectionStatusData> {
     minimumScoreThreshold: payload.minimum_score_threshold,
     sizingMultiplier: payload.sizing_multiplier,
     allocationFraction: payload.allocation_fraction,
-    candidates: payload.candidates.map((item) => ({
-      strategy: item.strategy,
-      signal: item.signal,
-      eligible: item.eligible,
-      reasons: item.reasons,
-      score: item.score,
-      recentExpectancy: item.recent_expectancy,
-      recentSharpe: item.recent_sharpe,
-      winRate: item.win_rate,
-      drawdownPenalty: item.drawdown_penalty,
-      regimeFit: item.regime_fit,
-      sizingMultiplier: item.sizing_multiplier
+    candidates: payload.candidates.map(mapScore)
+  };
+}
+
+export async function getWorkerExecutionStatus(): Promise<WorkerExecutionStatusData> {
+  const payload = await fetchJson<ApiWorkerExecutionStatusResponse>("/api/worker/execution-status");
+  const mapScore = (item: ApiStrategyScore) => ({
+    strategy: item.strategy,
+    signal: item.signal,
+    eligible: item.eligible,
+    reasons: item.reasons,
+    score: item.score,
+    recentExpectancy: item.recent_expectancy,
+    recentSharpe: item.recent_sharpe,
+    winRate: item.win_rate,
+    drawdownPenalty: item.drawdown_penalty,
+    regimeFit: item.regime_fit,
+    sizingMultiplier: item.sizing_multiplier
+  });
+  return {
+    generatedAt: payload.generated_at,
+    workerName: payload.worker_name,
+    timeframe: payload.timeframe,
+    universeMode: payload.universe_mode,
+    universeSymbols: payload.universe_symbols,
+    scannedSymbols: payload.scanned_symbols,
+    shortlistedSymbols: payload.shortlisted_symbols,
+    allowMultiStrategyPerSymbol: payload.allow_multi_strategy_per_symbol,
+    selectedSymbol: payload.selected_symbol,
+    selectedStrategy: payload.selected_strategy,
+    symbolFilterReasons: payload.symbol_filter_reasons,
+    activeStrategyBySymbol: payload.active_strategy_by_symbol,
+    symbols: payload.symbols.map((item) => ({
+      symbol: item.symbol,
+      timeframe: item.timeframe,
+      runId: item.run_id,
+      updatedAt: item.updated_at,
+      action: item.action,
+      orderStatus: item.order_status,
+      selectedStrategy: item.selected_strategy,
+      activeStrategy: item.active_strategy,
+      selectedScore: item.selected_score,
+      rejectionReasons: item.rejection_reasons,
+      candidates: item.candidates.map(mapScore)
     }))
   };
 }

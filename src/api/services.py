@@ -35,6 +35,8 @@ from src.api.schemas import (
     SymbolExposureResponse,
     TradeRecord,
     TradesResponse,
+    WorkerExecutionStatusResponse,
+    WorkerSymbolDecisionResponse,
 )
 from src.analytics.performance_layer import (
     ContextBucketPerformance,
@@ -201,6 +203,34 @@ def _context_bucket_to_response(item: ContextBucketPerformance) -> ContextBucket
         sharpe=float(item.sharpe),
         total_pnl=float(item.total_pnl),
     )
+
+
+def _candidate_rows_from_selection(selection: dict[str, Any]) -> list[StrategyScoreResponse]:
+    """Parse selection payload candidate rows into typed API models."""
+    candidates = selection.get("candidates")
+    candidate_rows: list[StrategyScoreResponse] = []
+    if not isinstance(candidates, list):
+        return candidate_rows
+
+    for item in candidates:
+        if not isinstance(item, dict):
+            continue
+        candidate_rows.append(
+            StrategyScoreResponse(
+                strategy=str(item.get("strategy") or ""),
+                signal=float(item.get("signal") or 0.0),
+                eligible=bool(item.get("eligible", False)),
+                reasons=[str(reason) for reason in item.get("reasons", [])],
+                score=float(item.get("score") or 0.0),
+                recent_expectancy=float(item.get("recent_expectancy") or 0.0),
+                recent_sharpe=float(item.get("recent_sharpe") or 0.0),
+                win_rate=float(item.get("win_rate") or 0.0),
+                drawdown_penalty=float(item.get("drawdown_penalty") or 0.0),
+                regime_fit=float(item.get("regime_fit") or 0.0),
+                sizing_multiplier=float(item.get("sizing_multiplier") or 0.0),
+            )
+        )
+    return candidate_rows
 
 
 @dataclass(slots=True)
@@ -874,27 +904,7 @@ class TradingApiService:
                 candidates=[],
             )
 
-        candidates = latest_selection.get("candidates")
-        candidate_rows: list[StrategyScoreResponse] = []
-        if isinstance(candidates, list):
-            for item in candidates:
-                if not isinstance(item, dict):
-                    continue
-                candidate_rows.append(
-                    StrategyScoreResponse(
-                        strategy=str(item.get("strategy") or ""),
-                        signal=float(item.get("signal") or 0.0),
-                        eligible=bool(item.get("eligible", False)),
-                        reasons=[str(reason) for reason in item.get("reasons", [])],
-                        score=float(item.get("score") or 0.0),
-                        recent_expectancy=float(item.get("recent_expectancy") or 0.0),
-                        recent_sharpe=float(item.get("recent_sharpe") or 0.0),
-                        win_rate=float(item.get("win_rate") or 0.0),
-                        drawdown_penalty=float(item.get("drawdown_penalty") or 0.0),
-                        regime_fit=float(item.get("regime_fit") or 0.0),
-                        sizing_multiplier=float(item.get("sizing_multiplier") or 0.0),
-                    )
-                )
+        candidate_rows = _candidate_rows_from_selection(latest_selection)
 
         regime_signals = latest_selection.get("regime_signals")
         return SelectionStatusResponse(
@@ -914,6 +924,230 @@ class TradingApiService:
             sizing_multiplier=float(latest_selection.get("sizing_multiplier") or 0.0),
             allocation_fraction=float(latest_selection.get("allocation_fraction") or 0.0),
             candidates=candidate_rows,
+        )
+
+    def worker_execution_status(self) -> WorkerExecutionStatusResponse:
+        """Return worker execution model details for universe, locks, and decisions."""
+        generated_at = pd.Timestamp.utcnow().to_pydatetime()
+        worker_name = (
+            self.deployment_settings.worker_name
+            if self.deployment_settings is not None
+            else "default-worker"
+        )
+        timeframe = (
+            self.deployment_settings.worker_timeframe
+            if self.deployment_settings is not None
+            else "1d"
+        )
+        universe_mode = (
+            self.deployment_settings.worker_universe_mode
+            if self.deployment_settings is not None
+            else "static"
+        )
+        universe = (
+            list(self.deployment_settings.worker_symbols)
+            if self.deployment_settings is not None
+            else [self.last_backtest_symbol]
+        )
+        scanned_symbols = list(universe)
+        shortlisted_symbols = list(universe)
+        symbol_filter_reasons: dict[str, list[str]] = {}
+        allow_multi = (
+            self.deployment_settings.worker_allow_multi_strategy_per_symbol
+            if self.deployment_settings is not None
+            else False
+        )
+
+        if self.repository is None:
+            return WorkerExecutionStatusResponse(
+                generated_at=generated_at,
+                worker_name=worker_name,
+                timeframe=timeframe,
+                universe_mode=universe_mode,
+                universe_symbols=universe,
+                scanned_symbols=scanned_symbols,
+                shortlisted_symbols=shortlisted_symbols,
+                allow_multi_strategy_per_symbol=allow_multi,
+                selected_symbol=None,
+                selected_strategy=None,
+                symbol_filter_reasons=symbol_filter_reasons,
+                active_strategy_by_symbol={},
+                symbols=[
+                    WorkerSymbolDecisionResponse(
+                        symbol=symbol,
+                        timeframe=timeframe,
+                        run_id=None,
+                        updated_at=None,
+                        action="no_recent_run",
+                        order_status=None,
+                        selected_strategy=None,
+                        active_strategy=None,
+                        selected_score=0.0,
+                        rejection_reasons=[],
+                        candidates=[],
+                    )
+                    for symbol in universe
+                ],
+            )
+
+        for event in self.repository.recent_log_events(limit=300, event="worker_universe_scan"):
+            payload = event.get("payload")
+            payload_map = dict(payload) if isinstance(payload, dict) else {}
+            if str(payload_map.get("worker_name") or "") != worker_name:
+                continue
+
+            scanned_raw = payload_map.get("scanned_symbols")
+            shortlist_raw = payload_map.get("shortlisted_symbols")
+            reasons_raw = payload_map.get("filtered_out_reasons")
+            if isinstance(scanned_raw, list):
+                scanned_symbols = [str(item).upper() for item in scanned_raw if str(item).strip()]
+            if isinstance(shortlist_raw, list):
+                shortlisted_symbols = [str(item).upper() for item in shortlist_raw if str(item).strip()]
+            if isinstance(reasons_raw, dict):
+                parsed_reasons: dict[str, list[str]] = {}
+                for symbol, reasons in reasons_raw.items():
+                    symbol_key = str(symbol).upper().strip()
+                    if not symbol_key:
+                        continue
+                    if isinstance(reasons, list):
+                        parsed_reasons[symbol_key] = [str(item) for item in reasons if str(item).strip()]
+                symbol_filter_reasons = parsed_reasons
+
+            event_timestamp = event.get("timestamp")
+            if event_timestamp is not None:
+                event_time = pd.Timestamp(event_timestamp).to_pydatetime()
+                if event_time > generated_at:
+                    generated_at = event_time
+            break
+
+        lock_rows = self.repository.list_symbol_strategy_locks()
+        active_strategy_by_symbol = {
+            symbol: str(details.get("strategy") or "")
+            for symbol, details in lock_rows.items()
+            if str(details.get("strategy") or "").strip()
+        }
+
+        latest_run_by_symbol: dict[str, dict[str, Any]] = {}
+        for run in self.repository.recent_runs(limit=500):
+            service = str(run.get("service") or "")
+            if not service.startswith("worker:"):
+                continue
+            symbol = str(run.get("symbol") or "").upper()
+            if not symbol or symbol in latest_run_by_symbol:
+                continue
+            latest_run_by_symbol[symbol] = run
+
+        symbols_ordered: list[str] = []
+        for symbol in shortlisted_symbols + scanned_symbols + list(universe):
+            symbol_key = str(symbol).upper().strip()
+            if symbol_key and symbol_key not in symbols_ordered:
+                symbols_ordered.append(symbol_key)
+        for symbol in sorted(active_strategy_by_symbol):
+            if symbol not in symbols_ordered:
+                symbols_ordered.append(symbol)
+
+        symbol_rows: list[WorkerSymbolDecisionResponse] = []
+        for symbol in symbols_ordered:
+            run = latest_run_by_symbol.get(symbol)
+            if run is None:
+                symbol_rows.append(
+                    WorkerSymbolDecisionResponse(
+                        symbol=symbol,
+                        timeframe=timeframe,
+                        run_id=None,
+                        updated_at=None,
+                        action="no_recent_run",
+                        order_status=None,
+                        selected_strategy=None,
+                        active_strategy=active_strategy_by_symbol.get(symbol),
+                        selected_score=0.0,
+                        rejection_reasons=[],
+                        candidates=[],
+                    )
+                )
+                continue
+
+            details = run.get("details")
+            details_map = dict(details) if isinstance(details, dict) else {}
+            selection = details_map.get("selection")
+            selection_map = dict(selection) if isinstance(selection, dict) else {}
+            candidate_rows = _candidate_rows_from_selection(selection_map)
+            updated_at_raw = run.get("completed_at") or run.get("started_at")
+            updated_at = (
+                pd.Timestamp(updated_at_raw).to_pydatetime()
+                if updated_at_raw is not None
+                else None
+            )
+            rejection_reasons = [
+                str(item)
+                for item in details_map.get("rejection_reasons", [])
+                if str(item).strip()
+            ]
+            symbol_rows.append(
+                WorkerSymbolDecisionResponse(
+                    symbol=symbol,
+                    timeframe=str(run.get("timeframe") or timeframe),
+                    run_id=(
+                        str(run.get("run_id"))
+                        if run.get("run_id") is not None
+                        else None
+                    ),
+                    updated_at=updated_at,
+                    action=str(details_map.get("action") or run.get("status") or "unknown"),
+                    order_status=(
+                        str(details_map.get("order_status"))
+                        if details_map.get("order_status") is not None
+                        else None
+                    ),
+                    selected_strategy=(
+                        str(selection_map.get("selected_strategy"))
+                        if selection_map.get("selected_strategy") is not None
+                        else None
+                    ),
+                    active_strategy=(
+                        str(details_map.get("active_strategy"))
+                        if details_map.get("active_strategy") is not None
+                        else active_strategy_by_symbol.get(symbol)
+                    ),
+                    selected_score=float(selection_map.get("selected_score") or 0.0),
+                    rejection_reasons=rejection_reasons,
+                    candidates=candidate_rows,
+                )
+            )
+            if updated_at is not None and updated_at > generated_at:
+                generated_at = updated_at
+
+        selected_row = next(
+            (
+                row
+                for row in sorted(
+                    symbol_rows,
+                    key=lambda item: (item.selected_score, item.updated_at or generated_at),
+                    reverse=True,
+                )
+                if row.selected_strategy is not None
+            ),
+            None,
+        )
+
+        return WorkerExecutionStatusResponse(
+            generated_at=generated_at,
+            worker_name=worker_name,
+            timeframe=timeframe,
+            universe_mode=universe_mode,
+            universe_symbols=list(universe),
+            scanned_symbols=scanned_symbols,
+            shortlisted_symbols=shortlisted_symbols,
+            allow_multi_strategy_per_symbol=allow_multi,
+            selected_symbol=(selected_row.symbol if selected_row is not None else None),
+            selected_strategy=(
+                selected_row.selected_strategy
+                if selected_row is not None
+                else None
+            ),
+            symbol_filter_reasons=symbol_filter_reasons,
+            active_strategy_by_symbol=active_strategy_by_symbol,
+            symbols=symbol_rows,
         )
 
     def system_status(self) -> ServiceStatusResponse:

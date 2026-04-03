@@ -4,6 +4,12 @@ from __future__ import annotations
 
 import os
 
+from src.config.alpaca import (
+    read_alpaca_api_key,
+    read_alpaca_api_secret,
+    read_alpaca_data_base_url,
+    read_alpaca_data_feed,
+)
 from src.data.providers.alpaca import AlpacaMarketDataProvider
 from src.data.providers.base import MarketDataProvider
 from src.data.providers.synthetic import SyntheticMarketDataProvider
@@ -21,18 +27,18 @@ def make_market_data_provider_from_env() -> MarketDataProvider:
         return SyntheticMarketDataProvider()
 
     if provider_name == "alpaca":
-        api_key = os.getenv("ALPACA_API_KEY", os.getenv("BROKER_API_KEY", "")).strip()
-        api_secret = os.getenv("ALPACA_API_SECRET", os.getenv("BROKER_API_SECRET", "")).strip()
+        api_key = read_alpaca_api_key()
+        api_secret = read_alpaca_api_secret()
         if not api_key or not api_secret:
             raise ValueError(
-                "DATA_PROVIDER=alpaca requires ALPACA_API_KEY/ALPACA_API_SECRET "
-                "(or BROKER_API_KEY/BROKER_API_SECRET)."
+                "DATA_PROVIDER=alpaca requires ALPACA_API_KEY and "
+                "ALPACA_API_SECRET (ALPACA_SECRET_KEY accepted temporarily)."
             )
         return AlpacaMarketDataProvider(
             api_key=api_key,
             api_secret=api_secret,
-            base_url=os.getenv("ALPACA_DATA_BASE_URL", "https://data.alpaca.markets").strip(),
-            feed=os.getenv("ALPACA_DATA_FEED", "iex").strip(),
+            base_url=read_alpaca_data_base_url(),
+            feed=read_alpaca_data_feed(),
         )
 
     raise ValueError(

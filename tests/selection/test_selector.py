@@ -181,3 +181,31 @@ def test_no_eligible_strategy_results_in_no_trade() -> None:
     )
     assert decision.selected_strategy is None
     assert decision.allocation_fraction == 0.0
+
+
+def test_external_reasons_force_ineligibility() -> None:
+    selector = StrategySelector(SelectionConfig(min_recent_trades=1, min_score_threshold=0.0))
+    decision = selector.select(
+        regime=_regime("trending"),
+        global_state=_global_state(),
+        candidates=[
+            StrategyCandidate(
+                strategy="breakout_momentum",
+                enabled=True,
+                signal=1.0,
+                recent_expectancy=0.4,
+                recent_sharpe=0.8,
+                recent_win_rate=0.65,
+                recent_drawdown=0.04,
+                recent_trades=20,
+                required_data_available=True,
+                compatible_regimes=("trending",),
+                external_reasons=("symbol_locked_by_active_strategy:moving_average_crossover",),
+            )
+        ],
+    )
+    assert decision.selected_strategy is None
+    assert (
+        "symbol_locked_by_active_strategy:moving_average_crossover"
+        in decision.candidates[0].reasons
+    )

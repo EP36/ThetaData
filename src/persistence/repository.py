@@ -19,6 +19,7 @@ from src.persistence.models import (
     PortfolioStateModel,
     PositionModel,
     RunHistoryModel,
+    SymbolStrategyLockModel,
     StrategyConfigModel,
     WorkerHeartbeatModel,
 )
@@ -120,6 +121,54 @@ class PersistenceRepository:
                 }
                 for row in rows
             }
+
+    def list_symbol_strategy_locks(self) -> dict[str, dict[str, Any]]:
+        """Return active strategy locks keyed by symbol."""
+        with self.store.session() as session:
+            rows = session.scalars(select(SymbolStrategyLockModel)).all()
+            return {
+                row.symbol.upper(): {
+                    "strategy": row.strategy,
+                    "run_id": row.run_id,
+                    "reason": row.reason,
+                    "updated_at": row.updated_at,
+                }
+                for row in rows
+            }
+
+    def upsert_symbol_strategy_lock(
+        self,
+        symbol: str,
+        strategy: str,
+        run_id: str | None = None,
+        reason: str = "",
+    ) -> None:
+        """Persist or update the active strategy lock for a symbol."""
+        symbol_key = symbol.strip().upper()
+        if not symbol_key:
+            raise ValueError("symbol cannot be empty")
+        strategy_key = strategy.strip()
+        if not strategy_key:
+            raise ValueError("strategy cannot be empty")
+        with self.store.session() as session:
+            row = session.get(SymbolStrategyLockModel, symbol_key)
+            if row is None:
+                row = SymbolStrategyLockModel(symbol=symbol_key, strategy=strategy_key)
+                session.add(row)
+            row.strategy = strategy_key
+            row.run_id = run_id
+            row.reason = reason.strip()
+            row.updated_at = utc_now()
+
+    def release_symbol_strategy_lock(self, symbol: str) -> None:
+        """Remove active strategy lock for one symbol when no longer needed."""
+        symbol_key = symbol.strip().upper()
+        if not symbol_key:
+            return
+        with self.store.session() as session:
+            row = session.get(SymbolStrategyLockModel, symbol_key)
+            if row is not None:
+                session.delete(row)
 
     def record_worker_heartbeat(
         self,
@@ -442,6 +491,32 @@ class PersistenceRepository:
                     "error_message": row.error_message,
                     "started_at": row.started_at,
                     "completed_at": row.completed_at,
+                }
+                for row in rows
+            ]
+
+    def recent_log_events(
+        self,
+        limit: int = 200,
+        event: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return latest structured log events, optionally filtered by event name."""
+        with self.store.session() as session:
+            query = select(LogEventModel)
+            if event is not None:
+                query = query.where(LogEventModel.event == event)
+            rows = session.scalars(
+                query.order_by(LogEventModel.timestamp.desc()).limit(limit)
+            ).all()
+            return [
+                {
+                    "id": row.id,
+                    "run_id": row.run_id,
+                    "level": row.level,
+                    "logger": row.logger,
+                    "event": row.event,
+                    "payload": dict(row.payload or {}),
+                    "timestamp": row.timestamp,
                 }
                 for row in rows
             ]

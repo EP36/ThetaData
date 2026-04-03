@@ -104,3 +104,36 @@ def test_recent_fills_returns_only_persisted_fill_rows(tmp_path) -> None:
     assert len(rows) == 1
     assert rows[0]["symbol"] == "SPY"
     assert rows[0]["strategy"] == "moving_average_crossover"
+
+
+def test_symbol_strategy_lock_lifecycle(tmp_path) -> None:
+    db_path = tmp_path / "theta.db"
+    repository = PersistenceRepository(
+        store=DatabaseStore(database_url=f"sqlite+pysqlite:///{db_path}")
+    )
+    repository.initialize(starting_cash=50_000.0)
+
+    assert repository.list_symbol_strategy_locks() == {}
+
+    repository.upsert_symbol_strategy_lock(
+        symbol="spy",
+        strategy="moving_average_crossover",
+        run_id="run-1",
+        reason="position_open",
+    )
+    locks = repository.list_symbol_strategy_locks()
+    assert locks["SPY"]["strategy"] == "moving_average_crossover"
+    assert locks["SPY"]["run_id"] == "run-1"
+
+    repository.upsert_symbol_strategy_lock(
+        symbol="SPY",
+        strategy="breakout_momentum",
+        run_id="run-2",
+        reason="reselected",
+    )
+    locks = repository.list_symbol_strategy_locks()
+    assert locks["SPY"]["strategy"] == "breakout_momentum"
+    assert locks["SPY"]["run_id"] == "run-2"
+
+    repository.release_symbol_strategy_lock("spy")
+    assert repository.list_symbol_strategy_locks() == {}

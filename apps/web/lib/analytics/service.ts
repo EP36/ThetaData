@@ -1,6 +1,7 @@
 import {
   getContextAnalytics,
   getPortfolioAnalytics,
+  getWorkerExecutionStatus,
   getSelectionStatus,
   getStrategyAnalytics
 } from "@/lib/api/client";
@@ -8,7 +9,8 @@ import type {
   ContextAnalyticsData,
   PortfolioAnalyticsData,
   SelectionStatusData,
-  StrategyAnalyticsData
+  StrategyAnalyticsData,
+  WorkerExecutionStatusData
 } from "@/lib/types";
 
 export type AnalyticsData = {
@@ -16,20 +18,23 @@ export type AnalyticsData = {
   portfolio: PortfolioAnalyticsData;
   context: ContextAnalyticsData;
   selection: SelectionStatusData;
+  execution: WorkerExecutionStatusData;
 };
 
 export async function getAnalyticsData(): Promise<AnalyticsData> {
-  const [strategies, portfolio, context, selection] = await Promise.all([
+  const [strategies, portfolio, context, selection, execution] = await Promise.all([
     getStrategyAnalytics(),
     getPortfolioAnalytics(),
     getContextAnalytics(),
-    getSelectionStatus()
+    getSelectionStatus(),
+    getWorkerExecutionStatus()
   ]);
 
   return {
     strategies,
     portfolio,
     context,
-    selection
+    selection,
+    execution
   };
 }

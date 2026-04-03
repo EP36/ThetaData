@@ -21,9 +21,13 @@ If any required variable is missing, startup fails with a clear `ValueError` fro
 ## Not Required for Initial Paper Deployment
 
 These are optional for MVP paper deployment:
-- Alpaca credentials (`BROKER_API_KEY`, `BROKER_API_SECRET`) are placeholders and not used by default.
+- Alpaca market-data credentials (`ALPACA_API_KEY`, `ALPACA_API_SECRET`) are only needed when `DATA_PROVIDER=alpaca`.
+- Alpaca execution base URL (`ALPACA_BASE_URL`) is optional and defaults to `https://paper-api.alpaca.markets`.
+- Legacy fallback `ALPACA_SECRET_KEY` is accepted temporarily, but `ALPACA_API_SECRET` is canonical.
 - `DATA_API_KEY` is optional when using synthetic/local data flow.
 - Strategy/risk tuning vars (`WORKER_SYMBOL`, `WORKER_STRATEGY`, `MAX_DAILY_LOSS`, etc.) have safe defaults and can be added later.
+- Universe/selection controls (`WORKER_SYMBOLS`, `WORKER_ALLOW_MULTI_STRATEGY_PER_SYMBOL`) are optional and default to safe behavior.
+- Universe scanner controls (`WORKER_UNIVERSE_MODE`, `WORKER_MAX_CANDIDATES`, `MIN_PRICE`, `MIN_AVG_VOLUME`, `MIN_RELATIVE_VOLUME`, `MAX_SPREAD_PCT`) are optional and default to deterministic safe values.
 
 ## Notes
 

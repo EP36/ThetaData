@@ -8,14 +8,21 @@ import os
 
 from dotenv import load_dotenv
 
+from src.config.alpaca import (
+    read_alpaca_api_key,
+    read_alpaca_api_secret,
+    read_alpaca_execution_base_url,
+)
+
 
 @dataclass(slots=True)
 class Settings:
     """Container for configurable runtime parameters."""
 
     data_api_key: str
-    broker_api_key: str
-    broker_api_secret: str
+    alpaca_api_key: str
+    alpaca_api_secret: str
+    alpaca_base_url: str
     initial_capital: float
     position_size_pct: float
     fixed_fee: float
@@ -58,6 +65,8 @@ class Settings:
             raise ValueError("executor_daily_loss_cap must be positive")
         if not self.trade_log_path.strip():
             raise ValueError("trade_log_path cannot be empty")
+        if not self.alpaca_base_url.strip():
+            raise ValueError("alpaca_base_url cannot be empty")
 
     @classmethod
     def from_env(cls, env_path: str | Path | None = None) -> "Settings":
@@ -86,8 +95,9 @@ class Settings:
 
         return cls(
             data_api_key=os.getenv("DATA_API_KEY", ""),
-            broker_api_key=os.getenv("BROKER_API_KEY", ""),
-            broker_api_secret=os.getenv("BROKER_API_SECRET", ""),
+            alpaca_api_key=read_alpaca_api_key(),
+            alpaca_api_secret=read_alpaca_api_secret(),
+            alpaca_base_url=read_alpaca_execution_base_url(),
             initial_capital=float(os.getenv("INITIAL_CAPITAL", "100000")),
             position_size_pct=float(os.getenv("POSITION_SIZE_PCT", "1.0")),
             fixed_fee=float(os.getenv("FIXED_FEE", "1.0")),

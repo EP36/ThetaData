@@ -21,21 +21,45 @@ def test_make_market_data_provider_alpaca_requires_credentials(
     monkeypatch.setenv("DATA_PROVIDER", "alpaca")
     monkeypatch.delenv("ALPACA_API_KEY", raising=False)
     monkeypatch.delenv("ALPACA_API_SECRET", raising=False)
-    monkeypatch.delenv("BROKER_API_KEY", raising=False)
-    monkeypatch.delenv("BROKER_API_SECRET", raising=False)
+    monkeypatch.delenv("ALPACA_SECRET_KEY", raising=False)
 
-    with pytest.raises(ValueError, match="requires ALPACA_API_KEY/ALPACA_API_SECRET"):
+    with pytest.raises(ValueError, match="requires ALPACA_API_KEY and ALPACA_API_SECRET"):
         make_market_data_provider_from_env()
 
 
-def test_make_market_data_provider_alpaca_uses_broker_credential_fallback(
+def test_make_market_data_provider_alpaca_ignores_broker_placeholders(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("DATA_PROVIDER", "alpaca")
     monkeypatch.delenv("ALPACA_API_KEY", raising=False)
     monkeypatch.delenv("ALPACA_API_SECRET", raising=False)
+    monkeypatch.delenv("ALPACA_SECRET_KEY", raising=False)
     monkeypatch.setenv("BROKER_API_KEY", "test_key")
     monkeypatch.setenv("BROKER_API_SECRET", "test_secret")
+
+    with pytest.raises(ValueError, match="requires ALPACA_API_KEY and ALPACA_API_SECRET"):
+        make_market_data_provider_from_env()
+
+
+def test_make_market_data_provider_alpaca_uses_alpaca_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DATA_PROVIDER", "alpaca")
+    monkeypatch.setenv("ALPACA_API_KEY", "alpaca_key")
+    monkeypatch.setenv("ALPACA_API_SECRET", "alpaca_secret")
+    monkeypatch.delenv("ALPACA_SECRET_KEY", raising=False)
+
+    provider = make_market_data_provider_from_env()
+    assert isinstance(provider, AlpacaMarketDataProvider)
+
+
+def test_make_market_data_provider_alpaca_supports_legacy_secret_alias(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DATA_PROVIDER", "alpaca")
+    monkeypatch.setenv("ALPACA_API_KEY", "alpaca_key")
+    monkeypatch.delenv("ALPACA_API_SECRET", raising=False)
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "legacy_secret")
 
     provider = make_market_data_provider_from_env()
     assert isinstance(provider, AlpacaMarketDataProvider)

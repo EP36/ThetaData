@@ -81,3 +81,60 @@ def test_production_rejects_wildcard_cors_origin() -> None:
             worker_enable_trading=False,
             cors_allowed_origins=("*",),
         )
+
+
+def test_worker_symbols_default_to_single_symbol() -> None:
+    settings = DeploymentSettings()
+    assert settings.worker_symbols == ("SPY",)
+    assert settings.worker_symbol == "SPY"
+    assert settings.worker_universe_mode == "static"
+
+
+def test_from_env_worker_symbols_overrides_worker_symbol(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("WORKER_SYMBOLS", "spy, qqq, SPY")
+    monkeypatch.setenv("WORKER_SYMBOL", "iwm")
+    settings = DeploymentSettings.from_env()
+    assert settings.worker_symbols == ("SPY", "QQQ")
+    assert settings.worker_symbol == "SPY"
+
+
+def test_from_env_reads_universe_scanner_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("WORKER_UNIVERSE_MODE", "high_relative_volume")
+    monkeypatch.setenv("WORKER_MAX_CANDIDATES", "7")
+    monkeypatch.setenv("MIN_PRICE", "5")
+    monkeypatch.setenv("MIN_AVG_VOLUME", "250000")
+    monkeypatch.setenv("MIN_RELATIVE_VOLUME", "1.2")
+    monkeypatch.setenv("MAX_SPREAD_PCT", "0.05")
+    settings = DeploymentSettings.from_env()
+    assert settings.worker_universe_mode == "high_relative_volume"
+    assert settings.worker_max_candidates == 7
+    assert settings.min_price == 5.0
+    assert settings.min_avg_volume == 250000.0
+    assert settings.min_relative_volume == 1.2
+    assert settings.max_spread_pct == 0.05
+
+
+def test_invalid_universe_mode_is_rejected() -> None:
+    with pytest.raises(ValueError, match="worker_universe_mode"):
+        DeploymentSettings(worker_universe_mode="unsupported-mode")
+
+
+def test_from_env_reads_alpaca_execution_base_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+    settings = DeploymentSettings.from_env()
+    assert settings.alpaca_base_url == "https://paper-api.alpaca.markets"
+
+
+def test_from_env_supports_legacy_alpaca_secret_alias(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("ALPACA_API_SECRET", raising=False)
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "legacy-secret")
+    settings = DeploymentSettings.from_env()
+    assert settings.alpaca_api_secret == "legacy-secret"

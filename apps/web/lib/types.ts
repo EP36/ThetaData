@@ -219,3 +219,33 @@ export type SelectionStatusData = {
   allocationFraction: number;
   candidates: StrategyScore[];
 };
+
+export type WorkerSymbolDecision = {
+  symbol: string;
+  timeframe: string;
+  runId: string | null;
+  updatedAt: string | null;
+  action: string;
+  orderStatus: string | null;
+  selectedStrategy: string | null;
+  activeStrategy: string | null;
+  selectedScore: number;
+  rejectionReasons: string[];
+  candidates: StrategyScore[];
+};
+
+export type WorkerExecutionStatusData = {
+  generatedAt: string;
+  workerName: string;
+  timeframe: string;
+  universeMode: string;
+  universeSymbols: string[];
+  scannedSymbols: string[];
+  shortlistedSymbols: string[];
+  allowMultiStrategyPerSymbol: boolean;
+  selectedSymbol: string | null;
+  selectedStrategy: string | null;
+  symbolFilterReasons: Record<string, string[]>;
+  activeStrategyBySymbol: Record<string, string>;
+  symbols: WorkerSymbolDecision[];
+};

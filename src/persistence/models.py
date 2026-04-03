@@ -67,6 +67,23 @@ class StrategyConfigModel(Base):
     )
 
 
+class SymbolStrategyLockModel(Base):
+    """Current active strategy lock per symbol for worker execution."""
+
+    __tablename__ = "symbol_strategy_locks"
+
+    symbol: Mapped[str] = mapped_column(String(32), primary_key=True)
+    strategy: Mapped[str] = mapped_column(String(128), nullable=False)
+    run_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    reason: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        onupdate=utc_now,
+    )
+
+
 class RunHistoryModel(Base):
     """Lifecycle records for API and worker runs."""
 

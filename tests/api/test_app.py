@@ -203,3 +203,24 @@ def test_strategy_analytics_populates_after_backtest_run(client: TestClient) -> 
         item["strategy"] == "moving_average_crossover"
         for item in analytics_payload["strategies"]
     )
+
+
+def test_worker_execution_status_endpoint_exposes_universe_and_symbol_rows(
+    client: TestClient,
+) -> None:
+    response = client.get("/api/worker/execution-status")
+    assert response.status_code == 200
+    payload = response.json()
+    assert isinstance(payload["generated_at"], str)
+    assert isinstance(payload["worker_name"], str)
+    assert isinstance(payload["timeframe"], str)
+    assert isinstance(payload["universe_mode"], str)
+    assert isinstance(payload["universe_symbols"], list)
+    assert isinstance(payload["scanned_symbols"], list)
+    assert isinstance(payload["shortlisted_symbols"], list)
+    assert isinstance(payload["allow_multi_strategy_per_symbol"], bool)
+    assert payload["selected_symbol"] is None or isinstance(payload["selected_symbol"], str)
+    assert payload["selected_strategy"] is None or isinstance(payload["selected_strategy"], str)
+    assert isinstance(payload["symbol_filter_reasons"], dict)
+    assert isinstance(payload["active_strategy_by_symbol"], dict)
+    assert isinstance(payload["symbols"], list)
