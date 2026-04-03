@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pandas as pd
+
 from src.config.deployment import DeploymentSettings
 from src.execution.models import Position
 from src.persistence import DatabaseStore, PersistenceRepository
@@ -35,7 +37,7 @@ def test_worker_stays_idle_when_paper_trading_disabled(tmp_path) -> None:
     assert repository.recent_runs(limit=5) == []
 
 
-def test_worker_duplicate_cycle_is_skipped(tmp_path) -> None:
+def test_worker_duplicate_cycle_is_skipped(tmp_path, monkeypatch) -> None:
     db_path = tmp_path / "theta.db"
     settings = DeploymentSettings(
         database_url=f"sqlite+pysqlite:///{db_path}",
@@ -50,11 +52,53 @@ def test_worker_duplicate_cycle_is_skipped(tmp_path) -> None:
     repository = build_repository(db_path)
     worker = TradingWorker(settings=settings, repository=repository)
 
+    monkeypatch.setattr(
+        TradingWorker,
+        "_heartbeat_cycle_key",
+        lambda self, _: "1d:2026-01-01T09:30:00Z",
+    )
+
     worker.run_once()
     worker.run_once()
 
     runs = repository.recent_runs(limit=10)
-    assert len(runs) == 1
+    worker_runs = [row for row in runs if str(row.get("service") or "").startswith("worker:")]
+    assert len(worker_runs) == 1
+
+    duplicate_events = repository.recent_log_events(
+        limit=20,
+        event="worker_universe_cycle_duplicate_detected",
+    )
+    assert duplicate_events
+    payload = dict(duplicate_events[0].get("payload") or {})
+    assert payload.get("duplicate_validity") == "valid"
+
+
+def test_worker_symbol_cycle_key_varies_by_poll_bucket(tmp_path) -> None:
+    db_path = tmp_path / "theta.db"
+    settings = DeploymentSettings(
+        database_url=f"sqlite+pysqlite:///{db_path}",
+        worker_enable_trading=True,
+        paper_trading_enabled=True,
+        worker_name="cycle-key-worker",
+        worker_timeframe="1d",
+        worker_poll_seconds=60,
+        app_env="development",
+        strict_env_validation=False,
+    )
+    repository = build_repository(db_path)
+    worker = TradingWorker(settings=settings, repository=repository)
+
+    first_timestamp = pd.Timestamp("2026-01-01T10:00:00Z")
+    second_timestamp = pd.Timestamp("2026-01-01T10:01:00Z")
+
+    heartbeat_one = worker._heartbeat_cycle_key(first_timestamp)
+    heartbeat_two = worker._heartbeat_cycle_key(second_timestamp)
+    assert heartbeat_one != heartbeat_two
+
+    cycle_key_one = worker._cycle_key("NFLX", heartbeat_one)
+    cycle_key_two = worker._cycle_key("NFLX", heartbeat_two)
+    assert cycle_key_one != cycle_key_two
 
 
 def test_worker_processes_configured_universe_symbols(tmp_path) -> None:

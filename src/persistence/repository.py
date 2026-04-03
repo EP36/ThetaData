@@ -234,6 +234,37 @@ class PersistenceRepository:
                 session.rollback()
                 return False
 
+    def get_run_by_service_cycle_key(
+        self,
+        service: str,
+        cycle_key: str,
+    ) -> dict[str, Any] | None:
+        """Return one run row by service/cycle key, when present."""
+        with self.store.session() as session:
+            row = session.scalar(
+                select(RunHistoryModel)
+                .where(
+                    RunHistoryModel.service == service,
+                    RunHistoryModel.cycle_key == cycle_key,
+                )
+                .limit(1)
+            )
+            if row is None:
+                return None
+            return {
+                "run_id": row.run_id,
+                "service": row.service,
+                "cycle_key": row.cycle_key,
+                "status": row.status,
+                "symbol": row.symbol,
+                "timeframe": row.timeframe,
+                "strategy": row.strategy,
+                "details": dict(row.details or {}),
+                "error_message": row.error_message,
+                "started_at": row.started_at,
+                "completed_at": row.completed_at,
+            }
+
     def finish_run(
         self,
         run_id: str,

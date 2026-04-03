@@ -278,6 +278,19 @@ Cycle behavior:
 4. For each shortlisted symbol, one strategy is selected (or none) by the selector.
 5. Orders are generated only from the selected strategy outcome.
 
+Duplicate-cycle model:
+- Universe-cycle key (`heartbeat_cycle_key`) is bucketed by `WORKER_POLL_SECONDS` (UTC) so each poll window has one deterministic cycle id.
+- Symbol-cycle key is derived from `symbol + heartbeat_cycle_key`.
+- First registration is logged with:
+  - `worker_universe_cycle_key_registered`
+  - `worker_symbol_cycle_key_registered`
+- Duplicate detection logs:
+  - `worker_universe_cycle_duplicate_detected` when the same poll-bucket cycle is re-entered
+  - `worker_symbol_cycle_duplicate_detected` with `duplicate_validity`:
+    - `valid`: same-cycle duplicate protection
+    - `invalid`: stale key collision (should not happen under normal operation)
+- Order idempotency remains separate (`dedupe_key`) to prevent duplicate persisted orders.
+
 Multiple enabled strategies:
 - Enabled strategies are **eligible candidates**, not auto-executed orders.
 - The selector chooses one strategy per symbol decision context.

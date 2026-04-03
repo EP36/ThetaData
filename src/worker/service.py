@@ -78,6 +78,7 @@ class TradingWorker:
     selector: StrategySelector = field(
         default_factory=lambda: StrategySelector(config=SelectionConfig())
     )
+    _last_universe_cycle_key: str | None = field(init=False, default=None, repr=False)
 
     def __post_init__(self) -> None:
         self.loader = _build_loader(cache_dir=self.settings.cache_dir)
@@ -234,6 +235,50 @@ class TradingWorker:
             )
             return
 
+        if self._last_universe_cycle_key == heartbeat_cycle_key:
+            LOGGER.info(
+                "worker_universe_cycle_duplicate_detected cycle_key=%s reason=same_poll_bucket duplicate_validity=valid",
+                heartbeat_cycle_key,
+            )
+            self.repository.append_log_event(
+                level="INFO",
+                logger_name=LOGGER.name,
+                event="worker_universe_cycle_duplicate_detected",
+                payload={
+                    "cycle_key": heartbeat_cycle_key,
+                    "reason": "same_poll_bucket",
+                    "duplicate_validity": "valid",
+                    "worker_name": self.settings.worker_name,
+                    "poll_seconds": self.settings.worker_poll_seconds,
+                },
+            )
+            self.repository.record_worker_heartbeat(
+                worker_name=self.settings.worker_name,
+                status="duplicate",
+                last_cycle_key=heartbeat_cycle_key,
+                message="duplicate_universe_cycle_key_same_poll_bucket",
+            )
+            return
+
+        self._last_universe_cycle_key = heartbeat_cycle_key
+        LOGGER.info(
+            "worker_universe_cycle_key_registered cycle_key=%s timeframe=%s poll_seconds=%d",
+            heartbeat_cycle_key,
+            self.settings.worker_timeframe,
+            self.settings.worker_poll_seconds,
+        )
+        self.repository.append_log_event(
+            level="INFO",
+            logger_name=LOGGER.name,
+            event="worker_universe_cycle_key_registered",
+            payload={
+                "cycle_key": heartbeat_cycle_key,
+                "worker_name": self.settings.worker_name,
+                "timeframe": self.settings.worker_timeframe,
+                "poll_seconds": self.settings.worker_poll_seconds,
+            },
+        )
+
         risk_manager = RiskManager(
             max_position_size=self.settings.max_position_size,
             max_daily_loss=self.settings.max_daily_loss,
@@ -346,7 +391,7 @@ class TradingWorker:
             summaries.append(
                 self._run_symbol_cycle(
                     symbol=symbol,
-                    cycle_timestamp=cycle_timestamp,
+                    heartbeat_cycle_key=heartbeat_cycle_key,
                     service_key=service_key,
                     executor=executor,
                     analytics=performance_snapshot,
@@ -444,7 +489,7 @@ class TradingWorker:
     def _run_symbol_cycle(
         self,
         symbol: str,
-        cycle_timestamp: pd.Timestamp,
+        heartbeat_cycle_key: str,
         service_key: str,
         executor: PaperTradingExecutor,
         analytics: PerformanceAnalyticsSnapshot,
@@ -452,7 +497,10 @@ class TradingWorker:
         scan_result: UniverseScanResult,
     ) -> SymbolCycleSummary:
         """Execute one symbol cycle and return a structured summary."""
-        cycle_key = self._cycle_key(symbol=symbol, timestamp=cycle_timestamp)
+        cycle_key = self._cycle_key(
+            symbol=symbol,
+            heartbeat_cycle_key=heartbeat_cycle_key,
+        )
         run_id = f"worker-{uuid4().hex}"
         symbol_snapshot = scan_result.snapshots_by_symbol.get(symbol)
 
@@ -465,6 +513,7 @@ class TradingWorker:
             strategy="strategy_selector",
             details={
                 "source": "worker_cycle",
+                "heartbeat_cycle_key": heartbeat_cycle_key,
                 "universe_mode": self.settings.worker_universe_mode,
                 "configured_universe": list(self.settings.worker_symbols),
                 "scanned_symbols": list(scan_result.scanned_symbols),
@@ -476,19 +525,43 @@ class TradingWorker:
                 ),
             },
         ):
+            existing_run = self.repository.get_run_by_service_cycle_key(
+                service=service_key,
+                cycle_key=cycle_key,
+            )
+            duplicate_validity = "unknown"
+            duplicate_reason = "existing_run_not_found"
+            if existing_run is not None:
+                details_map = dict(existing_run.get("details") or {})
+                existing_heartbeat = str(details_map.get("heartbeat_cycle_key") or "").strip()
+                if existing_heartbeat == heartbeat_cycle_key:
+                    duplicate_validity = "valid"
+                    duplicate_reason = "same_worker_poll_cycle"
+                elif existing_heartbeat:
+                    duplicate_validity = "invalid"
+                    duplicate_reason = "stale_cycle_key_collision"
+                else:
+                    duplicate_validity = "unknown"
+                    duplicate_reason = "existing_run_missing_heartbeat_cycle_key"
+
             LOGGER.info(
-                "worker_symbol_cycle_skipped reason=duplicate_cycle symbol=%s cycle_key=%s",
+                "worker_symbol_cycle_duplicate_detected symbol=%s cycle_key=%s duplicate_validity=%s duplicate_reason=%s",
                 symbol,
                 cycle_key,
+                duplicate_validity,
+                duplicate_reason,
             )
             self.repository.append_log_event(
                 level="INFO",
                 logger_name=LOGGER.name,
-                event="worker_symbol_cycle_skipped",
+                event="worker_symbol_cycle_duplicate_detected",
                 payload={
                     "cycle_key": cycle_key,
+                    "heartbeat_cycle_key": heartbeat_cycle_key,
                     "symbol": symbol,
                     "reason": "duplicate_cycle",
+                    "duplicate_validity": duplicate_validity,
+                    "duplicate_reason": duplicate_reason,
                 },
             )
             return SymbolCycleSummary(
@@ -502,6 +575,24 @@ class TradingWorker:
                 no_trade_reason="duplicate_cycle",
                 rejection_reasons=(),
             )
+
+        LOGGER.info(
+            "worker_symbol_cycle_key_registered symbol=%s cycle_key=%s heartbeat_cycle_key=%s",
+            symbol,
+            cycle_key,
+            heartbeat_cycle_key,
+        )
+        self.repository.append_log_event(
+            level="INFO",
+            logger_name=LOGGER.name,
+            event="worker_symbol_cycle_key_registered",
+            payload={
+                "symbol": symbol,
+                "cycle_key": cycle_key,
+                "heartbeat_cycle_key": heartbeat_cycle_key,
+                "service": service_key,
+            },
+        )
 
         start_run(run_id=run_id)
         try:
@@ -1218,15 +1309,15 @@ class TradingWorker:
 
     def _heartbeat_cycle_key(self, timestamp: pd.Timestamp) -> str:
         """Derive a cross-universe cycle key for worker heartbeat updates."""
-        if self.settings.worker_timeframe.endswith("d"):
-            return f"{self.settings.worker_timeframe}:{timestamp.strftime('%Y-%m-%d')}"
-        return f"{self.settings.worker_timeframe}:{timestamp.floor('min').strftime('%Y-%m-%dT%H:%M')}"
+        poll_seconds = max(1, int(self.settings.worker_poll_seconds))
+        ts = pd.Timestamp(timestamp)
+        if ts.tzinfo is None:
+            ts = ts.tz_localize("UTC")
+        else:
+            ts = ts.tz_convert("UTC")
+        bucketed = ts.floor(f"{poll_seconds}s")
+        return f"{self.settings.worker_timeframe}:{bucketed.strftime('%Y-%m-%dT%H:%M:%SZ')}"
 
-    def _cycle_key(self, symbol: str, timestamp: pd.Timestamp) -> str:
+    def _cycle_key(self, symbol: str, heartbeat_cycle_key: str) -> str:
         """Derive per-symbol cycle key for idempotent symbol execution."""
-        if self.settings.worker_timeframe.endswith("d"):
-            return f"{symbol}:{self.settings.worker_timeframe}:{timestamp.strftime('%Y-%m-%d')}"
-        return (
-            f"{symbol}:{self.settings.worker_timeframe}:"
-            f"{timestamp.floor('min').strftime('%Y-%m-%dT%H:%M')}"
-        )
+        return f"{symbol}:{heartbeat_cycle_key}"
