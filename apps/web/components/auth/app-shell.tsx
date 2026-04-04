@@ -7,13 +7,14 @@ import { usePathname, useRouter } from "next/navigation";
 
 import { TopNav } from "@/components/navigation/top-nav";
 import { getAuthSession, logout } from "@/lib/api/client";
-import { isProtectedPath, loginPath } from "@/lib/auth/routes";
+import { isAuthPath, isProtectedPath, loginPath } from "@/lib/auth/routes";
 import { authExpiredEventName, clearAuthToken, getAuthToken } from "@/lib/auth/session";
 import type { AuthSessionData } from "@/lib/types";
 
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname() || "/";
   const router = useRouter();
+  const authPath = useMemo(() => isAuthPath(pathname), [pathname]);
   const protectedPath = useMemo(() => isProtectedPath(pathname), [pathname]);
   const [session, setSession] = useState<AuthSessionData | null>(null);
   const [checkingSession, setCheckingSession] = useState(true);
@@ -39,7 +40,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         const activeSession = await getAuthSession();
         if (!cancelled) {
           setSession(activeSession);
-          if (pathname === "/login") {
+          if (authPath) {
             router.replace("/dashboard");
           }
         }
@@ -66,7 +67,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [pathname, protectedPath, router]);
+  }, [authPath, pathname, protectedPath, router]);
 
   useEffect(() => {
     const eventName = authExpiredEventName();
@@ -89,7 +90,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     router.replace("/login");
   };
 
-  if (pathname === "/login") {
+  if (authPath) {
     return <main className="min-h-screen">{children}</main>;
   }
 

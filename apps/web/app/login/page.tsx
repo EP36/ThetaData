@@ -1,21 +1,18 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, Suspense, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
 import { ApiError, login } from "@/lib/api/client";
+import { sanitizeNextPath } from "@/lib/auth/routes";
 
 const DEFAULT_EMAIL = "";
 
-export default function LoginPage() {
+function LoginPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const nextPath = useMemo(() => {
-    const raw = searchParams.get("next");
-    if (!raw || !raw.startsWith("/")) {
-      return "/dashboard";
-    }
-    return raw;
+    return sanitizeNextPath(searchParams.get("next"), "/dashboard");
   }, [searchParams]);
 
   const initialReason = useMemo(() => searchParams.get("reason"), [searchParams]);
@@ -96,5 +93,21 @@ export default function LoginPage() {
         </form>
       </section>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="mx-auto flex min-h-screen w-full max-w-[520px] items-center justify-center px-4 py-12 sm:px-6">
+          <section className="glass-panel w-full rounded-3xl p-6 text-sm text-[var(--muted)] sm:p-8">
+            Loading login form...
+          </section>
+        </div>
+      }
+    >
+      <LoginPageContent />
+    </Suspense>
   );
 }
