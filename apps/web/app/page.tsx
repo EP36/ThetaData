@@ -2,7 +2,7 @@ import Link from "next/link";
 
 export default function HomePage() {
   return (
-    <section className="space-y-5">
+    <section className="space-y-4">
       <article className="glass-panel panel-animate rounded-[1.9rem] p-5 sm:p-6">
         <span className="ui-pill text-[var(--accent-strong)]">Research Workspace</span>
         <h2 className="page-title mt-4 font-semibold">Research + Paper Trading Console</h2>

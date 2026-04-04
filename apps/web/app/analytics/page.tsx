@@ -331,7 +331,7 @@ export default function AnalyticsPage() {
         : "No backtest runs yet";
 
   return (
-    <section className="space-y-5">
+    <section className="space-y-4">
       <PageHeader
         eyebrow="Analytics"
         title="Selection & Performance"
@@ -357,7 +357,6 @@ export default function AnalyticsPage() {
       <CollapsibleSection
         title="Execution Analytics"
         description="Worker context, universe coverage, filtered symbols, and the latest symbol-level decisions."
-        defaultOpen
       >
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <MetricCard label="Worker" value={data.execution.workerName} />
@@ -504,7 +503,6 @@ export default function AnalyticsPage() {
       <CollapsibleSection
         title="Strategy Scores"
         description="Latest scoring snapshot for each strategy candidate, with eligibility and ranking context."
-        defaultOpen
       >
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <MetricCard label="Current Regime" value={data.selection.regime || "unknown"} />

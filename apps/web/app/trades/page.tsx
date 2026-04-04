@@ -36,7 +36,7 @@ export default function TradesPage() {
   }, []);
 
   return (
-    <section className="space-y-5">
+    <section className="space-y-4">
       <PageHeader
         eyebrow="Trades"
         title="Trade Activity"

@@ -62,7 +62,7 @@ export default function DashboardPage() {
   const totalTone = summary.totalPnl >= 0 ? "positive" : "negative";
 
   return (
-    <section className="space-y-5">
+    <section className="space-y-4">
       <PageHeader
         eyebrow="Dashboard"
         title="Operational Overview"
@@ -94,7 +94,6 @@ export default function DashboardPage() {
       <CollapsibleSection
         title="Performance Trend"
         description="Review equity growth and drawdown progression without leaving the dashboard."
-        defaultOpen
       >
         <EquityDrawdownCharts equityCurve={equity} drawdownCurve={drawdown} />
       </CollapsibleSection>

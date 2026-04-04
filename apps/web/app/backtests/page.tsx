@@ -52,7 +52,7 @@ export default function BacktestsPage() {
   };
 
   return (
-    <section className="space-y-5">
+    <section className="space-y-4">
       <PageHeader
         eyebrow="Backtests"
         title="Simulation Workspace"

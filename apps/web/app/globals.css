@@ -4,6 +4,7 @@
 
 :root {
   color-scheme: light;
+  --mobile-footer-height: clamp(4.85rem, 18vw, 5.5rem);
 
   --paper: #eef3f8;
   --ink: #0e1625;
@@ -328,27 +329,28 @@ a {
 
 .bottom-nav-shell {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0.45rem;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0.25rem;
   border: 1px solid var(--line-soft);
-  border-radius: 1.45rem;
-  padding: 0.5rem;
-  padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
+  border-radius: 1.2rem;
+  min-height: var(--mobile-footer-height);
+  padding: 0.35rem;
+  padding-bottom: max(0.35rem, env(safe-area-inset-bottom));
   background: color-mix(in srgb, var(--panel), transparent 2%);
-  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.18);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.14);
   backdrop-filter: blur(20px);
 }
 
 .bottom-nav-link {
   display: inline-flex;
-  min-height: 4rem;
+  min-height: 2.95rem;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 0.35rem;
-  border-radius: 1rem;
+  gap: 0.18rem;
+  border-radius: 0.9rem;
   color: var(--muted);
-  font-size: 0.7rem;
+  font-size: 0.63rem;
   font-weight: 700;
   letter-spacing: 0.02em;
   transition:
@@ -367,6 +369,30 @@ a {
   align-items: center;
   justify-content: center;
   color: inherit;
+}
+
+.mobile-footer-nav {
+  position: sticky;
+  bottom: 0;
+  z-index: 40;
+  margin-top: auto;
+  padding-top: 0.5rem;
+  padding-bottom: max(0.4rem, env(safe-area-inset-bottom));
+  background: linear-gradient(
+    180deg,
+    rgba(238, 243, 248, 0),
+    rgba(238, 243, 248, 0.92) 28%,
+    rgba(238, 243, 248, 0.98)
+  );
+}
+
+html[data-theme="dark"] .mobile-footer-nav {
+  background: linear-gradient(
+    180deg,
+    rgba(6, 16, 24, 0),
+    rgba(6, 16, 24, 0.9) 28%,
+    rgba(6, 16, 24, 0.98)
+  );
 }
 
 .bottom-nav-link:focus-visible,
@@ -431,11 +457,7 @@ a {
 }
 
 .data-table thead th {
-  position: sticky;
-  top: 0;
-  z-index: 1;
   background: var(--table-head-bg);
-  backdrop-filter: blur(6px);
 }
 
 .data-table th,
@@ -495,7 +517,7 @@ a {
 
 @media (max-width: 640px) {
   .table-scroll {
-    max-height: 18rem;
+    max-height: 16rem;
   }
 }
 

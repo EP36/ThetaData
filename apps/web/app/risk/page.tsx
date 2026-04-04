@@ -132,7 +132,7 @@ export default function RiskPage() {
     : "Emergency stop is OFF. Controls are in normal operating mode.";
 
   return (
-    <section className="space-y-5">
+    <section className="space-y-4">
       <PageHeader
         eyebrow="Risk"
         title="Risk Operations"

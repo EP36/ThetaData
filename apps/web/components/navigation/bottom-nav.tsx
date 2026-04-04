@@ -52,6 +52,26 @@ function TradesIcon({ active }: { active: boolean }) {
   );
 }
 
+function BacktestsIcon({ active }: { active: boolean }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={`h-5 w-5 ${active ? "scale-[1.02]" : ""}`}
+      aria-hidden="true"
+    >
+      <path d="M5 6.5h14" />
+      <path d="M5 12h14" />
+      <path d="M5 17.5h8" />
+      <path d="m16 15 3 3 4-6" />
+    </svg>
+  );
+}
+
 function StrategiesIcon({ active }: { active: boolean }) {
   return (
     <svg
@@ -95,6 +115,7 @@ function SettingsIcon({ active }: { active: boolean }) {
 const navItems: BottomNavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: DashboardIcon },
   { href: "/trades", label: "Trades", icon: TradesIcon },
+  { href: "/backtests", label: "Backtests", icon: BacktestsIcon },
   { href: "/strategies", label: "Strategies", icon: StrategiesIcon },
   { href: "/settings", label: "Settings", icon: SettingsIcon }
 ];
@@ -103,8 +124,8 @@ export function BottomNav() {
   const pathname = usePathname() || "/";
 
   return (
-    <nav aria-label="Primary mobile navigation" className="fixed inset-x-0 bottom-3 z-50 px-3 md:hidden">
-      <div className="mx-auto max-w-[34rem]">
+    <footer className="mobile-footer-nav md:hidden">
+      <nav aria-label="Primary mobile navigation" className="mx-auto w-full max-w-[34rem] px-3">
         <div className="bottom-nav-shell">
           {navItems.map((item) => {
             const active = isRouteActive(pathname, item.href);
@@ -125,7 +146,7 @@ export function BottomNav() {
             );
           })}
         </div>
-      </div>
-    </nav>
+      </nav>
+    </footer>
   );
 }

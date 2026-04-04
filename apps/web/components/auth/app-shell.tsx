@@ -1,13 +1,12 @@
 "use client";
 
-import Link from "next/link";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 
 import { BottomNav } from "@/components/navigation/bottom-nav";
 import { TopNav } from "@/components/navigation/top-nav";
-import { getAuthSession, logout } from "@/lib/api/client";
+import { getAuthSession } from "@/lib/api/client";
 import { isAuthPath, isProtectedPath, loginPath } from "@/lib/auth/routes";
 import { authExpiredEventName, clearAuthToken, getAuthToken } from "@/lib/auth/session";
 import type { AuthSessionData } from "@/lib/types";
@@ -17,30 +16,6 @@ export function AppShell({ children }: { children: ReactNode }) {
   const router = useRouter();
   const authPath = useMemo(() => isAuthPath(pathname), [pathname]);
   const protectedPath = useMemo(() => isProtectedPath(pathname), [pathname]);
-  const currentView = useMemo(() => {
-    if (pathname.startsWith("/dashboard")) {
-      return "Dashboard";
-    }
-    if (pathname.startsWith("/analytics")) {
-      return "Analytics";
-    }
-    if (pathname.startsWith("/backtests")) {
-      return "Backtests";
-    }
-    if (pathname.startsWith("/strategies")) {
-      return "Strategies";
-    }
-    if (pathname.startsWith("/risk")) {
-      return "Risk";
-    }
-    if (pathname.startsWith("/trades")) {
-      return "Trades";
-    }
-    if (pathname.startsWith("/settings")) {
-      return "Settings";
-    }
-    return "Workspace";
-  }, [pathname]);
   const [session, setSession] = useState<AuthSessionData | null>(null);
   const [checkingSession, setCheckingSession] = useState(true);
 
@@ -101,19 +76,15 @@ export function AppShell({ children }: { children: ReactNode }) {
       clearAuthToken();
       if (isProtectedPath(pathname)) {
         router.replace(loginPath(pathname, "Session expired"));
+        return;
       }
+      router.replace("/login");
     };
     window.addEventListener(eventName, handleExpired);
     return () => {
       window.removeEventListener(eventName, handleExpired);
     };
   }, [pathname, router]);
-
-  const handleLogout = async () => {
-    await logout();
-    setSession(null);
-    router.replace("/login");
-  };
 
   if (authPath) {
     return <main className="min-h-screen">{children}</main>;
@@ -140,69 +111,35 @@ export function AppShell({ children }: { children: ReactNode }) {
   }
 
   return (
-    <div className="mx-auto flex min-h-screen w-full max-w-[1320px] flex-col px-3 pb-[6.75rem] pt-3 sm:px-5 md:pb-8 xl:px-8">
-      <header className="shell-header glass-panel panel-animate sticky top-3 z-40 mb-4 rounded-[1.5rem] px-4 py-3 sm:px-5 sm:py-4">
-        <div className="flex flex-col gap-3">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-2">
-                <p className="text-[0.62rem] font-semibold uppercase tracking-[0.24em] text-[var(--muted)]">
-                  Trauto
-                </p>
-                <span className="ui-pill border-[var(--accent-ring)] bg-[var(--accent-soft)] text-[var(--accent-strong)]">
-                  Paper-Only
-                </span>
-                <span className="rounded-full border border-[var(--line-soft)] bg-[var(--surface-soft)] px-3 py-1 text-[0.68rem] font-medium uppercase tracking-[0.14em] text-[var(--muted)]">
-                  {currentView}
-                </span>
-              </div>
-              <h1 className="mt-2 text-lg font-semibold tracking-[-0.03em] text-[var(--text)] sm:text-[1.45rem]">
-                Trading Console
-              </h1>
-              <p className="mt-1 hidden max-w-2xl text-sm leading-6 text-[var(--muted)] md:block">
-                Mobile-first monitoring for portfolio health, research outputs, and
-                paper-trading controls.
-              </p>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2 lg:justify-end">
-              <div className="hidden max-w-[18rem] items-center gap-2 rounded-full border border-[var(--line-soft)] bg-[var(--surface-soft)] px-3 py-2 text-xs text-[var(--muted)] sm:flex">
-                <span className="truncate font-medium text-[var(--text)]">
-                  {session?.user.email ?? "Signed out"}
-                </span>
-                <span className="rounded-full bg-[var(--panel)] px-2 py-1 text-[10px] uppercase tracking-[0.12em]">
-                  {session?.user.role ?? "guest"}
-                </span>
-              </div>
-              <Link href="/settings" className="ui-button ui-button-subtle hidden sm:inline-flex">
-                Settings
-              </Link>
-              {session ? (
-                <button
-                  type="button"
-                  onClick={() => void handleLogout()}
-                  className="ui-button ui-button-subtle"
-                >
-                  Logout
-                </button>
-              ) : (
-                <Link href="/login" className="ui-button ui-button-subtle">
-                  Login
-                </Link>
-              )}
-            </div>
+    <div className="mx-auto flex min-h-screen w-full max-w-[1320px] flex-col px-3 pt-3 sm:px-5 xl:px-8">
+      <header className="shell-header glass-panel panel-animate mb-4 rounded-[1.15rem] px-3 py-2.5 sm:rounded-[1.4rem] sm:px-4 sm:py-3">
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-[0.6rem] font-semibold uppercase tracking-[0.22em] text-[var(--muted)]">
+              Trauto
+            </p>
+            <h1 className="mt-0.5 text-base font-semibold tracking-[-0.03em] text-[var(--text)] sm:text-lg">
+              Trading Console
+            </h1>
           </div>
+          <span className="ui-pill hidden sm:inline-flex">Paper-Only</span>
+        </div>
 
-          <div className="hidden md:block">
-            <TopNav variant="desktop" />
-          </div>
-
-          <div className="md:hidden">
-            <TopNav variant="mobile-secondary" />
+        <div className="mt-3 hidden items-center justify-between gap-3 md:flex">
+          <TopNav variant="desktop" />
+          <div className="hidden max-w-[18rem] items-center gap-2 rounded-full border border-[var(--line-soft)] bg-[var(--surface-soft)] px-3 py-2 text-xs text-[var(--muted)] xl:flex">
+            <span className="truncate font-medium text-[var(--text)]">
+              {session?.user.email ?? "Signed out"}
+            </span>
+            <span className="rounded-full bg-[var(--panel)] px-2 py-1 text-[10px] uppercase tracking-[0.12em]">
+              {session?.user.role ?? "guest"}
+            </span>
           </div>
         </div>
       </header>
-      <main className="flex-1 panel-animate pb-2">{children}</main>
+      <main className="flex-1 panel-animate pb-[calc(var(--mobile-footer-height)+env(safe-area-inset-bottom)+0.875rem)] md:pb-4">
+        {children}
+      </main>
       <BottomNav />
     </div>
   );

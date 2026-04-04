@@ -1,10 +1,12 @@
 "use client";
 
+import Link from "next/link";
 import { FormEvent, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 
 import { PageHeader } from "@/components/ui/page-header";
 import { useTheme } from "@/components/theme/theme-provider";
-import { changePassword } from "@/lib/api/client";
+import { changePassword, logout } from "@/lib/api/client";
 import type { ThemePreference } from "@/lib/theme";
 
 const THEME_OPTIONS: Array<{
@@ -32,11 +34,13 @@ const THEME_OPTIONS: Array<{
 const MIN_PASSWORD_LENGTH = 12;
 
 export default function SettingsPage() {
+  const router = useRouter();
   const { theme, resolvedTheme, setTheme } = useTheme();
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [savingPassword, setSavingPassword] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const [passwordSuccess, setPasswordSuccess] = useState<string | null>(null);
 
@@ -83,8 +87,18 @@ export default function SettingsPage() {
     }
   };
 
+  const handleLogout = async () => {
+    setSigningOut(true);
+    try {
+      await logout();
+      router.replace("/login");
+    } finally {
+      setSigningOut(false);
+    }
+  };
+
   return (
-    <section className="space-y-5">
+    <section className="space-y-4">
       <PageHeader
         eyebrow="Settings"
         title="Preferences & Security"
@@ -125,6 +139,37 @@ export default function SettingsPage() {
               </span>
             </label>
           ))}
+        </div>
+      </article>
+
+      <article className="glass-panel rounded-[1.5rem] p-4 sm:p-5">
+        <h3 className="text-base font-semibold tracking-[-0.02em] text-[var(--text)]">
+          Workspace
+        </h3>
+        <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
+          Open secondary views and session actions from here instead of the mobile header.
+        </p>
+
+        <div className="mt-4 divide-y divide-[var(--line-soft)] rounded-[1.1rem] border border-[var(--line-soft)] bg-[var(--panel-soft)] px-4">
+          <Link href="/analytics" className="flex min-h-[3rem] items-center justify-between gap-3 py-3 text-sm font-medium text-[var(--text)]">
+            <span>Analytics</span>
+            <span className="text-[var(--muted)]">Open</span>
+          </Link>
+          <Link href="/risk" className="flex min-h-[3rem] items-center justify-between gap-3 py-3 text-sm font-medium text-[var(--text)]">
+            <span>Risk</span>
+            <span className="text-[var(--muted)]">Open</span>
+          </Link>
+        </div>
+
+        <div className="mt-4">
+          <button
+            type="button"
+            onClick={() => void handleLogout()}
+            disabled={signingOut}
+            className="ui-button ui-button-subtle w-full sm:w-auto"
+          >
+            {signingOut ? "Signing Out..." : "Sign Out"}
+          </button>
         </div>
       </article>
 

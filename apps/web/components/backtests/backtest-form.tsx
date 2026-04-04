@@ -120,34 +120,39 @@ export function BacktestForm({
         </label>
       </div>
 
-      <div className="mt-5 rounded-[1.25rem] border border-[var(--line-soft)] bg-[var(--panel-soft)] px-4 py-4 text-sm">
-        <p className="text-base font-semibold tracking-[-0.02em] text-[var(--text)]">
-          Position Sizing Preview
+      <div className="mt-4 rounded-[1.1rem] border border-[var(--line-soft)] bg-[var(--panel-soft)] px-4 py-3.5 text-sm">
+        <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-sm font-semibold tracking-[-0.02em] text-[var(--text)]">
+            Position Sizing Preview
+          </p>
+          <p className="text-xs font-medium uppercase tracking-[0.12em] text-[var(--muted)]">
+            1% risk • 25% max
+          </p>
+        </div>
+        <p className="mt-1 text-sm text-[var(--muted)]">
+          Risk divided by stop loss, then capped.
         </p>
-        <p className="mt-1 leading-6 text-[var(--muted)]">
-          `riskPerTrade = 1%` of account, `positionSize = risk / stopLoss%`, capped at `25%`.
-        </p>
-        <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <div className="rounded-2xl bg-[var(--panel)] px-3 py-3">
+        <div className="mt-3 grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <div className="rounded-[0.95rem] bg-[var(--panel)] px-3 py-2.5">
             <p className="ui-label">Account</p>
-            <p className="mt-2 font-semibold">{formatUsd(DEFAULT_ACCOUNT_SIZE)}</p>
+            <p className="mt-1.5 font-semibold">{formatUsd(DEFAULT_ACCOUNT_SIZE)}</p>
           </div>
-          <div className="rounded-2xl bg-[var(--panel)] px-3 py-3">
+          <div className="rounded-[0.95rem] bg-[var(--panel)] px-3 py-2.5">
             <p className="ui-label">Risk / Trade</p>
-            <p className="mt-2 font-semibold">{formatUsd(riskPerTrade)}</p>
+            <p className="mt-1.5 font-semibold">{formatUsd(riskPerTrade)}</p>
           </div>
-          <div className="rounded-2xl bg-[var(--panel)] px-3 py-3">
+          <div className="rounded-[0.95rem] bg-[var(--panel)] px-3 py-2.5">
             <p className="ui-label">Stop Loss</p>
-            <p className="mt-2 font-semibold">{formatPct(stopLossPct)}</p>
+            <p className="mt-1.5 font-semibold">{formatPct(stopLossPct)}</p>
           </div>
-          <div className="rounded-2xl bg-[var(--panel)] px-3 py-3">
+          <div className="rounded-[0.95rem] bg-[var(--panel)] px-3 py-2.5">
             <p className="ui-label">Position Size</p>
-            <p className="mt-2 font-semibold">{formatPct(cappedPositionSizePct)}</p>
+            <p className="mt-1.5 font-semibold">{formatPct(cappedPositionSizePct)}</p>
           </div>
         </div>
       </div>
 
-      <div className="mt-5">
+      <div className="mt-4">
         <button
           type="button"
           onClick={onRun}

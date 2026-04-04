@@ -70,7 +70,7 @@ export default function StrategiesPage() {
   };
 
   return (
-    <section className="space-y-5">
+    <section className="space-y-4">
       <PageHeader
         eyebrow="Strategies"
         title="Strategy Controls"
