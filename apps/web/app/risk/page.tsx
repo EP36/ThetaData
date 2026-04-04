@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 
 import { RiskEventsTable } from "@/components/risk/risk-events-table";
 import { RiskMetricCard } from "@/components/risk/risk-metric-card";
+import { StatePanel } from "@/components/ui/state-panel";
 import {
   getRiskEvents,
   getRiskStatus,
@@ -104,20 +105,19 @@ export default function RiskPage() {
 
   if (loading) {
     return (
-      <section className="glass-panel rounded-2xl p-5">
-        <h2 className="page-title font-semibold">Risk</h2>
-        <p className="mt-2 text-sm text-[var(--muted)]">Loading risk state...</p>
-      </section>
+      <StatePanel
+        title="Loading risk state"
+        description="Fetching limits, rejected orders, and emergency-stop status."
+      />
     );
   }
   if (loadError || !status) {
     return (
-      <section className="glass-panel rounded-2xl p-5">
-        <h2 className="page-title font-semibold">Risk</h2>
-        <p className="mt-2 text-sm text-[var(--danger)]">
-          {loadError ?? "Unable to load risk state."}
-        </p>
-      </section>
+      <StatePanel
+        title="Risk state unavailable"
+        description={loadError ?? "Unable to load risk state."}
+        tone="danger"
+      />
     );
   }
 
@@ -131,15 +131,16 @@ export default function RiskPage() {
     : "Emergency stop is OFF. Controls are in normal operating mode.";
 
   return (
-    <section className="space-y-4">
-      <div className="glass-panel rounded-2xl p-4 md:px-5 md:py-5">
-        <div className="flex flex-wrap items-center justify-between gap-3">
+    <section className="space-y-5">
+      <div className="glass-panel rounded-[1.75rem] p-5 sm:p-6">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
-            <h2 className="page-title font-semibold">Risk Operations</h2>
-            <p className="mt-1 text-sm text-[var(--muted)]">
+            <p className="ui-label">Risk</p>
+            <h2 className="page-title mt-3 font-semibold">Risk Operations</h2>
+            <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
               Monitor limits, rejected orders, and emergency controls.
             </p>
-            <p className="mt-2">
+            <p className="mt-3">
               <span className={`ui-pill ${killSwitchIndicatorClass}`}>
                 {status.killSwitchEnabled ? "Emergency Stop ON" : "Emergency Stop OFF"}
               </span>
@@ -151,7 +152,7 @@ export default function RiskPage() {
             disabled={isTriggeringStop}
             className={`ui-button ${
               status.killSwitchEnabled ? "ui-button-primary" : "ui-button-danger"
-            }`}
+            } w-full lg:w-auto`}
           >
             {isTriggeringStop
               ? "Updating..."
@@ -160,9 +161,9 @@ export default function RiskPage() {
                 : "Activate Emergency Stop"}
           </button>
         </div>
-        <p className="mt-3 text-sm text-[var(--muted)]">{killSwitchMessage}</p>
+        <p className="mt-4 text-sm leading-6 text-[var(--muted)]">{killSwitchMessage}</p>
         {actionError ? (
-          <p className="mt-2 rounded-xl border border-[var(--danger)] bg-[color:color-mix(in_srgb,var(--danger),white_92%)] px-3 py-2 text-sm text-[var(--danger)]">
+          <p className="mt-3 rounded-xl border border-[var(--danger)] bg-[color:color-mix(in_srgb,var(--danger),white_92%)] px-3 py-2 text-sm text-[var(--danger)]">
             {actionError}
           </p>
         ) : null}
@@ -195,16 +196,19 @@ export default function RiskPage() {
         />
       </div>
 
-      <article className="glass-panel rounded-2xl p-4">
-        <h3 className="text-sm font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
+      <article className="glass-panel rounded-[1.5rem] p-4 sm:p-5">
+        <h3 className="text-base font-semibold tracking-[-0.02em] text-[var(--text)]">
           Rejected Order Reasons
         </h3>
         {status.rejectedOrders.length === 0 ? (
-          <p className="mt-2 text-sm text-[var(--muted)]">No rejected orders.</p>
+          <p className="mt-3 text-sm text-[var(--muted)]">No rejected orders.</p>
         ) : (
-          <ul className="mt-2 space-y-2">
+          <ul className="mt-4 space-y-3">
             {status.rejectedOrders.map((reason) => (
-              <li key={reason} className="rounded-lg bg-[var(--panel-soft)] px-3 py-2 text-sm">
+              <li
+                key={reason}
+                className="rounded-[1.1rem] bg-[var(--panel-soft)] px-4 py-3 text-sm leading-6"
+              >
                 {reason}
               </li>
             ))}

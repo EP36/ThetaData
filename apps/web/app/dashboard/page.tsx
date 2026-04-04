@@ -7,6 +7,8 @@ import { RecentTradesTable } from "@/components/dashboard/recent-trades-table";
 import { RiskAlertsPanel } from "@/components/dashboard/risk-alerts-panel";
 import { StatusBadge } from "@/components/dashboard/status-badge";
 import { SummaryCard } from "@/components/dashboard/summary-card";
+import { CollapsibleSection } from "@/components/ui/collapsible-section";
+import { StatePanel } from "@/components/ui/state-panel";
 import { getDashboardData } from "@/lib/dashboard/service";
 import type { DashboardSummary, TimeSeriesPoint, TradeRow } from "@/lib/types";
 
@@ -48,9 +50,10 @@ export default function DashboardPage() {
 
   if (loading || summary === null) {
     return (
-      <section className="glass-panel panel-animate rounded-2xl p-4 text-sm text-[var(--muted)]">
-        Loading dashboard...
-      </section>
+      <StatePanel
+        title="Loading dashboard"
+        description="Fetching portfolio health, recent trades, and risk posture."
+      />
     );
   }
 
@@ -58,38 +61,75 @@ export default function DashboardPage() {
   const totalTone = summary.totalPnl >= 0 ? "positive" : "negative";
 
   return (
-    <section className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-2 px-1">
-        <div>
-          <h2 className="page-title font-semibold">Operational Dashboard</h2>
-          <p className="text-sm text-[var(--muted)]">
-            Portfolio health, system status, and execution telemetry in one view.
-          </p>
+    <section className="space-y-5">
+      <article className="glass-panel rounded-[1.75rem] p-5 sm:p-6">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="max-w-2xl">
+            <p className="ui-label">Dashboard</p>
+            <h2 className="page-title mt-3 font-semibold">Operational Overview</h2>
+            <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
+              Key PnL, position exposure, and system readiness are prioritized for quick
+              mobile review. Secondary telemetry stays one tap away below.
+            </p>
+          </div>
+          <div className="flex shrink-0 items-center">
+            <StatusBadge status={summary.systemStatus} />
+          </div>
         </div>
-        <StatusBadge status={summary.systemStatus} />
-      </div>
+      </article>
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <SummaryCard label="Equity" value={formatUsd(summary.equity)} />
-        <SummaryCard
-          label="Daily PnL"
-          value={formatUsd(summary.dailyPnl)}
-          tone={dailyTone}
-        />
         <SummaryCard
           label="Total PnL"
           value={formatUsd(summary.totalPnl)}
           tone={totalTone}
+          meta="Portfolio"
         />
-        <SummaryCard label="Open Positions" value={String(summary.openPositions)} />
+        <SummaryCard
+          label="Daily PnL"
+          value={formatUsd(summary.dailyPnl)}
+          tone={dailyTone}
+          meta="Today"
+        />
+        <SummaryCard
+          label="Active Positions"
+          value={String(summary.openPositions)}
+          meta="Open now"
+        />
+        <SummaryCard label="Equity" value={formatUsd(summary.equity)} meta="Net value" />
       </div>
 
-      <EquityDrawdownCharts equityCurve={equity} drawdownCurve={drawdown} />
+      <CollapsibleSection
+        title="Performance Trend"
+        description="Review equity growth and drawdown progression without leaving the dashboard."
+        defaultOpen
+      >
+        <EquityDrawdownCharts equityCurve={equity} drawdownCurve={drawdown} />
+      </CollapsibleSection>
 
-      <div className="grid gap-3 lg:grid-cols-[0.9fr_1.1fr]">
-        <RiskAlertsPanel alerts={summary.riskAlerts} />
+      <CollapsibleSection
+        title="Recent Trades"
+        description="Latest persisted fills and realized PnL outcomes."
+        meta={
+          <span className="rounded-full border border-[var(--line-soft)] px-3 py-1 text-xs font-medium text-[var(--muted)]">
+            {trades.length}
+          </span>
+        }
+      >
         <RecentTradesTable trades={trades} />
-      </div>
+      </CollapsibleSection>
+
+      <CollapsibleSection
+        title="Risk Alerts"
+        description="Warnings that may require attention before paper trading resumes."
+        meta={
+          <span className="rounded-full border border-[var(--line-soft)] px-3 py-1 text-xs font-medium text-[var(--muted)]">
+            {summary.riskAlerts.length}
+          </span>
+        }
+      >
+        <RiskAlertsPanel alerts={summary.riskAlerts} />
+      </CollapsibleSection>
     </section>
   );
 }

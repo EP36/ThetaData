@@ -3,6 +3,11 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
+type TopNavProps = {
+  variant?: "desktop" | "mobile-secondary";
+};
+
+const coreNavHrefs = new Set(["/dashboard", "/trades", "/strategies", "/settings"]);
 const navItems = [
   { href: "/dashboard", label: "Dashboard" },
   { href: "/analytics", label: "Analytics" },
@@ -13,27 +18,68 @@ const navItems = [
   { href: "/settings", label: "Settings" }
 ];
 
-export function TopNav() {
-  const pathname = usePathname();
+function isRouteActive(pathname: string, href: string): boolean {
+  return pathname === href || pathname.startsWith(`${href}/`);
+}
+
+export function TopNav({ variant = "desktop" }: TopNavProps) {
+  const pathname = usePathname() || "/";
+  const items =
+    variant === "mobile-secondary"
+      ? navItems.filter((item) => !coreNavHrefs.has(item.href))
+      : navItems;
+
+  if (items.length === 0) {
+    return null;
+  }
 
   return (
-    <nav aria-label="Primary navigation" className="w-full md:w-auto">
-      <div className="flex w-full justify-start md:justify-center">
-        <div className="inline-flex max-w-full items-center gap-1 overflow-x-auto rounded-lg border border-[var(--line-soft)] bg-[var(--panel-soft)] p-0.5">
-          {navItems.map((item) => {
-            const isActive = pathname === item.href;
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                className={`nav-chip whitespace-nowrap ${isActive ? "nav-chip-active" : ""}`}
-              >
-                {item.label}
-              </Link>
-            );
-          })}
+    <nav
+      aria-label={variant === "desktop" ? "Primary navigation" : "Secondary navigation"}
+      className="w-full"
+    >
+      {variant === "mobile-secondary" ? (
+        <div className="space-y-2">
+          <p className="text-[0.64rem] font-semibold uppercase tracking-[0.22em] text-[var(--muted)]">
+            More Sections
+          </p>
+          <div className="flex max-w-full items-center gap-2 overflow-x-auto pb-1">
+            {items.map((item) => {
+              const isActive = isRouteActive(pathname, item.href);
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className={`nav-chip whitespace-nowrap px-3 py-2 text-sm ${
+                    isActive ? "nav-chip-active" : ""
+                  }`}
+                  aria-current={isActive ? "page" : undefined}
+                >
+                  {item.label}
+                </Link>
+              );
+            })}
+          </div>
         </div>
-      </div>
+      ) : (
+        <div className="flex w-full justify-start">
+          <div className="inline-flex max-w-full items-center gap-1 overflow-x-auto rounded-full border border-[var(--line-soft)] bg-[var(--panel-soft)] p-1">
+            {items.map((item) => {
+              const isActive = isRouteActive(pathname, item.href);
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className={`nav-chip whitespace-nowrap ${isActive ? "nav-chip-active" : ""}`}
+                  aria-current={isActive ? "page" : undefined}
+                >
+                  {item.label}
+                </Link>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </nav>
   );
 }

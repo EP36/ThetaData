@@ -37,12 +37,15 @@ export function EquityDrawdownCharts({
   const hasDrawdown = drawdownCurve.length > 0;
 
   return (
-    <section className="grid gap-3 lg:grid-cols-2">
-      <article className="glass-panel rounded-2xl p-4">
-        <h3 className="text-sm font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
+    <section className="grid gap-4 xl:grid-cols-2">
+      <article className="glass-panel rounded-[1.5rem] p-4 sm:p-5">
+        <h3 className="text-base font-semibold tracking-[-0.02em] text-[var(--text)]">
           Equity Curve
         </h3>
-        <div className="mt-2.5 h-60 w-full">
+        <p className="mt-1 text-sm leading-6 text-[var(--muted)]">
+          Portfolio equity trend across the available run window.
+        </p>
+        <div className="mt-4 h-[15rem] w-full sm:h-64">
           {!hasEquity ? (
             <div className="flex h-full items-center justify-center text-sm text-[var(--muted)]">
               No persisted equity curve yet.
@@ -99,11 +102,14 @@ export function EquityDrawdownCharts({
         </div>
       </article>
 
-      <article className="glass-panel rounded-2xl p-4">
-        <h3 className="text-sm font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
+      <article className="glass-panel rounded-[1.5rem] p-4 sm:p-5">
+        <h3 className="text-base font-semibold tracking-[-0.02em] text-[var(--text)]">
           Drawdown
         </h3>
-        <div className="mt-2.5 h-60 w-full">
+        <p className="mt-1 text-sm leading-6 text-[var(--muted)]">
+          Peak-to-trough decline measured during the same interval.
+        </p>
+        <div className="mt-4 h-[15rem] w-full sm:h-64">
           {!hasDrawdown ? (
             <div className="flex h-full items-center justify-center text-sm text-[var(--muted)]">
               No persisted drawdown curve yet.

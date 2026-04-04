@@ -83,28 +83,30 @@ export default function SettingsPage() {
   };
 
   return (
-    <section className="space-y-4">
-      <div className="px-1">
-        <h2 className="page-title font-semibold">Settings</h2>
-        <p className="mt-1 text-sm text-[var(--muted)]">
+    <section className="space-y-5">
+      <article className="glass-panel rounded-[1.75rem] p-5 sm:p-6">
+        <p className="ui-label">Settings</p>
+        <h2 className="page-title mt-3 font-semibold">Preferences & Security</h2>
+        <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
           Manage appearance preferences and account security controls.
         </p>
-      </div>
+      </article>
 
-      <article className="glass-panel rounded-2xl p-4 md:px-5 md:py-5">
-        <h3 className="text-sm font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
+      <article className="glass-panel rounded-[1.5rem] p-4 sm:p-5">
+        <h3 className="text-base font-semibold tracking-[-0.02em] text-[var(--text)]">
           Appearance
         </h3>
-        <p className="mt-2 text-sm text-[var(--muted)]">
-          Current applied mode: <span className="font-semibold text-[var(--text)]">{resolvedThemeLabel}</span>
+        <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
+          Current applied mode:{" "}
+          <span className="font-semibold text-[var(--text)]">{resolvedThemeLabel}</span>
           {" "}({theme} preference).
         </p>
 
-        <div className="mt-4 space-y-2">
+        <div className="mt-4 space-y-3">
           {THEME_OPTIONS.map((option) => (
             <label
               key={option.value}
-              className="flex cursor-pointer items-start gap-3 rounded-xl border border-[var(--line)] bg-[var(--panel-soft)] px-3 py-3"
+              className="flex cursor-pointer items-start gap-3 rounded-[1.2rem] border border-[var(--line)] bg-[var(--panel-soft)] px-4 py-4"
             >
               <input
                 type="radio"
@@ -115,19 +117,23 @@ export default function SettingsPage() {
                 className="mt-0.5 h-4 w-4 accent-[var(--accent)]"
               />
               <span>
-                <span className="block text-sm font-semibold">{option.label}</span>
-                <span className="block text-xs text-[var(--muted)]">{option.description}</span>
+                <span className="block text-sm font-semibold text-[var(--text)]">
+                  {option.label}
+                </span>
+                <span className="mt-1 block text-sm leading-6 text-[var(--muted)]">
+                  {option.description}
+                </span>
               </span>
             </label>
           ))}
         </div>
       </article>
 
-      <article className="glass-panel rounded-2xl p-4 md:px-5 md:py-5">
-        <h3 className="text-sm font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
+      <article className="glass-panel rounded-[1.5rem] p-4 sm:p-5">
+        <h3 className="text-base font-semibold tracking-[-0.02em] text-[var(--text)]">
           Account Security
         </h3>
-        <p className="mt-2 text-sm text-[var(--muted)]">
+        <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
           Change your admin password. This action is authenticated and audit logged.
         </p>
 
@@ -186,7 +192,7 @@ export default function SettingsPage() {
             <button
               type="submit"
               disabled={savingPassword}
-              className="ui-button ui-button-primary"
+              className="ui-button ui-button-primary w-full sm:w-auto"
             >
               {savingPassword ? "Updating..." : "Update Password"}
             </button>

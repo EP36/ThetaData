@@ -32,21 +32,24 @@ export function BacktestResults({ result }: BacktestResultsProps) {
 
   return (
     <section className="space-y-4">
-      <div className="glass-panel rounded-2xl p-4 md:px-5">
-        <h3 className="text-sm font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
+      <div className="glass-panel rounded-[1.5rem] p-4 sm:p-5">
+        <h3 className="text-base font-semibold tracking-[-0.02em] text-[var(--text)]">
           Summary Metrics
         </h3>
-        <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-8">
+        <p className="mt-1 text-sm leading-6 text-[var(--muted)]">
+          High-level quality indicators for the most recent backtest run.
+        </p>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-4">
           {metricRows.map((metric, idx) => (
             <article
               key={metric.label}
-              className="panel-animate rounded-xl border border-[var(--line-soft)] bg-[var(--panel-soft)] p-3"
+              className="panel-animate rounded-[1.2rem] border border-[var(--line-soft)] bg-[var(--panel-soft)] p-4"
               style={{ animationDelay: `${idx * 60}ms` }}
             >
-              <p className="text-xs uppercase tracking-[0.12em] text-[var(--muted)]">
+              <p className="ui-label">
                 {metric.label}
               </p>
-              <p className="mt-1 text-lg font-semibold">{metric.value}</p>
+              <p className="mt-3 text-xl font-semibold tracking-[-0.03em]">{metric.value}</p>
             </article>
           ))}
         </div>
@@ -57,7 +60,9 @@ export function BacktestResults({ result }: BacktestResultsProps) {
         drawdownCurve={result.drawdownCurve}
       />
 
-      <RecentTradesTable trades={result.trades} />
+      <div className="glass-panel rounded-[1.5rem] p-4 sm:p-5">
+        <RecentTradesTable trades={result.trades} title="Backtest Trades" />
+      </div>
     </section>
   );
 }

@@ -15,11 +15,21 @@ export function RiskMetricCard({
       : tone === "warning"
         ? "text-[var(--warning-strong)]"
         : "text-[var(--ink)]";
+  const toneBorder =
+    tone === "critical"
+      ? "before:bg-[var(--danger)]"
+      : tone === "warning"
+        ? "before:bg-[var(--warning)]"
+        : "before:bg-[var(--line)]";
 
   return (
-    <article className="glass-panel rounded-2xl p-3">
-      <p className="text-xs uppercase tracking-[0.12em] text-[var(--muted)]">{label}</p>
-      <p className={`mt-1 text-xl font-semibold ${toneClass}`}>{value}</p>
+    <article
+      className={`glass-panel relative overflow-hidden rounded-[1.5rem] p-4 before:absolute before:inset-x-5 before:top-0 before:h-[3px] before:rounded-full ${toneBorder}`}
+    >
+      <p className="ui-label">{label}</p>
+      <p className={`mt-3 text-[1.6rem] font-semibold tracking-[-0.03em] ${toneClass}`}>
+        {value}
+      </p>
     </article>
   );
 }

@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 
 import { StrategyCard } from "@/components/strategies/strategy-card";
+import { StatePanel } from "@/components/ui/state-panel";
 import {
   getPaperTradingEnabled,
   getStrategies,
@@ -68,21 +69,23 @@ export default function StrategiesPage() {
   };
 
   return (
-    <section className="space-y-4">
-      <div className="px-1">
-        <h2 className="page-title font-semibold">Strategies</h2>
-        <p className="mt-1 text-sm text-[var(--muted)]">
-          Configure strategy status and parameters with inline validation.
+    <section className="space-y-5">
+      <article className="glass-panel rounded-[1.75rem] p-5 sm:p-6">
+        <p className="ui-label">Strategies</p>
+        <h2 className="page-title mt-3 font-semibold">Strategy Controls</h2>
+        <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
+          Configure strategy status and parameters with inline validation while preserving
+          the existing execution behavior.
         </p>
-      </div>
+      </article>
 
-      <div className="glass-panel rounded-2xl p-4 md:px-5">
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-[var(--panel-soft)] px-4 py-3">
+      <div className="glass-panel rounded-[1.5rem] p-4 sm:p-5">
+        <div className="flex flex-col gap-4 rounded-[1.25rem] bg-[var(--panel-soft)] px-4 py-4 md:flex-row md:items-center md:justify-between">
           <div>
-            <p className="text-xs uppercase tracking-[0.12em] text-[var(--muted)]">
+            <p className="ui-label">
               Paper Trading
             </p>
-            <p className="text-sm">
+            <p className="mt-2 text-sm leading-6 text-[var(--text)]">
               {demoModeEnabled
                 ? paperTradingEnabled
                   ? "Enabled (demo-only)"
@@ -96,30 +99,32 @@ export default function StrategiesPage() {
               onClick={handlePaperToggle}
               className={`ui-button ${
                 paperTradingEnabled ? "ui-button-danger" : "ui-button-primary"
-              }`}
+              } w-full md:w-auto`}
             >
               {paperTradingEnabled ? "Disable Paper Trading" : "Enable Paper Trading"}
             </button>
           ) : (
-            <span className="text-xs text-[var(--muted)]">
+            <span className="text-sm leading-6 text-[var(--muted)]">
               Set `PAPER_TRADING` and `WORKER_ENABLE_TRADING` on the backend.
             </span>
           )}
         </div>
 
-        {message ? <p className="mt-3 text-sm text-[var(--muted)]">{message}</p> : null}
+        {message ? <p className="mt-4 text-sm text-[var(--muted)]">{message}</p> : null}
       </div>
 
       {loading ? (
-        <div className="glass-panel rounded-2xl p-5 text-sm text-[var(--muted)]">
-          Loading strategies...
-        </div>
+        <StatePanel
+          title="Loading strategies"
+          description="Fetching persisted strategy settings and paper-trading status."
+        />
       ) : strategies.length === 0 ? (
-        <div className="glass-panel rounded-2xl p-5 text-sm text-[var(--muted)]">
-          No persisted strategy configuration is available yet.
-        </div>
+        <StatePanel
+          title="No strategy configuration yet"
+          description="Persisted strategy configuration is not available yet, so there is nothing to edit from the UI."
+        />
       ) : (
-        <div className="grid gap-4 lg:grid-cols-2">
+        <div className="grid gap-4 xl:grid-cols-2">
           {strategies.map((strategy) => (
             <StrategyCard
               key={strategy.name}

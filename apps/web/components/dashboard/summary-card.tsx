@@ -2,12 +2,18 @@ type SummaryCardProps = {
   label: string;
   value: string;
   tone?: "default" | "positive" | "negative";
+  meta?: string;
 };
 
-export function SummaryCard({ label, value, tone = "default" }: SummaryCardProps) {
+export function SummaryCard({
+  label,
+  value,
+  tone = "default",
+  meta
+}: SummaryCardProps) {
   const toneClass =
     tone === "positive"
-      ? "text-[var(--accent)]"
+      ? "text-[var(--accent-strong)]"
       : tone === "negative"
         ? "text-[var(--danger)]"
         : "text-[var(--ink)]";
@@ -20,10 +26,17 @@ export function SummaryCard({ label, value, tone = "default" }: SummaryCardProps
 
   return (
     <article
-      className={`glass-panel relative rounded-2xl p-4 before:absolute before:inset-x-4 before:top-0 before:h-[3px] before:rounded-full ${toneBorder}`}
+      className={`glass-panel relative overflow-hidden rounded-[1.5rem] p-4 before:absolute before:inset-x-5 before:top-0 before:h-[3px] before:rounded-full sm:p-5 ${toneBorder}`}
     >
-      <p className="text-xs uppercase tracking-[0.2em] text-[var(--muted)]">{label}</p>
-      <p className={`mt-2 text-2xl font-semibold tracking-[-0.01em] ${toneClass}`}>{value}</p>
+      <div className="flex items-start justify-between gap-3">
+        <p className="ui-label">{label}</p>
+        {meta ? (
+          <span className="text-xs font-medium text-[var(--muted)]">{meta}</span>
+        ) : null}
+      </div>
+      <p className={`mt-3 text-[1.85rem] font-semibold tracking-[-0.04em] ${toneClass}`}>
+        {value}
+      </p>
     </article>
   );
 }

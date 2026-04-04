@@ -50,11 +50,14 @@ export function BacktestForm({
   };
 
   return (
-    <section className="glass-panel rounded-2xl p-4 md:px-5">
-      <h3 className="text-sm font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
+    <section className="glass-panel rounded-[1.5rem] p-4 sm:p-5">
+      <h3 className="text-base font-semibold tracking-[-0.02em] text-[var(--text)]">
         Backtest Inputs
       </h3>
-      <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+      <p className="mt-1 text-sm leading-6 text-[var(--muted)]">
+        Configure the simulation window and strategy, then review position sizing before you run.
+      </p>
+      <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
         <label className="flex flex-col gap-1 text-sm">
           <span className="ui-label">Symbol</span>
           <input
@@ -117,25 +120,39 @@ export function BacktestForm({
         </label>
       </div>
 
-      <div className="mt-4 rounded-xl border border-[var(--line-soft)] bg-[var(--panel-soft)] px-3 py-3 text-sm">
-        <p className="font-semibold">Position Sizing Preview</p>
-        <p className="mt-1 text-[var(--muted)]">
+      <div className="mt-5 rounded-[1.25rem] border border-[var(--line-soft)] bg-[var(--panel-soft)] px-4 py-4 text-sm">
+        <p className="text-base font-semibold tracking-[-0.02em] text-[var(--text)]">
+          Position Sizing Preview
+        </p>
+        <p className="mt-1 leading-6 text-[var(--muted)]">
           `riskPerTrade = 1%` of account, `positionSize = risk / stopLoss%`, capped at `25%`.
         </p>
-        <div className="mt-2 grid gap-2 md:grid-cols-2 lg:grid-cols-4">
-          <p>Account: {formatUsd(DEFAULT_ACCOUNT_SIZE)}</p>
-          <p>Risk / Trade: {formatUsd(riskPerTrade)}</p>
-          <p>Stop Loss: {formatPct(stopLossPct)}</p>
-          <p>Position Size: {formatPct(cappedPositionSizePct)}</p>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="rounded-2xl bg-[var(--panel)] px-3 py-3">
+            <p className="ui-label">Account</p>
+            <p className="mt-2 font-semibold">{formatUsd(DEFAULT_ACCOUNT_SIZE)}</p>
+          </div>
+          <div className="rounded-2xl bg-[var(--panel)] px-3 py-3">
+            <p className="ui-label">Risk / Trade</p>
+            <p className="mt-2 font-semibold">{formatUsd(riskPerTrade)}</p>
+          </div>
+          <div className="rounded-2xl bg-[var(--panel)] px-3 py-3">
+            <p className="ui-label">Stop Loss</p>
+            <p className="mt-2 font-semibold">{formatPct(stopLossPct)}</p>
+          </div>
+          <div className="rounded-2xl bg-[var(--panel)] px-3 py-3">
+            <p className="ui-label">Position Size</p>
+            <p className="mt-2 font-semibold">{formatPct(cappedPositionSizePct)}</p>
+          </div>
         </div>
       </div>
 
-      <div className="mt-4">
+      <div className="mt-5">
         <button
           type="button"
           onClick={onRun}
           disabled={isRunning}
-          className="ui-button ui-button-primary"
+          className="ui-button ui-button-primary w-full sm:w-auto"
         >
           {isRunning ? "Running..." : "Run Backtest"}
         </button>

@@ -42,21 +42,22 @@ function LoginPageContent() {
   };
 
   return (
-    <div className="mx-auto flex min-h-screen w-full max-w-[520px] items-center justify-center px-4 py-12 sm:px-6">
-      <section className="glass-panel w-full rounded-3xl p-6 sm:p-8">
+    <div className="mx-auto flex min-h-screen w-full max-w-[560px] items-center justify-center px-4 py-12 sm:px-6">
+      <section className="glass-panel w-full rounded-[1.9rem] p-6 sm:p-8">
         <p className="text-[0.66rem] font-semibold uppercase tracking-[0.26em] text-[var(--muted)]">
           Trauto
         </p>
         <h1 className="page-title mt-3 font-semibold">Admin Sign In</h1>
-        <p className="mt-2 text-sm text-[var(--muted)]">
-          Single-user admin authentication is required for trading controls and sensitive analytics.
+        <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
+          Single-user admin authentication is required for trading controls and sensitive
+          analytics.
         </p>
 
         <form className="mt-6 space-y-4" onSubmit={handleSubmit}>
           <label className="block space-y-2">
-            <span className="text-xs uppercase tracking-[0.12em] text-[var(--muted)]">Email</span>
+            <span className="ui-label">Email</span>
             <input
-              className="w-full rounded-xl border border-[var(--line)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)] outline-none focus:border-[var(--accent)]"
+              className="ui-input"
               type="email"
               value={email}
               onChange={(event) => setEmail(event.target.value)}
@@ -66,9 +67,9 @@ function LoginPageContent() {
           </label>
 
           <label className="block space-y-2">
-            <span className="text-xs uppercase tracking-[0.12em] text-[var(--muted)]">Password</span>
+            <span className="ui-label">Password</span>
             <input
-              className="w-full rounded-xl border border-[var(--line)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)] outline-none focus:border-[var(--accent)]"
+              className="ui-input"
               type="password"
               value={password}
               onChange={(event) => setPassword(event.target.value)}
@@ -100,8 +101,8 @@ export default function LoginPage() {
   return (
     <Suspense
       fallback={
-        <div className="mx-auto flex min-h-screen w-full max-w-[520px] items-center justify-center px-4 py-12 sm:px-6">
-          <section className="glass-panel w-full rounded-3xl p-6 text-sm text-[var(--muted)] sm:p-8">
+        <div className="mx-auto flex min-h-screen w-full max-w-[560px] items-center justify-center px-4 py-12 sm:px-6">
+          <section className="glass-panel w-full rounded-[1.9rem] p-6 text-sm text-[var(--muted)] sm:p-8">
             Loading login form...
           </section>
         </div>

@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 
 import { BacktestForm } from "@/components/backtests/backtest-form";
 import { BacktestResults } from "@/components/backtests/backtest-results";
+import { StatePanel } from "@/components/ui/state-panel";
 import { runBacktest } from "@/lib/backtests/service";
 import type { BacktestFormInput, BacktestResultData } from "@/lib/types";
 
@@ -50,32 +51,33 @@ export default function BacktestsPage() {
   };
 
   return (
-    <section className="space-y-4">
-      <div className="px-1">
-        <h2 className="page-title font-semibold">Backtests</h2>
-        <p className="mt-1 text-sm text-[var(--muted)]">
+    <section className="space-y-5">
+      <article className="glass-panel rounded-[1.75rem] p-5 sm:p-6">
+        <p className="ui-label">Backtests</p>
+        <h2 className="page-title mt-3 font-semibold">Simulation Workspace</h2>
+        <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
           Run parameterized strategy simulations and review outcome quality quickly.
         </p>
-      </div>
+      </article>
 
       <BacktestForm value={form} onChange={setForm} onRun={handleRun} isRunning={isRunning} />
 
       {error ? (
-        <div className="glass-panel rounded-xl border border-[var(--danger)] p-4 text-sm text-[var(--danger)]">
-          {error}
-        </div>
+        <StatePanel title="Backtest failed" description={error} tone="danger" />
       ) : null}
 
       {isRunning ? (
-        <div className="glass-panel rounded-2xl p-5 text-sm text-[var(--muted)]">
-          Running backtest simulation...
-        </div>
+        <StatePanel
+          title="Running backtest"
+          description="The simulation is processing market data, signals, and portfolio accounting."
+        />
       ) : null}
 
       {!isRunning && result === null && !error ? (
-        <div className="glass-panel rounded-2xl p-5 text-sm text-[var(--muted)]">
-          No run yet. Configure inputs and run a backtest.
-        </div>
+        <StatePanel
+          title="Ready to simulate"
+          description="Configure the inputs above and run a backtest to view metrics, charts, and trades."
+        />
       ) : null}
 
       {result !== null && !isRunning ? <BacktestResults result={result} /> : null}

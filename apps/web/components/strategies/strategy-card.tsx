@@ -12,6 +12,13 @@ type StrategyCardProps = {
   ) => Promise<StrategyValidationErrors>;
 };
 
+function formatStrategyName(value: StrategyConfig["name"]): string {
+  return value
+    .split("_")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
 export function StrategyCard({ strategy, onSave }: StrategyCardProps) {
   const [status, setStatus] = useState(strategy.status);
   const [parameters, setParameters] = useState<Record<string, string>>(
@@ -52,25 +59,44 @@ export function StrategyCard({ strategy, onSave }: StrategyCardProps) {
   };
 
   return (
-    <article className="glass-panel rounded-2xl p-4 md:px-5">
-      <header className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <h3 className="text-base font-semibold">{strategy.name}</h3>
-          <p className="mt-1 text-sm text-[var(--muted)]">{strategy.description}</p>
+    <article className="glass-panel rounded-[1.5rem] p-4 sm:p-5">
+      <header className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="text-lg font-semibold tracking-[-0.03em] text-[var(--text)]">
+              {formatStrategyName(strategy.name)}
+            </h3>
+            <span
+              className={`ui-pill ${
+                status === "enabled"
+                  ? "border-[var(--accent-ring)] bg-[var(--accent-soft)] text-[var(--accent-strong)]"
+                  : "border-[var(--line-soft)] text-[var(--muted)]"
+              }`}
+            >
+              {status}
+            </span>
+          </div>
+          <p className="mt-2 text-sm leading-6 text-[var(--muted)]">{strategy.description}</p>
         </div>
-        <select
-          value={status}
-          onChange={(event) => setStatus(event.target.value as StrategyConfig["status"])}
-          className="ui-select text-sm"
-        >
-          <option value="enabled">Enabled</option>
-          <option value="disabled">Disabled</option>
-        </select>
+        <label className="block w-full sm:w-[12rem]">
+          <span className="ui-label">Status</span>
+          <select
+            value={status}
+            onChange={(event) => setStatus(event.target.value as StrategyConfig["status"])}
+            className="ui-select mt-1 text-sm"
+          >
+            <option value="enabled">Enabled</option>
+            <option value="disabled">Disabled</option>
+          </select>
+        </label>
       </header>
 
-      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+      <div className="mt-5 grid gap-3 sm:grid-cols-2">
         {Object.entries(parameters).map(([key, value]) => (
-          <label key={key} className="flex flex-col gap-1 text-sm">
+          <label
+            key={key}
+            className="flex flex-col gap-1 rounded-[1.1rem] border border-[var(--line-soft)] bg-[var(--panel-soft)] p-3 text-sm"
+          >
             <span className="ui-label">{key}</span>
             <input
               value={value}
@@ -88,14 +114,18 @@ export function StrategyCard({ strategy, onSave }: StrategyCardProps) {
         ))}
       </div>
 
-      {errors.root ? <p className="mt-2 text-xs text-[var(--danger)]">{errors.root}</p> : null}
+      {errors.root ? (
+        <p className="mt-4 rounded-2xl border border-[var(--danger)] bg-[color:color-mix(in_srgb,var(--danger),white_92%)] px-3 py-2 text-sm text-[var(--danger)]">
+          {errors.root}
+        </p>
+      ) : null}
 
-      <div className="mt-4">
+      <div className="mt-5">
         <button
           type="button"
           onClick={handleSave}
           disabled={isSaving}
-          className="ui-button ui-button-primary"
+          className="ui-button ui-button-primary w-full sm:w-auto"
         >
           {isSaving ? "Saving..." : "Save Strategy"}
         </button>

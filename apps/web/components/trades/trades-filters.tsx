@@ -16,11 +16,14 @@ export function TradesFilters({
   isLoading
 }: TradesFiltersProps) {
   return (
-    <section className="glass-panel rounded-2xl p-4 md:px-5">
-      <h3 className="text-sm font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
+    <section className="glass-panel rounded-[1.5rem] p-4 sm:p-5">
+      <h3 className="text-base font-semibold tracking-[-0.02em] text-[var(--text)]">
         Trade Filters
       </h3>
-      <div className="mt-3 grid gap-3 md:grid-cols-4">
+      <p className="mt-1 text-sm leading-6 text-[var(--muted)]">
+        Narrow the trade list by symbol, strategy, or time window.
+      </p>
+      <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <label className="flex flex-col gap-1 text-sm">
           <span className="ui-label">Symbol</span>
           <input
@@ -68,7 +71,7 @@ export function TradesFilters({
           type="button"
           onClick={onApply}
           disabled={isLoading}
-          className="ui-button ui-button-primary"
+          className="ui-button ui-button-primary w-full sm:w-auto"
         >
           {isLoading ? "Applying..." : "Apply Filters"}
         </button>
