@@ -89,10 +89,10 @@ class DeploymentSettings:
     """Settings for web/worker deployment, including safety toggles."""
 
     app_env: str = "development"
-    service_name: str = "theta"
+    service_name: str = "trauto"
     host: str = "0.0.0.0"
     port: int = 8000
-    database_url: str = "sqlite+pysqlite:///data/theta.db"
+    database_url: str = "sqlite+pysqlite:///data/trauto.db"
     strict_env_validation: bool = False
     run_migrations_on_startup: bool = True
     cors_allowed_origins: tuple[str, ...] = (
@@ -305,7 +305,7 @@ class DeploymentSettings:
             raise ValueError("WORKER_STRATEGY_PARAMS_JSON must decode to an object")
 
         database_url = _normalize_database_url(
-            os.getenv("DATABASE_URL", "sqlite+pysqlite:///data/theta.db")
+            os.getenv("DATABASE_URL", "sqlite+pysqlite:///data/trauto.db")
         )
         worker_symbols_raw = os.getenv("WORKER_SYMBOLS", "").strip()
         if worker_symbols_raw:
@@ -321,7 +321,7 @@ class DeploymentSettings:
 
         return cls(
             app_env=app_env,
-            service_name=os.getenv("SERVICE_NAME", "theta").strip(),
+            service_name=os.getenv("SERVICE_NAME", "trauto").strip(),
             host=os.getenv("HOST", "0.0.0.0").strip(),
             port=int(os.getenv("PORT", "8000")),
             database_url=database_url,

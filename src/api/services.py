@@ -1364,7 +1364,7 @@ class TradingApiService:
             service_name=(
                 self.deployment_settings.service_name
                 if self.deployment_settings is not None
-                else "theta-web"
+                else "trauto-web"
             ),
             app_env=(
                 self.deployment_settings.app_env

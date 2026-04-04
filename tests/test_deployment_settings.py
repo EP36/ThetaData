@@ -35,7 +35,7 @@ def test_worker_trading_allows_dry_run_without_paper() -> None:
 
 def test_production_requires_postgres_database() -> None:
     with pytest.raises(ValueError, match="requires a Postgres DATABASE_URL"):
-        DeploymentSettings(app_env="production", database_url="sqlite+pysqlite:///data/theta.db")
+        DeploymentSettings(app_env="production", database_url="sqlite+pysqlite:///data/trauto.db")
 
 
 def test_from_env_normalizes_render_postgres_url(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -81,7 +81,7 @@ def test_production_mode_missing_database_url_fails_clearly(
     monkeypatch.setenv("PAPER_TRADING", "false")
     monkeypatch.setenv("WORKER_ENABLE_TRADING", "false")
     monkeypatch.setenv("LIVE_TRADING", "false")
-    monkeypatch.setenv("CORS_ALLOWED_ORIGINS", "https://thetadata.onrender.com")
+    monkeypatch.setenv("CORS_ALLOWED_ORIGINS", "https://trauto.onrender.com")
     monkeypatch.setenv("AUTH_SESSION_SECRET", "x" * 40)
     monkeypatch.setenv("AUTH_PASSWORD_PEPPER", "y" * 40)
     monkeypatch.delenv("DATABASE_URL", raising=False)
@@ -184,7 +184,7 @@ def test_production_rejects_short_auth_secrets() -> None:
             worker_name="main-worker",
             paper_trading_enabled=False,
             worker_enable_trading=False,
-            cors_allowed_origins=("https://thetadata.onrender.com",),
+            cors_allowed_origins=("https://trauto.onrender.com",),
             auth_session_secret="short",
             auth_password_pepper="p" * 40,
         )

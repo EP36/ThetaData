@@ -1,12 +1,12 @@
 databases:
-  - name: theta-postgres
-    databaseName: thetadata
-    user: thetadata_user
+  - name: trauto-postgres
+    databaseName: trauto
+    user: trauto_user
     plan: basic-1gb
 
 services:
   - type: web
-    name: theta-web
+    name: trauto-web
     env: python
     plan: starter
     autoDeploy: true
@@ -19,12 +19,12 @@ services:
       - key: APP_ENV
         value: production
       - key: SERVICE_NAME
-        value: theta-web
+        value: trauto-web
       - key: WORKER_NAME
         value: main-worker
       - key: DATABASE_URL
         fromDatabase:
-          name: theta-postgres
+          name: trauto-postgres
           property: connectionString
       - key: STRICT_ENV_VALIDATION
         value: "true"
@@ -37,7 +37,7 @@ services:
       - key: LIVE_TRADING
         value: "false"
       - key: CORS_ALLOWED_ORIGINS
-        value: "https://thetadata.onrender.com"
+        value: "https://trauto.onrender.com"
       - key: AUTH_SESSION_SECRET
         sync: false
       - key: AUTH_PASSWORD_PEPPER
@@ -48,7 +48,7 @@ services:
         value: "false"
 
   - type: worker
-    name: theta-worker
+    name: trauto-worker
     env: python
     plan: starter
     autoDeploy: true
@@ -60,12 +60,12 @@ services:
       - key: APP_ENV
         value: production
       - key: SERVICE_NAME
-        value: theta-worker
+        value: trauto-worker
       - key: WORKER_NAME
         value: main-worker
       - key: DATABASE_URL
         fromDatabase:
-          name: theta-postgres
+          name: trauto-postgres
           property: connectionString
       - key: STRICT_ENV_VALIDATION
         value: "true"
@@ -78,7 +78,7 @@ services:
       - key: LIVE_TRADING
         value: "false"
       - key: CORS_ALLOWED_ORIGINS
-        value: "https://thetadata.onrender.com"
+        value: "https://trauto.onrender.com"
       - key: AUTH_SESSION_SECRET
         sync: false
       - key: AUTH_PASSWORD_PEPPER

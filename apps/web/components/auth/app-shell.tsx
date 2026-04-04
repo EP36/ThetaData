@@ -120,7 +120,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         <div className="flex flex-col gap-2 md:grid md:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] md:items-center md:gap-3">
           <div className="min-w-0 space-y-0.5 md:justify-self-start">
             <p className="text-[0.58rem] font-semibold uppercase tracking-[0.24em] text-[var(--muted)]">
-              Theta Data
+              Trauto
             </p>
             <div className="flex flex-wrap items-center gap-1.5">
               <h1 className="text-base font-semibold tracking-[-0.02em] sm:text-lg">

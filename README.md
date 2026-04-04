@@ -498,9 +498,9 @@ Full contract reference: [`docs/alpaca-env-contract.md`](docs/alpaca-env-contrac
 ## Render Deployment (Web + Worker + Postgres)
 
 This repository includes a Render blueprint at `render.yaml` for:
-- Render Web Service (`theta-web`) running FastAPI
-- Render Background Worker (`theta-worker`) running the unattended paper loop
-- Render Managed Postgres (`theta-postgres`) for persistence
+- Render Web Service (`trauto-web`) running FastAPI
+- Render Background Worker (`trauto-worker`) running the unattended paper loop
+- Render Managed Postgres (`trauto-postgres`) for persistence
 
 Deployment commands:
 
@@ -539,7 +539,7 @@ Minimum for Render:
 - `WORKER_ENABLE_TRADING` (`false` by default)
 - `WORKER_DRY_RUN` (`true` by default)
 - `LIVE_TRADING=false` (must remain false)
-- `CORS_ALLOWED_ORIGINS=https://thetadata.onrender.com` (comma-separated list supported)
+- `CORS_ALLOWED_ORIGINS=https://trauto.onrender.com` (comma-separated list supported)
 - `AUTH_SESSION_SECRET` (32+ random chars)
 - `AUTH_PASSWORD_PEPPER` (32+ random chars)
 
@@ -674,7 +674,7 @@ Backtests page behavior:
 
 Notes:
 - The UI calls the backend from the browser, so backend CORS must allow your Static Site origin.
-- Backend CORS is environment-driven via `CORS_ALLOWED_ORIGINS` (for example: `https://thetadata.onrender.com`).
+- Backend CORS is environment-driven via `CORS_ALLOWED_ORIGINS` (for example: `https://trauto.onrender.com`).
 - Do not use `*` in production/staging CORS config; startup validation rejects wildcard origins.
 - If you prefer no cross-origin browser calls, deploy frontend and backend behind a single origin with a proxy setup.
 
@@ -696,7 +696,7 @@ Frontend auth behavior:
 ### Frontend Theme Support
 
 - Theme modes: `light`, `dark`, `system`.
-- The active preference is stored in browser `localStorage` under `theta-theme-preference`.
+- The active preference is stored in browser `localStorage` under `trauto-theme-preference`.
 - On first load:
   - saved preference is applied if present
   - otherwise system color-scheme preference is used

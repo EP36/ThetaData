@@ -9,7 +9,7 @@ from src.persistence import DatabaseStore, PersistenceRepository
 
 
 def test_global_kill_switch_and_strategy_config_persistence(tmp_path) -> None:
-    db_path = tmp_path / "theta.db"
+    db_path = tmp_path / "trauto.db"
     repository = PersistenceRepository(
         store=DatabaseStore(database_url=f"sqlite+pysqlite:///{db_path}")
     )
@@ -30,7 +30,7 @@ def test_global_kill_switch_and_strategy_config_persistence(tmp_path) -> None:
 
 
 def test_run_and_order_idempotency(tmp_path) -> None:
-    db_path = tmp_path / "theta.db"
+    db_path = tmp_path / "trauto.db"
     repository = PersistenceRepository(
         store=DatabaseStore(database_url=f"sqlite+pysqlite:///{db_path}")
     )
@@ -74,7 +74,7 @@ def test_run_and_order_idempotency(tmp_path) -> None:
 
 
 def test_recent_fills_returns_only_persisted_fill_rows(tmp_path) -> None:
-    db_path = tmp_path / "theta.db"
+    db_path = tmp_path / "trauto.db"
     repository = PersistenceRepository(
         store=DatabaseStore(database_url=f"sqlite+pysqlite:///{db_path}")
     )
@@ -107,7 +107,7 @@ def test_recent_fills_returns_only_persisted_fill_rows(tmp_path) -> None:
 
 
 def test_backtest_trades_are_persisted_separately_from_execution_fills(tmp_path) -> None:
-    db_path = tmp_path / "theta.db"
+    db_path = tmp_path / "trauto.db"
     repository = PersistenceRepository(
         store=DatabaseStore(database_url=f"sqlite+pysqlite:///{db_path}")
     )
@@ -141,7 +141,7 @@ def test_backtest_trades_are_persisted_separately_from_execution_fills(tmp_path)
 
 
 def test_symbol_strategy_lock_lifecycle(tmp_path) -> None:
-    db_path = tmp_path / "theta.db"
+    db_path = tmp_path / "trauto.db"
     repository = PersistenceRepository(
         store=DatabaseStore(database_url=f"sqlite+pysqlite:///{db_path}")
     )

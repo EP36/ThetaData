@@ -27,7 +27,7 @@ def test_settings_route_is_protected_by_auth_shell() -> None:
 
 def test_theme_preference_persistence_contract_exists() -> None:
     theme_source = _read("apps/web/lib/theme.ts")
-    assert "theta-theme-preference" in theme_source
+    assert "trauto-theme-preference" in theme_source
     assert "localStorage.getItem(storageKey)" in theme_source
     assert "root.dataset.themePreference = preference" in theme_source
     assert 'root.classList.toggle("dark", resolved === "dark")' in theme_source

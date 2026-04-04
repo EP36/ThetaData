@@ -45,7 +45,7 @@ function LoginPageContent() {
     <div className="mx-auto flex min-h-screen w-full max-w-[520px] items-center justify-center px-4 py-12 sm:px-6">
       <section className="glass-panel w-full rounded-3xl p-6 sm:p-8">
         <p className="text-[0.66rem] font-semibold uppercase tracking-[0.26em] text-[var(--muted)]">
-          Theta Data
+          Trauto
         </p>
         <h1 className="page-title mt-3 font-semibold">Admin Sign In</h1>
         <p className="mt-2 text-sm text-[var(--muted)]">

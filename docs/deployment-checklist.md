@@ -6,9 +6,9 @@
 - Worker start command: `bash scripts/start_worker.sh`
 
 ## Required Render Services
-- [ ] One Web Service (`theta-web`)
-- [ ] One Background Worker (`theta-worker`)
-- [ ] One Managed Postgres database (`theta-postgres`)
+- [ ] One Web Service (`trauto-web`)
+- [ ] One Background Worker (`trauto-worker`)
+- [ ] One Managed Postgres database (`trauto-postgres`)
 
 ## Required Environment Variables
 - [ ] `APP_ENV=production`

@@ -18,7 +18,7 @@ def build_repository(db_path) -> PersistenceRepository:
 
 
 def test_worker_stays_idle_when_paper_trading_disabled(tmp_path) -> None:
-    db_path = tmp_path / "theta.db"
+    db_path = tmp_path / "trauto.db"
     settings = DeploymentSettings(
         database_url=f"sqlite+pysqlite:///{db_path}",
         worker_enable_trading=False,
@@ -38,7 +38,7 @@ def test_worker_stays_idle_when_paper_trading_disabled(tmp_path) -> None:
 
 
 def test_worker_duplicate_cycle_is_skipped(tmp_path, monkeypatch) -> None:
-    db_path = tmp_path / "theta.db"
+    db_path = tmp_path / "trauto.db"
     settings = DeploymentSettings(
         database_url=f"sqlite+pysqlite:///{db_path}",
         worker_enable_trading=True,
@@ -75,7 +75,7 @@ def test_worker_duplicate_cycle_is_skipped(tmp_path, monkeypatch) -> None:
 
 
 def test_worker_symbol_cycle_key_varies_by_poll_bucket(tmp_path) -> None:
-    db_path = tmp_path / "theta.db"
+    db_path = tmp_path / "trauto.db"
     settings = DeploymentSettings(
         database_url=f"sqlite+pysqlite:///{db_path}",
         worker_enable_trading=True,
@@ -102,7 +102,7 @@ def test_worker_symbol_cycle_key_varies_by_poll_bucket(tmp_path) -> None:
 
 
 def test_worker_processes_configured_universe_symbols(tmp_path) -> None:
-    db_path = tmp_path / "theta.db"
+    db_path = tmp_path / "trauto.db"
     settings = DeploymentSettings(
         database_url=f"sqlite+pysqlite:///{db_path}",
         worker_enable_trading=True,
@@ -126,7 +126,7 @@ def test_worker_processes_configured_universe_symbols(tmp_path) -> None:
 
 
 def test_worker_evaluates_only_shortlisted_symbols(tmp_path) -> None:
-    db_path = tmp_path / "theta.db"
+    db_path = tmp_path / "trauto.db"
     settings = DeploymentSettings(
         database_url=f"sqlite+pysqlite:///{db_path}",
         worker_enable_trading=True,
@@ -151,7 +151,7 @@ def test_worker_evaluates_only_shortlisted_symbols(tmp_path) -> None:
 
 
 def test_worker_enforces_symbol_strategy_lock_reason(tmp_path) -> None:
-    db_path = tmp_path / "theta.db"
+    db_path = tmp_path / "trauto.db"
     settings = DeploymentSettings(
         database_url=f"sqlite+pysqlite:///{db_path}",
         worker_enable_trading=True,
@@ -206,7 +206,7 @@ def test_worker_enforces_symbol_strategy_lock_reason(tmp_path) -> None:
 
 
 def test_worker_dry_run_evaluates_without_submitting_orders(tmp_path) -> None:
-    db_path = tmp_path / "theta.db"
+    db_path = tmp_path / "trauto.db"
     settings = DeploymentSettings(
         database_url=f"sqlite+pysqlite:///{db_path}",
         worker_enable_trading=True,
@@ -241,7 +241,7 @@ def test_worker_dry_run_evaluates_without_submitting_orders(tmp_path) -> None:
 
 
 def test_worker_startup_warmup_bypasses_min_recent_trade_gate(tmp_path) -> None:
-    db_path = tmp_path / "theta.db"
+    db_path = tmp_path / "trauto.db"
     settings = DeploymentSettings(
         database_url=f"sqlite+pysqlite:///{db_path}",
         worker_enable_trading=True,
@@ -272,7 +272,7 @@ def test_worker_startup_warmup_bypasses_min_recent_trade_gate(tmp_path) -> None:
 
 
 def test_worker_without_warmup_enforces_min_recent_trade_gate(tmp_path) -> None:
-    db_path = tmp_path / "theta.db"
+    db_path = tmp_path / "trauto.db"
     settings = DeploymentSettings(
         database_url=f"sqlite+pysqlite:///{db_path}",
         worker_enable_trading=True,

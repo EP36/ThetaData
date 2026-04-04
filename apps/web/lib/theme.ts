@@ -1,4 +1,5 @@
-export const THEME_STORAGE_KEY = "theta-theme-preference";
+export const THEME_STORAGE_KEY = "trauto-theme-preference";
+export const LEGACY_THEME_STORAGE_KEY = "theta-theme-preference";
 export const THEME_DARK_QUERY = "(prefers-color-scheme: dark)";
 
 export type ThemePreference = "light" | "dark" | "system";
@@ -28,11 +29,19 @@ export function resolveTheme(
 export function buildThemeInitScript(): string {
   return `(function () {
   var storageKey = "${THEME_STORAGE_KEY}";
+  var legacyStorageKey = "${LEGACY_THEME_STORAGE_KEY}";
   var query = "${THEME_DARK_QUERY}";
   var root = document.documentElement;
   var preference = "system";
   try {
     var stored = window.localStorage.getItem(storageKey);
+    if (!stored) {
+      stored = window.localStorage.getItem(legacyStorageKey);
+      if (stored) {
+        window.localStorage.setItem(storageKey, stored);
+        window.localStorage.removeItem(legacyStorageKey);
+      }
+    }
     if (stored === "light" || stored === "dark" || stored === "system") {
       preference = stored;
     }

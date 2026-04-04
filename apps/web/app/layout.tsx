@@ -8,7 +8,7 @@ import { buildThemeInitScript } from "@/lib/theme";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Theta Trading Dashboard",
+  title: "Trauto Trading Dashboard",
   description: "Paper-only research and backtesting operations view"
 };
 
