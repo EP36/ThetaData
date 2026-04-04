@@ -28,6 +28,7 @@ export function TopNav({ variant = "desktop" }: TopNavProps) {
     variant === "mobile-secondary"
       ? navItems.filter((item) => !coreNavHrefs.has(item.href))
       : navItems;
+  const activeItem = items.find((item) => isRouteActive(pathname, item.href));
 
   if (items.length === 0) {
     return null;
@@ -39,11 +40,21 @@ export function TopNav({ variant = "desktop" }: TopNavProps) {
       className="w-full"
     >
       {variant === "mobile-secondary" ? (
-        <div className="space-y-2">
-          <p className="text-[0.64rem] font-semibold uppercase tracking-[0.22em] text-[var(--muted)]">
-            More Sections
-          </p>
-          <div className="flex max-w-full items-center gap-2 overflow-x-auto pb-1">
+        <details className="rounded-[1.2rem] border border-[var(--line-soft)] bg-[var(--panel-soft)]">
+          <summary className="collapsible-summary flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3">
+            <div className="min-w-0">
+              <p className="text-[0.64rem] font-semibold uppercase tracking-[0.22em] text-[var(--muted)]">
+                More Sections
+              </p>
+              <p className="mt-1 truncate text-sm font-medium text-[var(--text)]">
+                {activeItem?.label ?? "Analytics, Backtests, Risk"}
+              </p>
+            </div>
+            <span className="flex h-9 w-9 items-center justify-center rounded-full border border-[var(--line-soft)] bg-[var(--panel)] text-[var(--muted)]">
+              +
+            </span>
+          </summary>
+          <div className="flex flex-wrap gap-2 border-t border-[var(--line-soft)] px-3 py-3">
             {items.map((item) => {
               const isActive = isRouteActive(pathname, item.href);
               return (
@@ -60,7 +71,7 @@ export function TopNav({ variant = "desktop" }: TopNavProps) {
               );
             })}
           </div>
-        </div>
+        </details>
       ) : (
         <div className="flex w-full justify-start">
           <div className="inline-flex max-w-full items-center gap-1 overflow-x-auto rounded-full border border-[var(--line-soft)] bg-[var(--panel-soft)] p-1">

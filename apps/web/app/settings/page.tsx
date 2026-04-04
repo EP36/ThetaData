@@ -2,6 +2,7 @@
 
 import { FormEvent, useMemo, useState } from "react";
 
+import { PageHeader } from "@/components/ui/page-header";
 import { useTheme } from "@/components/theme/theme-provider";
 import { changePassword } from "@/lib/api/client";
 import type { ThemePreference } from "@/lib/theme";
@@ -84,13 +85,11 @@ export default function SettingsPage() {
 
   return (
     <section className="space-y-5">
-      <article className="glass-panel rounded-[1.75rem] p-5 sm:p-6">
-        <p className="ui-label">Settings</p>
-        <h2 className="page-title mt-3 font-semibold">Preferences & Security</h2>
-        <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
-          Manage appearance preferences and account security controls.
-        </p>
-      </article>
+      <PageHeader
+        eyebrow="Settings"
+        title="Preferences & Security"
+        description="Manage appearance preferences and account security controls."
+      />
 
       <article className="glass-panel rounded-[1.5rem] p-4 sm:p-5">
         <h3 className="text-base font-semibold tracking-[-0.02em] text-[var(--text)]">

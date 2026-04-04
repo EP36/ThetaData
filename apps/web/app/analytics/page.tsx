@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 
 import { TableScrollArea } from "@/components/table/table-scroll-area";
 import { CollapsibleSection } from "@/components/ui/collapsible-section";
+import { PageHeader } from "@/components/ui/page-header";
 import { StatePanel } from "@/components/ui/state-panel";
 import { getAnalyticsData } from "@/lib/analytics/service";
 import type { AnalyticsData } from "@/lib/analytics/service";
@@ -87,7 +88,7 @@ function MetricCard({
     <article className="glass-panel rounded-[1.5rem] p-4 sm:p-5">
       <div className="flex items-start justify-between gap-3">
         <p className="ui-label">{label}</p>
-        {meta ? <span className="text-xs font-medium text-[var(--muted)]">{meta}</span> : null}
+        {meta ? <span className="hidden text-xs font-medium text-[var(--muted)] sm:block">{meta}</span> : null}
       </div>
       <p
         className={`mt-3 text-[1.55rem] font-semibold tracking-[-0.03em] text-[var(--text)] ${valueClassName ?? ""}`}
@@ -331,18 +332,13 @@ export default function AnalyticsPage() {
 
   return (
     <section className="space-y-5">
-      <article className="glass-panel rounded-[1.75rem] p-5 sm:p-6">
-        <p className="ui-label">Analytics</p>
-        <h2 className="page-title mt-3 font-semibold">Selection & Performance Analytics</h2>
-        <p className="mt-2 max-w-3xl text-sm leading-6 text-[var(--muted)]">
-          Source-separated analytics for backtests, execution flow, and paper-trading
-          performance. Mobile views emphasize the latest decision state first, with
-          deeper context tucked behind expandable sections.
-        </p>
-      </article>
+      <PageHeader
+        eyebrow="Analytics"
+        title="Selection & Performance"
+        description="Latest selection state first, with deeper execution and performance detail below."
+      />
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-        <MetricCard label="Current Regime" value={data.selection.regime || "unknown"} />
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
         <MetricCard
           label="Selected Strategy"
           value={selectedStrategy ?? "No strategy selected"}
@@ -351,10 +347,6 @@ export default function AnalyticsPage() {
           label="Selection Score"
           value={data.selection.selectedScore.toFixed(4)}
           valueClassName={scoreTone(data.selection.selectedScore)}
-        />
-        <MetricCard
-          label="Sizing Multiplier"
-          value={`${data.selection.sizingMultiplier.toFixed(2)}x`}
         />
         <MetricCard
           label="Worker Dry-Run"
@@ -514,14 +506,15 @@ export default function AnalyticsPage() {
         description="Latest scoring snapshot for each strategy candidate, with eligibility and ranking context."
         defaultOpen
       >
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <MetricCard label="Current Regime" value={data.selection.regime || "unknown"} />
+          <MetricCard
+            label="Sizing Multiplier"
+            value={`${data.selection.sizingMultiplier.toFixed(2)}x`}
+          />
           <MetricCard
             label="Min Score Threshold"
             value={data.selection.minimumScoreThreshold.toFixed(4)}
-          />
-          <MetricCard
-            label="Allocation Fraction"
-            value={formatPct(data.selection.allocationFraction)}
           />
           <MetricCard
             label="Candidates"

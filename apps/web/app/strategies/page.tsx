@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 
 import { StrategyCard } from "@/components/strategies/strategy-card";
+import { PageHeader } from "@/components/ui/page-header";
 import { StatePanel } from "@/components/ui/state-panel";
 import {
   getPaperTradingEnabled,
@@ -70,14 +71,11 @@ export default function StrategiesPage() {
 
   return (
     <section className="space-y-5">
-      <article className="glass-panel rounded-[1.75rem] p-5 sm:p-6">
-        <p className="ui-label">Strategies</p>
-        <h2 className="page-title mt-3 font-semibold">Strategy Controls</h2>
-        <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
-          Configure strategy status and parameters with inline validation while preserving
-          the existing execution behavior.
-        </p>
-      </article>
+      <PageHeader
+        eyebrow="Strategies"
+        title="Strategy Controls"
+        description="Configure status and parameters while preserving existing execution behavior."
+      />
 
       <div className="glass-panel rounded-[1.5rem] p-4 sm:p-5">
         <div className="flex flex-col gap-4 rounded-[1.25rem] bg-[var(--panel-soft)] px-4 py-4 md:flex-row md:items-center md:justify-between">

@@ -4,6 +4,7 @@ import { TableScrollArea } from "@/components/table/table-scroll-area";
 type RecentTradesTableProps = {
   trades: TradeRow[];
   title?: string;
+  showHeader?: boolean;
 };
 
 function formatNumber(value: number): string {
@@ -20,14 +21,21 @@ function formatMoney(value: number): string {
 
 export function RecentTradesTable({
   trades,
-  title = "Recent Trades"
+  title = "Recent Trades",
+  showHeader = true
 }: RecentTradesTableProps) {
   return (
     <article className="rounded-[1.5rem]">
-      <h3 className="text-base font-semibold tracking-[-0.02em] text-[var(--text)]">{title}</h3>
-      <p className="mt-1 text-sm leading-6 text-[var(--muted)]">
-        Most recent persisted fills with essential outcome data first.
-      </p>
+      {showHeader ? (
+        <>
+          <h3 className="text-base font-semibold tracking-[-0.02em] text-[var(--text)]">
+            {title}
+          </h3>
+          <p className="mt-1 text-sm leading-6 text-[var(--muted)]">
+            Most recent persisted fills with essential outcome data first.
+          </p>
+        </>
+      ) : null}
       {trades.length === 0 ? (
         <p className="mt-3 text-sm text-[var(--muted)]">
           No real trades yet. Paper trading is idle or no fills have been persisted.

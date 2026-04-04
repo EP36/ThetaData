@@ -7,22 +7,30 @@ type TradesFiltersProps = {
   onChange: (next: TradesFilter) => void;
   onApply: () => void;
   isLoading: boolean;
+  showHeader?: boolean;
+  embedded?: boolean;
 };
 
 export function TradesFilters({
   value,
   onChange,
   onApply,
-  isLoading
+  isLoading,
+  showHeader = true,
+  embedded = false
 }: TradesFiltersProps) {
   return (
-    <section className="glass-panel rounded-[1.5rem] p-4 sm:p-5">
-      <h3 className="text-base font-semibold tracking-[-0.02em] text-[var(--text)]">
-        Trade Filters
-      </h3>
-      <p className="mt-1 text-sm leading-6 text-[var(--muted)]">
-        Narrow the trade list by symbol, strategy, or time window.
-      </p>
+    <section className={embedded ? "" : "glass-panel rounded-[1.5rem] p-4 sm:p-5"}>
+      {showHeader ? (
+        <>
+          <h3 className="text-base font-semibold tracking-[-0.02em] text-[var(--text)]">
+            Trade Filters
+          </h3>
+          <p className="mt-1 text-sm leading-6 text-[var(--muted)]">
+            Narrow the trade list by symbol, strategy, or time window.
+          </p>
+        </>
+      ) : null}
       <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <label className="flex flex-col gap-1 text-sm">
           <span className="ui-label">Symbol</span>

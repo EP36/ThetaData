@@ -8,6 +8,7 @@ import { RiskAlertsPanel } from "@/components/dashboard/risk-alerts-panel";
 import { StatusBadge } from "@/components/dashboard/status-badge";
 import { SummaryCard } from "@/components/dashboard/summary-card";
 import { CollapsibleSection } from "@/components/ui/collapsible-section";
+import { PageHeader } from "@/components/ui/page-header";
 import { StatePanel } from "@/components/ui/state-panel";
 import { getDashboardData } from "@/lib/dashboard/service";
 import type { DashboardSummary, TimeSeriesPoint, TradeRow } from "@/lib/types";
@@ -62,21 +63,12 @@ export default function DashboardPage() {
 
   return (
     <section className="space-y-5">
-      <article className="glass-panel rounded-[1.75rem] p-5 sm:p-6">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-          <div className="max-w-2xl">
-            <p className="ui-label">Dashboard</p>
-            <h2 className="page-title mt-3 font-semibold">Operational Overview</h2>
-            <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
-              Key PnL, position exposure, and system readiness are prioritized for quick
-              mobile review. Secondary telemetry stays one tap away below.
-            </p>
-          </div>
-          <div className="flex shrink-0 items-center">
-            <StatusBadge status={summary.systemStatus} />
-          </div>
-        </div>
-      </article>
+      <PageHeader
+        eyebrow="Dashboard"
+        title="Operational Overview"
+        description="Key PnL, position exposure, and system readiness are prioritized for quick review."
+        meta={<StatusBadge status={summary.systemStatus} />}
+      />
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <SummaryCard
@@ -116,7 +108,7 @@ export default function DashboardPage() {
           </span>
         }
       >
-        <RecentTradesTable trades={trades} />
+        <RecentTradesTable trades={trades} showHeader={false} />
       </CollapsibleSection>
 
       <CollapsibleSection
@@ -128,7 +120,7 @@ export default function DashboardPage() {
           </span>
         }
       >
-        <RiskAlertsPanel alerts={summary.riskAlerts} />
+        <RiskAlertsPanel alerts={summary.riskAlerts} showHeader={false} />
       </CollapsibleSection>
     </section>
   );

@@ -31,7 +31,7 @@ export function SummaryCard({
       <div className="flex items-start justify-between gap-3">
         <p className="ui-label">{label}</p>
         {meta ? (
-          <span className="text-xs font-medium text-[var(--muted)]">{meta}</span>
+          <span className="hidden text-xs font-medium text-[var(--muted)] sm:block">{meta}</span>
         ) : null}
       </div>
       <p className={`mt-3 text-[1.85rem] font-semibold tracking-[-0.04em] ${toneClass}`}>

@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 
 import { BacktestForm } from "@/components/backtests/backtest-form";
 import { BacktestResults } from "@/components/backtests/backtest-results";
+import { PageHeader } from "@/components/ui/page-header";
 import { StatePanel } from "@/components/ui/state-panel";
 import { runBacktest } from "@/lib/backtests/service";
 import type { BacktestFormInput, BacktestResultData } from "@/lib/types";
@@ -52,13 +53,11 @@ export default function BacktestsPage() {
 
   return (
     <section className="space-y-5">
-      <article className="glass-panel rounded-[1.75rem] p-5 sm:p-6">
-        <p className="ui-label">Backtests</p>
-        <h2 className="page-title mt-3 font-semibold">Simulation Workspace</h2>
-        <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
-          Run parameterized strategy simulations and review outcome quality quickly.
-        </p>
-      </article>
+      <PageHeader
+        eyebrow="Backtests"
+        title="Simulation Workspace"
+        description="Run parameterized strategy simulations and review outcome quality quickly."
+      />
 
       <BacktestForm value={form} onChange={setForm} onRun={handleRun} isRunning={isRunning} />
 

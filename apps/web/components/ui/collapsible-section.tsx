@@ -22,11 +22,13 @@ export function CollapsibleSection({
       open={defaultOpen}
       className={`glass-panel group rounded-[1.5rem] ${className ?? ""}`}
     >
-      <summary className="collapsible-summary flex cursor-pointer list-none items-start justify-between gap-4 px-4 py-4 sm:px-5">
+      <summary className="collapsible-summary flex cursor-pointer list-none items-start justify-between gap-4 px-4 py-3.5 sm:px-5">
         <div className="min-w-0">
           <p className="text-base font-semibold tracking-[-0.02em] text-[var(--text)]">{title}</p>
           {description ? (
-            <p className="mt-1 text-sm leading-6 text-[var(--muted)]">{description}</p>
+            <p className="mt-1 hidden text-sm leading-6 text-[var(--muted)] sm:block">
+              {description}
+            </p>
           ) : null}
         </div>
         <div className="flex shrink-0 items-center gap-3">

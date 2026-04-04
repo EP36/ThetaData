@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 
 import { RiskEventsTable } from "@/components/risk/risk-events-table";
 import { RiskMetricCard } from "@/components/risk/risk-metric-card";
+import { PageHeader } from "@/components/ui/page-header";
 import { StatePanel } from "@/components/ui/state-panel";
 import {
   getRiskEvents,
@@ -132,19 +133,21 @@ export default function RiskPage() {
 
   return (
     <section className="space-y-5">
-      <div className="glass-panel rounded-[1.75rem] p-5 sm:p-6">
+      <PageHeader
+        eyebrow="Risk"
+        title="Risk Operations"
+        description="Monitor limits, rejected orders, and emergency controls."
+        meta={
+          <span className={`ui-pill ${killSwitchIndicatorClass}`}>
+            {status.killSwitchEnabled ? "Emergency Stop ON" : "Emergency Stop OFF"}
+          </span>
+        }
+      />
+
+      <div className="glass-panel rounded-[1.5rem] p-4 sm:p-5">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
-            <p className="ui-label">Risk</p>
-            <h2 className="page-title mt-3 font-semibold">Risk Operations</h2>
-            <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
-              Monitor limits, rejected orders, and emergency controls.
-            </p>
-            <p className="mt-3">
-              <span className={`ui-pill ${killSwitchIndicatorClass}`}>
-                {status.killSwitchEnabled ? "Emergency Stop ON" : "Emergency Stop OFF"}
-              </span>
-            </p>
+            <p className="text-sm leading-6 text-[var(--muted)]">{killSwitchMessage}</p>
           </div>
           <button
             type="button"
@@ -161,7 +164,6 @@ export default function RiskPage() {
                 : "Activate Emergency Stop"}
           </button>
         </div>
-        <p className="mt-4 text-sm leading-6 text-[var(--muted)]">{killSwitchMessage}</p>
         {actionError ? (
           <p className="mt-3 rounded-xl border border-[var(--danger)] bg-[color:color-mix(in_srgb,var(--danger),white_92%)] px-3 py-2 text-sm text-[var(--danger)]">
             {actionError}

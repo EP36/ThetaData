@@ -141,9 +141,9 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   return (
     <div className="mx-auto flex min-h-screen w-full max-w-[1320px] flex-col px-3 pb-[6.75rem] pt-3 sm:px-5 md:pb-8 xl:px-8">
-      <header className="shell-header glass-panel panel-animate sticky top-3 z-40 mb-4 rounded-[1.75rem] px-4 py-4 sm:px-5">
-        <div className="flex flex-col gap-4">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+      <header className="shell-header glass-panel panel-animate sticky top-3 z-40 mb-4 rounded-[1.5rem] px-4 py-3 sm:px-5 sm:py-4">
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
                 <p className="text-[0.62rem] font-semibold uppercase tracking-[0.24em] text-[var(--muted)]">
@@ -152,14 +152,14 @@ export function AppShell({ children }: { children: ReactNode }) {
                 <span className="ui-pill border-[var(--accent-ring)] bg-[var(--accent-soft)] text-[var(--accent-strong)]">
                   Paper-Only
                 </span>
-                <span className="hidden rounded-full border border-[var(--line-soft)] bg-[var(--surface-soft)] px-3 py-1 text-[0.68rem] font-medium uppercase tracking-[0.14em] text-[var(--muted)] sm:inline-flex">
+                <span className="rounded-full border border-[var(--line-soft)] bg-[var(--surface-soft)] px-3 py-1 text-[0.68rem] font-medium uppercase tracking-[0.14em] text-[var(--muted)]">
                   {currentView}
                 </span>
               </div>
-              <h1 className="mt-3 text-xl font-semibold tracking-[-0.03em] text-[var(--text)] sm:text-[1.55rem]">
-                Trading Operations Console
+              <h1 className="mt-2 text-lg font-semibold tracking-[-0.03em] text-[var(--text)] sm:text-[1.45rem]">
+                Trading Console
               </h1>
-              <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--muted)]">
+              <p className="mt-1 hidden max-w-2xl text-sm leading-6 text-[var(--muted)] md:block">
                 Mobile-first monitoring for portfolio health, research outputs, and
                 paper-trading controls.
               </p>
@@ -174,9 +174,6 @@ export function AppShell({ children }: { children: ReactNode }) {
                   {session?.user.role ?? "guest"}
                 </span>
               </div>
-              <span className="rounded-full border border-[var(--line-soft)] bg-[var(--surface-soft)] px-3 py-2 text-[0.68rem] font-medium uppercase tracking-[0.12em] text-[var(--muted)] sm:hidden">
-                {session?.user.role ?? "guest"}
-              </span>
               <Link href="/settings" className="ui-button ui-button-subtle hidden sm:inline-flex">
                 Settings
               </Link>
