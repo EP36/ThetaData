@@ -1,4 +1,5 @@
 import type { RiskEvent } from "@/lib/types";
+import { TableScrollArea } from "@/components/table/table-scroll-area";
 
 type RiskEventsTableProps = {
   events: RiskEvent[];
@@ -10,22 +11,27 @@ export function RiskEventsTable({ events }: RiskEventsTableProps) {
       <h3 className="text-sm font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
         Risk Event Log
       </h3>
-      <div className="table-scroll">
+      <TableScrollArea minWidth={760}>
         <table className="data-table text-sm">
+          <colgroup>
+            <col className="w-[28%]" />
+            <col className="w-[54%]" />
+            <col className="w-[18%]" />
+          </colgroup>
           <thead>
             <tr>
-              <th className="px-2 py-2">Timestamp</th>
-              <th className="px-2 py-2">Reason</th>
-              <th className="px-2 py-2">Severity</th>
+              <th>Timestamp</th>
+              <th>Reason</th>
+              <th>Severity</th>
             </tr>
           </thead>
           <tbody>
             {events.map((event) => (
               <tr key={`${event.timestamp}-${event.reason}`}>
-                <td className="px-2 py-2">{new Date(event.timestamp).toLocaleString()}</td>
-                <td className="px-2 py-2">{event.reason}</td>
+                <td>{new Date(event.timestamp).toLocaleString()}</td>
+                <td className="cell-wrap">{event.reason}</td>
                 <td
-                  className={`px-2 py-2 font-semibold ${
+                  className={`font-semibold ${
                     event.severity === "critical"
                       ? "text-[var(--danger)]"
                       : event.severity === "warning"
@@ -39,7 +45,7 @@ export function RiskEventsTable({ events }: RiskEventsTableProps) {
             ))}
           </tbody>
         </table>
-      </div>
+      </TableScrollArea>
     </article>
   );
 }

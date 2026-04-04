@@ -321,8 +321,10 @@ a {
 }
 
 .data-table {
-  min-width: 100%;
+  width: 100%;
+  min-width: max(100%, var(--table-min-width, 680px));
   text-align: left;
+  table-layout: fixed;
   border-collapse: separate;
   border-spacing: 0;
 }
@@ -331,13 +333,34 @@ a {
   margin-top: 0.6rem;
   max-height: min(42vh, 22rem);
   overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable both-edges;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--line-strong), transparent 16%) transparent;
   border: 1px solid var(--line-soft);
   border-radius: 0.75rem;
-  background: color-mix(in srgb, var(--panel), transparent 10%);
+  background: color-mix(in srgb, var(--panel), transparent 12%);
 }
 
-.table-scroll .data-table {
-  min-width: 680px;
+.table-scroll::-webkit-scrollbar {
+  height: 10px;
+  width: 10px;
+}
+
+.table-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.table-scroll::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--line-strong), transparent 18%);
+  background-clip: padding-box;
+}
+
+.table-scroll::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--line-strong), transparent 6%);
+  background-clip: padding-box;
 }
 
 .data-table thead {
@@ -353,11 +376,46 @@ a {
   top: 0;
   z-index: 1;
   background: var(--table-head-bg);
+  backdrop-filter: blur(6px);
 }
 
 .data-table th,
 .data-table td {
-  padding: 0.58rem 0.58rem;
+  padding: 0.6rem 0.72rem;
+  vertical-align: middle;
+}
+
+.data-table th {
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.data-table td {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.data-table th:first-child,
+.data-table td:first-child {
+  padding-left: 0.86rem;
+}
+
+.data-table th:last-child,
+.data-table td:last-child {
+  padding-right: 0.86rem;
+}
+
+.data-table .numeric {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.data-table .cell-wrap {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  line-height: 1.35;
 }
 
 .data-table tbody tr {
@@ -378,11 +436,7 @@ a {
 
 @media (max-width: 640px) {
   .table-scroll {
-    max-height: 22rem;
-  }
-
-  .table-scroll .data-table {
-    min-width: 640px;
+    max-height: 20rem;
   }
 }
 

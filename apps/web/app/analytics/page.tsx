@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 
+import { TableScrollArea } from "@/components/table/table-scroll-area";
 import { getAnalyticsData } from "@/lib/analytics/service";
 import type { AnalyticsData } from "@/lib/analytics/service";
 import type { StrategyAnalyticsRecord, StrategyScore } from "@/lib/types";
@@ -149,8 +150,12 @@ export default function AnalyticsPage() {
           Worker <strong>{data.execution.workerName}</strong> on timeframe <strong>{data.execution.timeframe}</strong>. Mode: <strong>{data.execution.universeMode}</strong>. Universe: <strong>{data.execution.universeSymbols.join(", ") || "none"}</strong>. Scanned: <strong>{data.execution.scannedSymbols.join(", ") || "none"}</strong>. Shortlisted: <strong>{data.execution.shortlistedSymbols.join(", ") || "none"}</strong>. Last selected: <strong>{data.execution.lastSelectedSymbol ?? "none"} / {data.execution.lastSelectedStrategy ?? "none"}</strong>. Last no-trade reason: <strong>{data.execution.lastNoTradeReason ?? "none"}</strong>.
         </p>
         {Object.keys(data.execution.symbolFilterReasons).length > 0 ? (
-          <div className="table-scroll">
+          <TableScrollArea minWidth={720}>
             <table className="data-table text-sm">
+              <colgroup>
+                <col className="w-[24%]" />
+                <col className="w-[76%]" />
+              </colgroup>
               <thead>
                 <tr>
                   <th>Filtered Symbol</th>
@@ -161,18 +166,26 @@ export default function AnalyticsPage() {
                 {Object.entries(data.execution.symbolFilterReasons).map(([symbol, reasons]) => (
                   <tr key={symbol}>
                     <td>{symbol}</td>
-                    <td>{reasons.length > 0 ? reasons.join(", ") : "none"}</td>
+                    <td className="cell-wrap">{reasons.length > 0 ? reasons.join(", ") : "none"}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
-          </div>
+          </TableScrollArea>
         ) : null}
         {data.execution.symbols.length === 0 ? (
           <p className="mt-3 text-sm text-[var(--muted)]">No execution-cycle data yet.</p>
         ) : (
-          <div className="table-scroll">
+          <TableScrollArea minWidth={1040}>
             <table className="data-table text-sm">
+              <colgroup>
+                <col className="w-[10%]" />
+                <col className="w-[18%]" />
+                <col className="w-[18%]" />
+                <col className="w-[12%]" />
+                <col className="w-[14%]" />
+                <col className="w-[28%]" />
+              </colgroup>
               <thead>
                 <tr>
                   <th>Symbol</th>
@@ -191,12 +204,12 @@ export default function AnalyticsPage() {
                     <td>{row.selectedStrategy ?? "none"}</td>
                     <td>{row.action}</td>
                     <td>{row.orderStatus ?? "n/a"}</td>
-                    <td>{row.noTradeReason ?? "none"}</td>
+                    <td className="cell-wrap">{row.noTradeReason ?? "none"}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
-          </div>
+          </TableScrollArea>
         )}
       </article>
 
@@ -207,36 +220,46 @@ export default function AnalyticsPage() {
         {data.selection.candidates.length === 0 ? (
           <p className="mt-3 text-sm text-[var(--muted)]">No selection-candidate data yet.</p>
         ) : (
-          <div className="table-scroll">
+          <TableScrollArea minWidth={1060}>
             <table className="data-table text-sm">
+              <colgroup>
+                <col className="w-[22%]" />
+                <col className="w-[9%]" />
+                <col className="w-[9%]" />
+                <col className="w-[9%]" />
+                <col className="w-[10%]" />
+                <col className="w-[10%]" />
+                <col className="w-[14%]" />
+                <col className="w-[10%]" />
+              </colgroup>
               <thead>
                 <tr>
                   <th>Strategy</th>
-                  <th>Signal</th>
+                  <th className="numeric">Signal</th>
                   <th>Eligible</th>
-                  <th>Score</th>
-                  <th>Win Rate</th>
-                  <th>Sharpe</th>
-                  <th>Expectancy</th>
-                  <th>Regime Fit</th>
+                  <th className="numeric">Score</th>
+                  <th className="numeric">Win Rate</th>
+                  <th className="numeric">Sharpe</th>
+                  <th className="numeric">Expectancy</th>
+                  <th className="numeric">Regime Fit</th>
                 </tr>
               </thead>
               <tbody>
                 {data.selection.candidates.map((row) => (
                   <tr key={row.strategy}>
                     <td>{row.strategy}</td>
-                    <td>{row.signal.toFixed(3)}</td>
+                    <td className="numeric">{row.signal.toFixed(3)}</td>
                     <td>{row.eligible ? "yes" : "no"}</td>
-                    <td className={scoreTone(row.score)}>{row.score.toFixed(4)}</td>
-                    <td>{formatPct(row.winRate)}</td>
-                    <td>{row.recentSharpe.toFixed(3)}</td>
-                    <td>{formatUsd(row.recentExpectancy)}</td>
-                    <td>{row.regimeFit.toFixed(2)}</td>
+                    <td className={`numeric ${scoreTone(row.score)}`}>{row.score.toFixed(4)}</td>
+                    <td className="numeric">{formatPct(row.winRate)}</td>
+                    <td className="numeric">{row.recentSharpe.toFixed(3)}</td>
+                    <td className="numeric">{formatUsd(row.recentExpectancy)}</td>
+                    <td className="numeric">{row.regimeFit.toFixed(2)}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
-          </div>
+          </TableScrollArea>
         )}
       </article>
 
@@ -251,32 +274,40 @@ export default function AnalyticsPage() {
           {paperData.strategies.strategies.length === 0 ? (
             <p className="mt-3 text-sm text-[var(--muted)]">No paper execution fills yet.</p>
           ) : (
-            <div className="table-scroll">
+            <TableScrollArea minWidth={840}>
               <table className="data-table text-sm">
+                <colgroup>
+                  <col className="w-[30%]" />
+                  <col className="w-[10%]" />
+                  <col className="w-[14%]" />
+                  <col className="w-[14%]" />
+                  <col className="w-[16%]" />
+                  <col className="w-[16%]" />
+                </colgroup>
                 <thead>
                   <tr>
                     <th>Strategy</th>
-                    <th>Trades</th>
-                    <th>Total Return</th>
-                    <th>Win Rate</th>
-                    <th>Profit Factor</th>
-                    <th>Expectancy</th>
+                    <th className="numeric">Trades</th>
+                    <th className="numeric">Total Return</th>
+                    <th className="numeric">Win Rate</th>
+                    <th className="numeric">Profit Factor</th>
+                    <th className="numeric">Expectancy</th>
                   </tr>
                 </thead>
                 <tbody>
                   {paperData.strategies.strategies.map((row) => (
                     <tr key={row.strategy}>
                       <td>{row.strategy}</td>
-                      <td>{row.numTrades}</td>
-                      <td>{formatPct(row.totalReturn)}</td>
-                      <td>{formatPct(row.winRate)}</td>
-                      <td>{row.profitFactor.toFixed(2)}</td>
-                      <td>{formatUsd(row.expectancy)}</td>
+                      <td className="numeric">{row.numTrades}</td>
+                      <td className="numeric">{formatPct(row.totalReturn)}</td>
+                      <td className="numeric">{formatPct(row.winRate)}</td>
+                      <td className="numeric">{row.profitFactor.toFixed(2)}</td>
+                      <td className="numeric">{formatUsd(row.expectancy)}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-            </div>
+            </TableScrollArea>
           )}
         </article>
 
@@ -294,98 +325,119 @@ export default function AnalyticsPage() {
           {backtestData.strategies.strategies.length === 0 ? (
             <p className="mt-3 text-sm text-[var(--muted)]">No persisted backtest runs yet.</p>
           ) : (
-            <div className="table-scroll">
+            <TableScrollArea minWidth={760}>
               <table className="data-table text-sm">
+                <colgroup>
+                  <col className="w-[36%]" />
+                  <col className="w-[12%]" />
+                  <col className="w-[17%]" />
+                  <col className="w-[17%]" />
+                  <col className="w-[18%]" />
+                </colgroup>
                 <thead>
                   <tr>
                     <th>Strategy</th>
-                    <th>Trades</th>
-                    <th>Total Return</th>
-                    <th>Win Rate</th>
-                    <th>Profit Factor</th>
+                    <th className="numeric">Trades</th>
+                    <th className="numeric">Total Return</th>
+                    <th className="numeric">Win Rate</th>
+                    <th className="numeric">Profit Factor</th>
                   </tr>
                 </thead>
                 <tbody>
                   {backtestData.strategies.strategies.map((row) => (
                     <tr key={`${row.strategy}-backtest`}>
                       <td>{row.strategy}</td>
-                      <td>{row.numTrades}</td>
-                      <td>{formatPct(row.totalReturn)}</td>
-                      <td>{formatPct(row.winRate)}</td>
-                      <td>{row.profitFactor.toFixed(2)}</td>
+                      <td className="numeric">{row.numTrades}</td>
+                      <td className="numeric">{formatPct(row.totalReturn)}</td>
+                      <td className="numeric">{formatPct(row.winRate)}</td>
+                      <td className="numeric">{row.profitFactor.toFixed(2)}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-            </div>
+            </TableScrollArea>
           )}
         </article>
       </div>
 
       <div className="grid gap-4 xl:grid-cols-2">
         <article className="glass-panel rounded-2xl p-4">
-          <h3 className="text-sm font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
-            Rolling 20-Trade (Paper)
-          </h3>
-          {selectedMetrics == null ? (
-            <p className="mt-3 text-sm text-[var(--muted)]">No selected paper strategy rolling data yet.</p>
-          ) : (
-            <div className="table-scroll">
-              <table className="data-table text-sm">
-                <thead>
-                  <tr>
-                    <th>Trade #</th>
-                    <th>Timestamp</th>
-                    <th>Win Rate</th>
-                    <th>Expectancy</th>
-                    <th>Sharpe</th>
+        <h3 className="text-sm font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
+          Rolling 20-Trade (Paper)
+        </h3>
+        {selectedMetrics == null ? (
+          <p className="mt-3 text-sm text-[var(--muted)]">No selected paper strategy rolling data yet.</p>
+        ) : (
+          <TableScrollArea minWidth={860}>
+            <table className="data-table text-sm">
+              <colgroup>
+                <col className="w-[12%]" />
+                <col className="w-[33%]" />
+                <col className="w-[17%]" />
+                <col className="w-[20%]" />
+                <col className="w-[18%]" />
+              </colgroup>
+              <thead>
+                <tr>
+                  <th className="numeric">Trade #</th>
+                  <th>Timestamp</th>
+                  <th className="numeric">Win Rate</th>
+                  <th className="numeric">Expectancy</th>
+                  <th className="numeric">Sharpe</th>
+                </tr>
+              </thead>
+              <tbody>
+                {topRollingRows(selectedMetrics).map((point) => (
+                  <tr key={`${point.tradeIndex}-${point.timestamp}`}>
+                    <td className="numeric">{point.tradeIndex}</td>
+                    <td>{new Date(point.timestamp).toLocaleString()}</td>
+                    <td className="numeric">{formatPct(point.winRate)}</td>
+                    <td className="numeric">{formatUsd(point.expectancy)}</td>
+                    <td className="numeric">{point.sharpe.toFixed(3)}</td>
                   </tr>
-                </thead>
-                <tbody>
-                  {topRollingRows(selectedMetrics).map((point) => (
-                    <tr key={`${point.tradeIndex}-${point.timestamp}`}>
-                      <td>{point.tradeIndex}</td>
-                      <td>{new Date(point.timestamp).toLocaleString()}</td>
-                      <td>{formatPct(point.winRate)}</td>
-                      <td>{formatUsd(point.expectancy)}</td>
-                      <td>{point.sharpe.toFixed(3)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </article>
+                ))}
+              </tbody>
+            </table>
+          </TableScrollArea>
+        )}
+      </article>
 
         <article className="glass-panel rounded-2xl p-4">
-          <h3 className="text-sm font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
-            Strategy Rejections / Deprioritization
-          </h3>
-          {rejected.length === 0 ? (
-            <p className="mt-3 text-sm text-[var(--muted)]">No rejected strategies in the latest decision.</p>
-          ) : (
-            <div className="table-scroll">
-              <table className="data-table text-sm">
-                <thead>
-                  <tr>
-                    <th>Strategy</th>
-                    <th>Score</th>
-                    <th>Reasons</th>
+        <h3 className="text-sm font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
+          Strategy Rejections / Deprioritization
+        </h3>
+        {rejected.length === 0 ? (
+          <p className="mt-3 text-sm text-[var(--muted)]">No rejected strategies in the latest decision.</p>
+        ) : (
+          <TableScrollArea minWidth={860}>
+            <table className="data-table text-sm">
+              <colgroup>
+                <col className="w-[24%]" />
+                <col className="w-[14%]" />
+                <col className="w-[62%]" />
+              </colgroup>
+              <thead>
+                <tr>
+                  <th>Strategy</th>
+                  <th className="numeric">Score</th>
+                  <th>Reasons</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rejected.map((row) => (
+                  <tr key={row.strategy}>
+                    <td>{row.strategy}</td>
+                    <td className="numeric">{row.score.toFixed(4)}</td>
+                    <td className="cell-wrap">
+                      {row.reasons.length > 0 ? row.reasons.join(", ") : "deprioritized"}
+                    </td>
                   </tr>
-                </thead>
-                <tbody>
-                  {rejected.map((row) => (
-                    <tr key={row.strategy}>
-                      <td>{row.strategy}</td>
-                      <td>{row.score.toFixed(4)}</td>
-                      <td>{row.reasons.length > 0 ? row.reasons.join(", ") : "deprioritized"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </article>
+                ))}
+              </tbody>
+            </table>
+          </TableScrollArea>
+        )}
+      </article>
       </div>
     </section>
   );

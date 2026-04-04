@@ -1,4 +1,5 @@
 import type { TradeRow } from "@/lib/types";
+import { TableScrollArea } from "@/components/table/table-scroll-area";
 
 type RecentTradesTableProps = {
   trades: TradeRow[];
@@ -27,40 +28,49 @@ export function RecentTradesTable({ trades }: RecentTradesTableProps) {
           No real trades yet. Paper trading is idle or no fills have been persisted.
         </p>
       ) : (
-        <div className="table-scroll">
+        <TableScrollArea minWidth={960}>
           <table className="data-table text-sm">
+            <colgroup>
+              <col className="w-[24%]" />
+              <col className="w-[9%]" />
+              <col className="w-[9%]" />
+              <col className="w-[8%]" />
+              <col className="w-[12%]" />
+              <col className="w-[12%]" />
+              <col className="w-[26%]" />
+            </colgroup>
             <thead>
               <tr>
-                <th className="px-2 py-2">Time</th>
-                <th className="px-2 py-2">Symbol</th>
-                <th className="px-2 py-2">Side</th>
-                <th className="px-2 py-2">Qty</th>
-                <th className="px-2 py-2">Exit</th>
-                <th className="px-2 py-2">PnL</th>
-                <th className="px-2 py-2">Strategy</th>
+                <th>Time</th>
+                <th>Symbol</th>
+                <th>Side</th>
+                <th className="numeric">Qty</th>
+                <th className="numeric">Exit</th>
+                <th className="numeric">PnL</th>
+                <th>Strategy</th>
               </tr>
             </thead>
             <tbody>
               {trades.map((trade) => (
                 <tr key={`${trade.timestamp}-${trade.symbol}-${trade.side}`}>
-                  <td className="px-2 py-2">{new Date(trade.timestamp).toLocaleString()}</td>
-                  <td className="px-2 py-2 font-medium">{trade.symbol}</td>
-                  <td className="px-2 py-2">{trade.side}</td>
-                  <td className="px-2 py-2">{formatNumber(trade.quantity)}</td>
-                  <td className="px-2 py-2">{formatMoney(trade.exitPrice)}</td>
+                  <td>{new Date(trade.timestamp).toLocaleString()}</td>
+                  <td className="font-medium">{trade.symbol}</td>
+                  <td>{trade.side}</td>
+                  <td className="numeric">{formatNumber(trade.quantity)}</td>
+                  <td className="numeric">{formatMoney(trade.exitPrice)}</td>
                   <td
-                    className={`px-2 py-2 font-medium ${
+                    className={`numeric font-medium ${
                       trade.realizedPnl >= 0 ? "text-[var(--accent)]" : "text-[var(--danger)]"
                     }`}
                   >
                     {formatMoney(trade.realizedPnl)}
                   </td>
-                  <td className="px-2 py-2">{trade.strategy}</td>
+                  <td>{trade.strategy}</td>
                 </tr>
               ))}
             </tbody>
           </table>
-        </div>
+        </TableScrollArea>
       )}
     </article>
   );
