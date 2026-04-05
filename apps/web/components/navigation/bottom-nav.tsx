@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import type { CSSProperties } from "react";
 
 type BottomNavItem = {
   href: string;
@@ -48,6 +49,26 @@ function TradesIcon({ active }: { active: boolean }) {
       <path d="M4 18h4l2.5-5 3 6 2.5-4H20" />
       <path d="M5 7h14" />
       <path d="M5 12h5" />
+    </svg>
+  );
+}
+
+function AnalyticsIcon({ active }: { active: boolean }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={`h-5 w-5 ${active ? "scale-[1.02]" : ""}`}
+      aria-hidden="true"
+    >
+      <path d="M5 18V9" />
+      <path d="M12 18V5" />
+      <path d="M19 18v-7" />
+      <path d="M3.5 18.5h17" />
     </svg>
   );
 }
@@ -115,6 +136,7 @@ function SettingsIcon({ active }: { active: boolean }) {
 const navItems: BottomNavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: DashboardIcon },
   { href: "/trades", label: "Trades", icon: TradesIcon },
+  { href: "/analytics", label: "Analytics", icon: AnalyticsIcon },
   { href: "/backtests", label: "Backtests", icon: BacktestsIcon },
   { href: "/strategies", label: "Strategies", icon: StrategiesIcon },
   { href: "/settings", label: "Settings", icon: SettingsIcon }
@@ -122,11 +144,14 @@ const navItems: BottomNavItem[] = [
 
 export function BottomNav() {
   const pathname = usePathname() || "/";
+  const shellStyle: CSSProperties = {
+    gridTemplateColumns: `repeat(${navItems.length}, minmax(0, 1fr))`
+  };
 
   return (
     <footer className="mobile-footer-nav md:hidden">
       <nav aria-label="Primary mobile navigation" className="mx-auto w-full max-w-[34rem] px-3">
-        <div className="bottom-nav-shell">
+        <div className="bottom-nav-shell" style={shellStyle}>
           {navItems.map((item) => {
             const active = isRouteActive(pathname, item.href);
             const Icon = item.icon;
@@ -141,7 +166,7 @@ export function BottomNav() {
                 <span className="bottom-nav-icon">
                   <Icon active={active} />
                 </span>
-                <span>{item.label}</span>
+                <span className="bottom-nav-label">{item.label}</span>
               </Link>
             );
           })}

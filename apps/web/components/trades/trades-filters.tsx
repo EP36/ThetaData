@@ -32,7 +32,7 @@ export function TradesFilters({
         </>
       ) : null}
       <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <label className="flex flex-col gap-1 text-sm">
+        <label className="ui-field flex flex-col gap-1 text-sm">
           <span className="ui-label">Symbol</span>
           <input
             value={value.symbol}
@@ -43,7 +43,7 @@ export function TradesFilters({
             placeholder="SPY"
           />
         </label>
-        <label className="flex flex-col gap-1 text-sm">
+        <label className="ui-field flex flex-col gap-1 text-sm">
           <span className="ui-label">Strategy</span>
           <select
             value={value.strategy}
@@ -55,7 +55,7 @@ export function TradesFilters({
             <option value="rsi_mean_reversion">RSI Mean Reversion</option>
           </select>
         </label>
-        <label className="flex flex-col gap-1 text-sm">
+        <label className="ui-field flex flex-col gap-1 text-sm">
           <span className="ui-label">Start Date</span>
           <input
             type="date"
@@ -64,7 +64,7 @@ export function TradesFilters({
             className="ui-input"
           />
         </label>
-        <label className="flex flex-col gap-1 text-sm">
+        <label className="ui-field flex flex-col gap-1 text-sm">
           <span className="ui-label">End Date</span>
           <input
             type="date"

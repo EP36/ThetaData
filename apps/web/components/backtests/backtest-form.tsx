@@ -58,7 +58,7 @@ export function BacktestForm({
         Configure the simulation window and strategy, then review position sizing before you run.
       </p>
       <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-        <label className="flex flex-col gap-1 text-sm">
+        <label className="ui-field flex flex-col gap-1 text-sm">
           <span className="ui-label">Symbol</span>
           <input
             value={value.symbol}
@@ -67,7 +67,7 @@ export function BacktestForm({
           />
         </label>
 
-        <label className="flex flex-col gap-1 text-sm">
+        <label className="ui-field flex flex-col gap-1 text-sm">
           <span className="ui-label">Timeframe</span>
           <select
             value={value.timeframe}
@@ -80,7 +80,7 @@ export function BacktestForm({
           </select>
         </label>
 
-        <label className="flex flex-col gap-1 text-sm">
+        <label className="ui-field flex flex-col gap-1 text-sm">
           <span className="ui-label">Start Date</span>
           <input
             type="date"
@@ -90,7 +90,7 @@ export function BacktestForm({
           />
         </label>
 
-        <label className="flex flex-col gap-1 text-sm">
+        <label className="ui-field flex flex-col gap-1 text-sm">
           <span className="ui-label">End Date</span>
           <input
             type="date"
@@ -100,7 +100,7 @@ export function BacktestForm({
           />
         </label>
 
-        <label className="flex flex-col gap-1 text-sm">
+        <label className="ui-field flex flex-col gap-1 text-sm">
           <span className="ui-label">Strategy</span>
           <select
             value={value.strategy}
