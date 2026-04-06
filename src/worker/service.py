@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import logging
 from pathlib import Path
 import time
-from typing import cast
+from typing import Any, cast
 from uuid import uuid4
 
 import pandas as pd
@@ -34,6 +34,20 @@ from src.selection import (
     strategy_compatible_regimes,
 )
 from src.strategies import create_strategy, list_strategies
+from src.trading import (
+    GatedTradeIntent,
+    MarketRegimeEvaluation,
+    PositionSizingConfig,
+    RiskPolicyConfig,
+    StrategyGateConfig,
+    TradeIntent,
+    TradingRiskState,
+    calculate_position_size,
+    evaluate_risk_policy,
+    gate_trade_intent,
+    get_market_regime,
+    normalize_strategy_id,
+)
 from src.worker.universe import (
     UniverseMode,
     UniverseScanResult,
@@ -69,6 +83,18 @@ def _build_loader(cache_dir: str) -> HistoricalDataLoader:
     return HistoricalDataLoader(provider=provider, cache=cache)
 
 
+def _coerce_float(value: object) -> float | None:
+    """Return a float when the value is numeric-like."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 @dataclass(frozen=True, slots=True)
 class SymbolCycleSummary:
     """Result summary for one symbol processed in one worker cycle."""
@@ -82,6 +108,15 @@ class SymbolCycleSummary:
     order_status: str | None
     no_trade_reason: str | None
     rejection_reasons: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class OrderPlanningResult:
+    """Outcome from entry gating/sizing/order preparation."""
+
+    order: Order | None
+    no_trade_reason: str | None = None
+    rejection_reasons: tuple[str, ...] = ()
 
 
 @dataclass(slots=True)
@@ -337,13 +372,17 @@ class TradingWorker:
             },
         )
 
+        effective_max_open_positions = self._effective_max_open_positions()
+        effective_max_gross_exposure = self._effective_max_gross_exposure()
         risk_manager = RiskManager(
             max_position_size=self.settings.max_position_size,
             max_daily_loss=self.settings.max_daily_loss,
-            max_open_positions=self.settings.max_open_positions,
+            max_gross_exposure=effective_max_gross_exposure,
+            max_open_positions=effective_max_open_positions,
             trading_start=self.settings.trading_start,
             trading_end=self.settings.trading_end,
             allow_after_hours=self.settings.allow_after_hours,
+            default_stop_loss_pct=self.settings.default_stop_loss_pct_for_sizing,
         )
         executor = PaperTradingExecutor(
             starting_cash=self.settings.initial_capital,
@@ -352,7 +391,7 @@ class TradingWorker:
                 self.settings.paper_trading_enabled and not self.settings.worker_dry_run
             ),
             max_notional_per_trade=self.settings.max_notional_per_trade,
-            max_open_positions=self.settings.max_open_positions,
+            max_open_positions=effective_max_open_positions,
             daily_loss_cap=self.settings.executor_daily_loss_cap,
         )
 
@@ -704,6 +743,8 @@ class TradingWorker:
             )
             latest_price = float(data["close"].iloc[-1])
             latest_timestamp = pd.Timestamp(data.index[-1])
+            current_position = executor.positions.get(symbol)
+            persisted_configs = self.repository.load_strategy_configs()
 
             regime = classify_regime(data)
             LOGGER.info(
@@ -728,6 +769,45 @@ class TradingWorker:
                     **regime.as_signals(),
                 },
             )
+            market_regime = self._determine_market_regime(
+                data=data,
+                persisted_configs=persisted_configs,
+            )
+            LOGGER.info(
+                "market_regime_evaluated cycle_key=%s symbol=%s regime=%s short_ma=%s long_ma=%s spread_pct=%s",
+                cycle_key,
+                symbol,
+                market_regime.regime,
+                (
+                    f"{market_regime.short_moving_average:.6f}"
+                    if market_regime.short_moving_average is not None
+                    else "na"
+                ),
+                (
+                    f"{market_regime.long_moving_average:.6f}"
+                    if market_regime.long_moving_average is not None
+                    else "na"
+                ),
+                (
+                    f"{market_regime.spread_pct:.6f}"
+                    if market_regime.spread_pct is not None
+                    else "na"
+                ),
+            )
+            self.repository.append_log_event(
+                level="INFO",
+                logger_name=LOGGER.name,
+                event="market_regime_evaluated",
+                run_id=run_id,
+                payload={
+                    "cycle_key": cycle_key,
+                    "symbol": symbol,
+                    "market_regime": market_regime.regime,
+                    "short_moving_average": market_regime.short_moving_average,
+                    "long_moving_average": market_regime.long_moving_average,
+                    "spread_pct": market_regime.spread_pct,
+                },
+            )
 
             locked_strategy = None
             if not self.settings.worker_allow_multi_strategy_per_symbol:
@@ -738,6 +818,18 @@ class TradingWorker:
                 analytics=analytics,
                 symbol=symbol,
                 locked_strategy=locked_strategy,
+                persisted_configs=persisted_configs,
+            )
+            candidates = self._apply_strategy_gates_for_new_entries(
+                candidates=candidates,
+                symbol=symbol,
+                latest_price=latest_price,
+                latest_timestamp=latest_timestamp,
+                current_position=current_position,
+                market_regime=market_regime,
+                persisted_configs=persisted_configs,
+                cycle_key=cycle_key,
+                run_id=run_id,
             )
             selection_state = self._build_global_selection_state(
                 executor=executor,
@@ -770,19 +862,23 @@ class TradingWorker:
                 if selected_entry is not None:
                     selected_signal = float(selected_entry.signal)
 
-            current_position = executor.positions.get(symbol)
-            order = self._build_order(
+            order_plan = self._plan_order(
                 symbol=symbol,
-                selected_strategy=decision.selected_strategy,
+                decision=decision,
                 selected_signal=selected_signal,
                 latest_price=latest_price,
                 latest_timestamp=latest_timestamp,
                 current_position=current_position,
-                sizing_multiplier=decision.sizing_multiplier,
+                executor=executor,
+                market_regime=market_regime,
+                persisted_configs=persisted_configs,
+                cycle_key=cycle_key,
+                run_id=run_id,
             )
+            order = order_plan.order
 
             if order is None:
-                no_trade_reason = self._determine_no_trade_reason(
+                no_trade_reason = order_plan.no_trade_reason or self._determine_no_trade_reason(
                     decision=decision,
                     selected_signal=selected_signal,
                     current_position=current_position,
@@ -803,6 +899,7 @@ class TradingWorker:
                         "cycle_key": cycle_key,
                         "symbol": symbol,
                         "no_trade_reason": no_trade_reason,
+                        "rejection_reasons": list(order_plan.rejection_reasons),
                         "selection": decision.as_dict(),
                     },
                 )
@@ -813,6 +910,7 @@ class TradingWorker:
                         "selection": decision.as_dict(),
                         "action": "no_order",
                         "no_trade_reason": no_trade_reason,
+                        "rejection_reasons": list(order_plan.rejection_reasons),
                         "active_strategy": symbol_strategy_locks.get(symbol),
                     },
                 )
@@ -825,7 +923,7 @@ class TradingWorker:
                     active_strategy=symbol_strategy_locks.get(symbol),
                     order_status=None,
                     no_trade_reason=no_trade_reason,
-                    rejection_reasons=(),
+                    rejection_reasons=order_plan.rejection_reasons,
                 )
 
             if self.settings.worker_dry_run:
@@ -1127,9 +1225,11 @@ class TradingWorker:
         analytics: PerformanceAnalyticsSnapshot,
         symbol: str,
         locked_strategy: str | None,
+        persisted_configs: dict[str, dict[str, Any]] | None = None,
     ) -> list[StrategyCandidate]:
         """Build normalized candidate inputs for all registered strategies."""
-        persisted_configs = self.repository.load_strategy_configs()
+        if persisted_configs is None:
+            persisted_configs = self.repository.load_strategy_configs()
         metrics_by_strategy = analytics.strategies_by_name
 
         candidates: list[StrategyCandidate] = []
@@ -1214,7 +1314,8 @@ class TradingWorker:
     ) -> GlobalSelectionState:
         """Compute global gating state for deterministic eligibility checks."""
         current_equity = executor.current_equity()
-        required_notional = float(self.settings.worker_order_quantity * latest_price)
+        required_quantity = 1.0 if self.settings.enable_position_sizing else self.settings.worker_order_quantity
+        required_notional = float(required_quantity * latest_price)
         max_position_notional = float(self.settings.max_position_size * current_equity)
         available_notional = float(min(self.settings.max_notional_per_trade, max_position_notional))
 
@@ -1224,7 +1325,7 @@ class TradingWorker:
             and float(executor.positions[symbol].quantity) > EPSILON
         )
         max_positions_breached = (
-            active_positions >= self.settings.max_open_positions and not has_symbol_position
+            active_positions >= self._effective_max_open_positions() and not has_symbol_position
         )
 
         return GlobalSelectionState(
@@ -1379,6 +1480,437 @@ class TradingWorker:
                 "selected_strategy": decision.selected_strategy,
                 "sizing_multiplier": float(decision.sizing_multiplier),
                 "allocation_fraction": float(decision.allocation_fraction),
+            },
+        )
+
+    def _determine_market_regime(
+        self,
+        data: pd.DataFrame,
+        persisted_configs: dict[str, dict[str, Any]],
+    ) -> MarketRegimeEvaluation:
+        """Evaluate the MA-crossover regime used by the additive gating layer."""
+        regime_params = self._resolve_strategy_parameters(
+            "moving_average_crossover",
+            persisted_configs.get("moving_average_crossover", {}),
+        )
+        short_window = int(regime_params.get("short_window", 20))
+        long_window = int(regime_params.get("long_window", 50))
+        return get_market_regime(
+            data,
+            short_window=short_window,
+            long_window=long_window,
+            threshold_pct=self.settings.market_regime_threshold_pct,
+        )
+
+    def _apply_strategy_gates_for_new_entries(
+        self,
+        candidates: list[StrategyCandidate],
+        symbol: str,
+        latest_price: float,
+        latest_timestamp: pd.Timestamp,
+        current_position: Position | None,
+        market_regime: MarketRegimeEvaluation,
+        persisted_configs: dict[str, dict[str, Any]],
+        cycle_key: str,
+        run_id: str,
+    ) -> list[StrategyCandidate]:
+        """Add regime gate reasons to entry candidates without disturbing exits."""
+        current_qty = 0.0 if current_position is None else float(current_position.quantity)
+        if not self.settings.enable_strategy_gating or current_qty > EPSILON:
+            return candidates
+
+        gate_config = self._strategy_gate_config()
+        gated_candidates: list[StrategyCandidate] = []
+        for candidate in candidates:
+            if candidate.signal <= EPSILON:
+                gated_candidates.append(candidate)
+                continue
+
+            intent = self._build_trade_intent(
+                symbol=symbol,
+                strategy_name=candidate.strategy,
+                latest_price=latest_price,
+                latest_timestamp=latest_timestamp,
+                signal=candidate.signal,
+                market_regime=market_regime,
+                persisted_configs=persisted_configs,
+            )
+            if intent is None:
+                gated_candidates.append(candidate)
+                continue
+
+            _, gate_decision = gate_trade_intent(intent, config=gate_config)
+            if gate_decision.approved:
+                gated_candidates.append(candidate)
+                continue
+
+            self._log_trade_intent_rejection(
+                run_id=run_id,
+                cycle_key=cycle_key,
+                symbol=symbol,
+                strategy_name=candidate.strategy,
+                stage="strategy_gate",
+                reasons=gate_decision.reasons,
+                market_regime=market_regime.regime,
+            )
+            gated_candidates.append(
+                replace(
+                    candidate,
+                    external_reasons=tuple(
+                        dict.fromkeys((*candidate.external_reasons, *gate_decision.reasons))
+                    ),
+                )
+            )
+        return gated_candidates
+
+    def _plan_order(
+        self,
+        symbol: str,
+        decision: SelectionDecision,
+        selected_signal: float,
+        latest_price: float,
+        latest_timestamp: pd.Timestamp,
+        current_position: Position | None,
+        executor: PaperTradingExecutor,
+        market_regime: MarketRegimeEvaluation,
+        persisted_configs: dict[str, dict[str, Any]],
+        cycle_key: str,
+        run_id: str,
+    ) -> OrderPlanningResult:
+        """Prepare an order using optional gating, sizing, and risk-policy layers."""
+        current_qty = 0.0 if current_position is None else float(current_position.quantity)
+        if current_qty > EPSILON:
+            order = self._build_order(
+                symbol=symbol,
+                selected_strategy=decision.selected_strategy,
+                selected_signal=selected_signal,
+                latest_price=latest_price,
+                latest_timestamp=latest_timestamp,
+                current_position=current_position,
+                sizing_multiplier=decision.sizing_multiplier,
+            )
+            return OrderPlanningResult(order=order)
+
+        if decision.selected_strategy is None or selected_signal <= EPSILON:
+            return OrderPlanningResult(order=None)
+
+        if not (
+            self.settings.enable_strategy_gating
+            or self.settings.enable_position_sizing
+            or self.settings.enable_risk_caps
+        ):
+            return OrderPlanningResult(
+                order=self._build_order(
+                    symbol=symbol,
+                    selected_strategy=decision.selected_strategy,
+                    selected_signal=selected_signal,
+                    latest_price=latest_price,
+                    latest_timestamp=latest_timestamp,
+                    current_position=current_position,
+                    sizing_multiplier=decision.sizing_multiplier,
+                )
+            )
+
+        intent = self._build_trade_intent(
+            symbol=symbol,
+            strategy_name=decision.selected_strategy,
+            latest_price=latest_price,
+            latest_timestamp=latest_timestamp,
+            signal=selected_signal,
+            market_regime=market_regime,
+            persisted_configs=persisted_configs,
+        )
+        if intent is None:
+            return OrderPlanningResult(order=None, no_trade_reason="unsupported_trade_intent")
+
+        gated_intent = None
+        if self.settings.enable_strategy_gating:
+            gated_intent, gate_decision = gate_trade_intent(
+                intent,
+                config=self._strategy_gate_config(),
+            )
+            if not gate_decision.approved:
+                self._log_trade_intent_rejection(
+                    run_id=run_id,
+                    cycle_key=cycle_key,
+                    symbol=symbol,
+                    strategy_name=decision.selected_strategy,
+                    stage="strategy_gate",
+                    reasons=gate_decision.reasons,
+                    market_regime=market_regime.regime,
+                )
+                return OrderPlanningResult(
+                    order=None,
+                    no_trade_reason=f"trade_intent_rejected:{gate_decision.reasons[0]}",
+                    rejection_reasons=tuple(gate_decision.reasons),
+                )
+        else:
+            gated_intent = self._wrap_trade_intent_without_gate(intent)
+
+        risk_state = self._build_trading_risk_state(
+            executor=executor,
+            symbol=symbol,
+            latest_price=latest_price,
+        )
+
+        if self.settings.enable_position_sizing:
+            sized_intent, sizing_decision = calculate_position_size(
+                gated_intent,
+                state=risk_state,
+                config=self._position_sizing_config(),
+            )
+            if not sizing_decision.approved:
+                self._log_trade_intent_rejection(
+                    run_id=run_id,
+                    cycle_key=cycle_key,
+                    symbol=symbol,
+                    strategy_name=decision.selected_strategy,
+                    stage="position_sizing",
+                    reasons=sizing_decision.reasons,
+                    market_regime=market_regime.regime,
+                )
+                return OrderPlanningResult(
+                    order=None,
+                    no_trade_reason=f"trade_intent_rejected:{sizing_decision.reasons[0]}",
+                    rejection_reasons=tuple(sizing_decision.reasons),
+                )
+            self._log_sized_trade_intent(
+                run_id=run_id,
+                cycle_key=cycle_key,
+                sized_intent=sized_intent,
+            )
+            quantity = float(sized_intent.quantity)
+            proposed_notional = float(sized_intent.projected_notional)
+            final_stop_loss_pct = sized_intent.stop_loss_pct
+            trailing_stop_pct = sized_intent.trailing_stop_pct
+        else:
+            quantity = float(self.settings.worker_order_quantity * max(decision.sizing_multiplier, 0.0))
+            proposed_notional = float(quantity * latest_price)
+            final_stop_loss_pct = gated_intent.stop_loss_pct
+            trailing_stop_pct = gated_intent.trailing_stop_pct
+            if quantity <= EPSILON:
+                return OrderPlanningResult(order=None, no_trade_reason="sizing_multiplier_zero")
+
+        if self.settings.enable_risk_caps:
+            risk_decision = evaluate_risk_policy(
+                gated_intent,
+                state=risk_state,
+                config=self._risk_policy_config(),
+                proposed_notional=proposed_notional,
+            )
+            if not risk_decision.approved:
+                self._log_trade_intent_rejection(
+                    run_id=run_id,
+                    cycle_key=cycle_key,
+                    symbol=symbol,
+                    strategy_name=decision.selected_strategy,
+                    stage="risk_policy",
+                    reasons=risk_decision.reasons,
+                    market_regime=market_regime.regime,
+                )
+                return OrderPlanningResult(
+                    order=None,
+                    no_trade_reason=f"trade_intent_rejected:{risk_decision.reasons[0]}",
+                    rejection_reasons=tuple(risk_decision.reasons),
+                )
+
+        return OrderPlanningResult(
+            order=Order(
+                symbol=symbol,
+                side="BUY",
+                quantity=quantity,
+                price=latest_price,
+                timestamp=latest_timestamp,
+                stop_loss_pct=final_stop_loss_pct,
+                trailing_stop_pct=trailing_stop_pct,
+            )
+        )
+
+    def _build_trade_intent(
+        self,
+        symbol: str,
+        strategy_name: str,
+        latest_price: float,
+        latest_timestamp: pd.Timestamp,
+        signal: float,
+        market_regime: MarketRegimeEvaluation,
+        persisted_configs: dict[str, dict[str, Any]],
+    ) -> TradeIntent | None:
+        """Build a typed trade intent for a selected long-entry strategy."""
+        strategy_id = normalize_strategy_id(strategy_name)
+        if strategy_id is None:
+            return None
+
+        strategy_params = self._resolve_strategy_parameters(
+            strategy_name,
+            persisted_configs.get(strategy_name, {}),
+        )
+        stop_price = _coerce_float(strategy_params.get("stop_price"))
+        stop_loss_pct = _coerce_float(strategy_params.get("stop_loss_pct"))
+        trailing_stop_pct = _coerce_float(strategy_params.get("trailing_stop_pct"))
+        if stop_loss_pct is None:
+            stop_loss_pct = self.settings.default_stop_loss_pct_for_sizing
+        if stop_price is None and stop_loss_pct is not None:
+            stop_price = latest_price * (1.0 - stop_loss_pct)
+
+        return TradeIntent(
+            symbol=symbol,
+            strategy_id=strategy_id,
+            side="BUY",
+            entry_price=float(latest_price),
+            timestamp=latest_timestamp,
+            signal=float(signal),
+            regime=market_regime.regime,
+            stop_price=stop_price,
+            stop_loss_pct=stop_loss_pct,
+            trailing_stop_pct=trailing_stop_pct,
+        )
+
+    def _wrap_trade_intent_without_gate(self, intent: TradeIntent) -> GatedTradeIntent:
+        """Wrap a raw trade intent with a neutral size multiplier."""
+        return GatedTradeIntent(
+            symbol=intent.symbol,
+            strategy_id=intent.strategy_id,
+            side=intent.side,
+            entry_price=float(intent.entry_price),
+            timestamp=intent.timestamp,
+            signal=float(intent.signal),
+            regime=intent.regime,
+            stop_price=intent.stop_price,
+            stop_loss_pct=intent.stop_loss_pct,
+            trailing_stop_pct=intent.trailing_stop_pct,
+            regime_size_multiplier=1.0,
+        )
+
+    def _build_trading_risk_state(
+        self,
+        executor: PaperTradingExecutor,
+        symbol: str,
+        latest_price: float,
+    ) -> TradingRiskState:
+        """Build lightweight account state for additive trade controls."""
+        gross_exposure = 0.0
+        active_positions = 0
+        for position_symbol, position in executor.positions.items():
+            quantity = float(position.quantity)
+            if quantity <= EPSILON:
+                continue
+            active_positions += 1
+            price = latest_price if position_symbol == symbol else float(position.avg_price)
+            gross_exposure += abs(quantity * price)
+
+        return TradingRiskState(
+            account_equity=float(executor.current_equity()),
+            day_start_equity=float(executor.day_start_equity),
+            gross_exposure=float(gross_exposure),
+            active_positions=active_positions,
+        )
+
+    def _strategy_gate_config(self) -> StrategyGateConfig:
+        """Build config for the additive strategy gate."""
+        return StrategyGateConfig(
+            allow_rsi_in_bullish=self.settings.allow_rsi_in_bullish_regime,
+            allow_bearish_mean_reversion=self.settings.allow_bearish_mean_reversion,
+            bullish_regime_size_multiplier=self.settings.bullish_regime_size_multiplier,
+            sideways_regime_size_multiplier=self.settings.sideways_regime_size_multiplier,
+            bearish_regime_size_multiplier=self.settings.bearish_regime_size_multiplier,
+        )
+
+    def _position_sizing_config(self) -> PositionSizingConfig:
+        """Build config for fixed-risk position sizing."""
+        return PositionSizingConfig(
+            risk_per_trade_pct=self.settings.risk_per_trade_pct,
+            max_portfolio_exposure_pct=self.settings.max_portfolio_exposure_pct,
+            max_concurrent_positions=self.settings.max_concurrent_positions,
+        )
+
+    def _risk_policy_config(self) -> RiskPolicyConfig:
+        """Build config for additive risk caps."""
+        return RiskPolicyConfig(
+            daily_drawdown_limit_pct=self.settings.daily_drawdown_limit_pct,
+            max_concurrent_positions=self.settings.max_concurrent_positions,
+            max_portfolio_exposure_pct=self.settings.max_portfolio_exposure_pct,
+        )
+
+    def _effective_max_open_positions(self) -> int:
+        """Return the open-position cap used by the existing executor layer."""
+        if self.settings.enable_position_sizing or self.settings.enable_risk_caps:
+            return self.settings.max_concurrent_positions
+        return self.settings.max_open_positions
+
+    def _effective_max_gross_exposure(self) -> float:
+        """Return gross exposure passed to the existing risk manager."""
+        if self.settings.enable_position_sizing or self.settings.enable_risk_caps:
+            return self.settings.max_portfolio_exposure_pct
+        return 1.0
+
+    def _log_trade_intent_rejection(
+        self,
+        run_id: str,
+        cycle_key: str,
+        symbol: str,
+        strategy_name: str,
+        stage: str,
+        reasons: tuple[str, ...],
+        market_regime: str,
+    ) -> None:
+        """Emit structured logs for additive trade-intent rejections."""
+        LOGGER.info(
+            "trade_intent_rejected cycle_key=%s symbol=%s strategy=%s stage=%s market_regime=%s reasons=%s",
+            cycle_key,
+            symbol,
+            strategy_name,
+            stage,
+            market_regime,
+            ",".join(reasons),
+        )
+        self.repository.append_log_event(
+            level="INFO",
+            logger_name=LOGGER.name,
+            event="trade_intent_rejected",
+            run_id=run_id,
+            payload={
+                "cycle_key": cycle_key,
+                "symbol": symbol,
+                "strategy": strategy_name,
+                "stage": stage,
+                "market_regime": market_regime,
+                "reasons": list(reasons),
+            },
+        )
+
+    def _log_sized_trade_intent(
+        self,
+        run_id: str,
+        cycle_key: str,
+        sized_intent: Any,
+    ) -> None:
+        """Emit one structured log for a successfully sized entry."""
+        LOGGER.info(
+            "trade_intent_sized cycle_key=%s symbol=%s strategy=%s regime=%s qty=%d dollars_at_risk=%.2f risk_per_share=%.6f notional=%.2f",
+            cycle_key,
+            sized_intent.symbol,
+            sized_intent.strategy_id,
+            sized_intent.regime,
+            sized_intent.quantity,
+            sized_intent.dollars_at_risk,
+            sized_intent.risk_per_share,
+            sized_intent.projected_notional,
+        )
+        self.repository.append_log_event(
+            level="INFO",
+            logger_name=LOGGER.name,
+            event="trade_intent_sized",
+            run_id=run_id,
+            payload={
+                "cycle_key": cycle_key,
+                "symbol": sized_intent.symbol,
+                "strategy": sized_intent.strategy_id,
+                "market_regime": sized_intent.regime,
+                "quantity": int(sized_intent.quantity),
+                "dollars_at_risk": float(sized_intent.dollars_at_risk),
+                "risk_per_share": float(sized_intent.risk_per_share),
+                "projected_notional": float(sized_intent.projected_notional),
             },
         )
 

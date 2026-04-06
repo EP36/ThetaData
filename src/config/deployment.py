@@ -127,6 +127,20 @@ class DeploymentSettings:
     worker_max_candidates: int = 10
     selection_min_recent_trades: int = 5
     worker_startup_warmup_cycles: int = 20
+    enable_strategy_gating: bool = False
+    enable_position_sizing: bool = False
+    enable_risk_caps: bool = False
+    risk_per_trade_pct: float = 0.005
+    max_concurrent_positions: int = 3
+    max_portfolio_exposure_pct: float = 0.30
+    daily_drawdown_limit_pct: float = 0.02
+    market_regime_threshold_pct: float = 0.001
+    bullish_regime_size_multiplier: float = 1.0
+    sideways_regime_size_multiplier: float = 0.5
+    bearish_regime_size_multiplier: float = 0.0
+    allow_rsi_in_bullish_regime: bool = False
+    allow_bearish_mean_reversion: bool = False
+    default_stop_loss_pct_for_sizing: float | None = None
     min_price: float = 1.0
     min_avg_volume: float = 100_000.0
     min_relative_volume: float = 0.0
@@ -182,6 +196,27 @@ class DeploymentSettings:
             raise ValueError("selection_min_recent_trades cannot be negative")
         if self.worker_startup_warmup_cycles < 0:
             raise ValueError("worker_startup_warmup_cycles cannot be negative")
+        if self.risk_per_trade_pct <= 0 or self.risk_per_trade_pct >= 1:
+            raise ValueError("risk_per_trade_pct must be in (0, 1)")
+        if self.max_concurrent_positions <= 0:
+            raise ValueError("max_concurrent_positions must be positive")
+        if self.max_portfolio_exposure_pct <= 0 or self.max_portfolio_exposure_pct > 1:
+            raise ValueError("max_portfolio_exposure_pct must be in (0, 1]")
+        if self.daily_drawdown_limit_pct <= 0 or self.daily_drawdown_limit_pct >= 1:
+            raise ValueError("daily_drawdown_limit_pct must be in (0, 1)")
+        if self.market_regime_threshold_pct < 0 or self.market_regime_threshold_pct >= 1:
+            raise ValueError("market_regime_threshold_pct must be in [0, 1)")
+        if self.bullish_regime_size_multiplier < 0:
+            raise ValueError("bullish_regime_size_multiplier cannot be negative")
+        if self.sideways_regime_size_multiplier < 0:
+            raise ValueError("sideways_regime_size_multiplier cannot be negative")
+        if self.bearish_regime_size_multiplier < 0:
+            raise ValueError("bearish_regime_size_multiplier cannot be negative")
+        if self.default_stop_loss_pct_for_sizing is not None and (
+            self.default_stop_loss_pct_for_sizing <= 0
+            or self.default_stop_loss_pct_for_sizing >= 1
+        ):
+            raise ValueError("default_stop_loss_pct_for_sizing must be in (0, 1)")
         if self.min_price < 0:
             raise ValueError("min_price cannot be negative")
         if self.min_avg_volume < 0:
@@ -367,6 +402,38 @@ class DeploymentSettings:
             worker_max_candidates=int(os.getenv("WORKER_MAX_CANDIDATES", "10")),
             selection_min_recent_trades=int(os.getenv("SELECTION_MIN_RECENT_TRADES", "5")),
             worker_startup_warmup_cycles=int(os.getenv("WORKER_STARTUP_WARMUP_CYCLES", "20")),
+            enable_strategy_gating=_read_bool("ENABLE_STRATEGY_GATING", default=False),
+            enable_position_sizing=_read_bool("ENABLE_POSITION_SIZING", default=False),
+            enable_risk_caps=_read_bool("ENABLE_RISK_CAPS", default=False),
+            risk_per_trade_pct=float(os.getenv("RISK_PER_TRADE_PCT", "0.005")),
+            max_concurrent_positions=int(os.getenv("MAX_CONCURRENT_POSITIONS", "3")),
+            max_portfolio_exposure_pct=float(
+                os.getenv("MAX_PORTFOLIO_EXPOSURE_PCT", "0.30")
+            ),
+            daily_drawdown_limit_pct=float(os.getenv("DAILY_DRAWDOWN_LIMIT_PCT", "0.02")),
+            market_regime_threshold_pct=float(os.getenv("MARKET_REGIME_THRESHOLD_PCT", "0.001")),
+            bullish_regime_size_multiplier=float(
+                os.getenv("BULLISH_REGIME_SIZE_MULTIPLIER", "1.0")
+            ),
+            sideways_regime_size_multiplier=float(
+                os.getenv("SIDEWAYS_REGIME_SIZE_MULTIPLIER", "0.5")
+            ),
+            bearish_regime_size_multiplier=float(
+                os.getenv("BEARISH_REGIME_SIZE_MULTIPLIER", "0.0")
+            ),
+            allow_rsi_in_bullish_regime=_read_bool(
+                "ALLOW_RSI_IN_BULLISH_REGIME",
+                default=False,
+            ),
+            allow_bearish_mean_reversion=_read_bool(
+                "ALLOW_BEARISH_MEAN_REVERSION",
+                default=False,
+            ),
+            default_stop_loss_pct_for_sizing=(
+                float(os.getenv("DEFAULT_STOP_LOSS_PCT_FOR_SIZING"))
+                if os.getenv("DEFAULT_STOP_LOSS_PCT_FOR_SIZING") is not None
+                else None
+            ),
             min_price=float(os.getenv("MIN_PRICE", "1.0")),
             min_avg_volume=float(os.getenv("MIN_AVG_VOLUME", "100000")),
             min_relative_volume=float(os.getenv("MIN_RELATIVE_VOLUME", "0.0")),

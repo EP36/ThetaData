@@ -12,6 +12,9 @@ def test_defaults_keep_trading_disabled() -> None:
     assert settings.paper_trading_enabled is False
     assert settings.worker_enable_trading is False
     assert settings.worker_dry_run is True
+    assert settings.enable_strategy_gating is False
+    assert settings.enable_position_sizing is False
+    assert settings.enable_risk_caps is False
 
 
 def test_worker_trading_requires_paper_mode() -> None:
@@ -145,6 +148,36 @@ def test_from_env_reads_selection_warmup_config(
     settings = DeploymentSettings.from_env()
     assert settings.selection_min_recent_trades == 2
     assert settings.worker_startup_warmup_cycles == 8
+
+
+def test_from_env_reads_trade_control_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ENABLE_STRATEGY_GATING", "true")
+    monkeypatch.setenv("ENABLE_POSITION_SIZING", "true")
+    monkeypatch.setenv("ENABLE_RISK_CAPS", "true")
+    monkeypatch.setenv("RISK_PER_TRADE_PCT", "0.0075")
+    monkeypatch.setenv("MAX_CONCURRENT_POSITIONS", "4")
+    monkeypatch.setenv("MAX_PORTFOLIO_EXPOSURE_PCT", "0.35")
+    monkeypatch.setenv("DAILY_DRAWDOWN_LIMIT_PCT", "0.03")
+    monkeypatch.setenv("MARKET_REGIME_THRESHOLD_PCT", "0.002")
+    monkeypatch.setenv("ALLOW_RSI_IN_BULLISH_REGIME", "true")
+    monkeypatch.setenv("ALLOW_BEARISH_MEAN_REVERSION", "true")
+    monkeypatch.setenv("DEFAULT_STOP_LOSS_PCT_FOR_SIZING", "0.025")
+
+    settings = DeploymentSettings.from_env()
+
+    assert settings.enable_strategy_gating is True
+    assert settings.enable_position_sizing is True
+    assert settings.enable_risk_caps is True
+    assert settings.risk_per_trade_pct == 0.0075
+    assert settings.max_concurrent_positions == 4
+    assert settings.max_portfolio_exposure_pct == 0.35
+    assert settings.daily_drawdown_limit_pct == 0.03
+    assert settings.market_regime_threshold_pct == 0.002
+    assert settings.allow_rsi_in_bullish_regime is True
+    assert settings.allow_bearish_mean_reversion is True
+    assert settings.default_stop_loss_pct_for_sizing == 0.025
 
 
 def test_negative_selection_warmup_settings_are_rejected() -> None:
