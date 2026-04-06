@@ -20,6 +20,19 @@ UniverseMode = Literal[
 ]
 
 EPSILON = 1e-12
+SCAN_REASON_GROUPS: dict[str, str] = {
+    "data_unavailable": "missing_data",
+    "invalid_snapshot": "missing_data",
+    "empty_data": "missing_data",
+    "missing_required_columns": "missing_data",
+    "invalid_price_or_volume": "missing_data",
+    "stale_market_data": "missing_data",
+    "below_min_avg_volume": "insufficient_volume_confirmation",
+    "below_min_relative_volume": "insufficient_volume_confirmation",
+    "spread_above_max": "risk_blocked",
+    "below_min_price": "risk_blocked",
+    "ranked_outside_max_candidates": "ranking_cutoff",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,11 +88,48 @@ class UniverseScanResult:
                 symbol: list(reasons)
                 for symbol, reasons in self.filtered_out_reasons.items()
             },
+            "filtered_out_reason_groups": self.filtered_out_reason_groups(),
+            "filtered_out_reason_counts": self.filtered_out_reason_counts(),
+            "filtered_out_reason_group_counts": self.filtered_out_reason_group_counts(),
             "snapshots_by_symbol": {
                 symbol: snapshot.as_dict()
                 for symbol, snapshot in self.snapshots_by_symbol.items()
             },
         }
+
+    def filtered_out_reason_groups(self) -> dict[str, list[str]]:
+        """Return normalized reason groups keyed by rejected symbol."""
+        grouped: dict[str, list[str]] = {}
+        for symbol, reasons in self.filtered_out_reasons.items():
+            groups = sorted(
+                {
+                    SCAN_REASON_GROUPS.get(reason, reason)
+                    for reason in reasons
+                    if reason.strip()
+                }
+            )
+            grouped[symbol] = groups
+        return grouped
+
+    def filtered_out_reason_counts(self) -> dict[str, int]:
+        """Return per-reason rejection counts for one scan cycle."""
+        counts: dict[str, int] = {}
+        for reasons in self.filtered_out_reasons.values():
+            for reason in reasons:
+                if not reason.strip():
+                    continue
+                counts[reason] = counts.get(reason, 0) + 1
+        return dict(sorted(counts.items()))
+
+    def filtered_out_reason_group_counts(self) -> dict[str, int]:
+        """Return per-group rejection counts for one scan cycle."""
+        counts: dict[str, int] = {}
+        for groups in self.filtered_out_reason_groups().values():
+            for group in groups:
+                if not group.strip():
+                    continue
+                counts[group] = counts.get(group, 0) + 1
+        return dict(sorted(counts.items()))
 
 
 @dataclass(slots=True)

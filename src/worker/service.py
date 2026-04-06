@@ -426,6 +426,9 @@ class TradingWorker:
             now=cycle_timestamp,
         )
         universe = tuple(scan_result.shortlisted_symbols)
+        rejection_reason_counts = scan_result.filtered_out_reason_counts()
+        rejection_reason_group_counts = scan_result.filtered_out_reason_group_counts()
+        rejection_reason_groups = scan_result.filtered_out_reason_groups()
 
         self.repository.append_log_event(
             level="INFO",
@@ -437,19 +440,28 @@ class TradingWorker:
                 "timeframe": self._execution_timeframe,
                 "warmup_active": warmup_active,
                 "effective_min_recent_trades": effective_min_recent_trades,
+                "filtered_out_reason_counts": rejection_reason_counts,
+                "filtered_out_reason_group_counts": rejection_reason_group_counts,
                 **scan_result.as_dict(),
             },
         )
         LOGGER.info(
-            "worker_universe_scan cycle_key=%s timeframe=%s mode=%s scanned=%d shortlisted=%d warmup_active=%s",
+            "worker_universe_scan cycle_key=%s timeframe=%s mode=%s scanned=%d shortlisted=%d rejected=%d warmup_active=%s rejection_counts=%s",
             heartbeat_cycle_key,
             self._execution_timeframe,
             scan_result.mode,
             len(scan_result.scanned_symbols),
             len(scan_result.shortlisted_symbols),
+            len(scan_result.filtered_out_reasons),
             warmup_active,
+            ",".join(
+                f"{reason}:{count}"
+                for reason, count in rejection_reason_counts.items()
+            )
+            or "none",
         )
         for symbol, reasons in sorted(scan_result.filtered_out_reasons.items()):
+            symbol_snapshot = scan_result.snapshots_by_symbol.get(symbol)
             self.repository.append_log_event(
                 level="INFO",
                 logger_name=LOGGER.name,
@@ -460,15 +472,41 @@ class TradingWorker:
                     "timeframe": self._execution_timeframe,
                     "symbol": symbol,
                     "reasons": list(reasons),
+                    "reason_groups": list(rejection_reason_groups.get(symbol, [])),
+                    "pipeline_stage": "universe_scan",
+                    "snapshot": (
+                        symbol_snapshot.as_dict()
+                        if symbol_snapshot is not None
+                        else None
+                    ),
+                },
+            )
+        if scan_result.filtered_out_reasons:
+            self.repository.append_log_event(
+                level="INFO",
+                logger_name=LOGGER.name,
+                event="worker_universe_rejection_summary",
+                payload={
+                    "worker_name": self.settings.worker_name,
+                    "cycle_key": heartbeat_cycle_key,
+                    "timeframe": self._execution_timeframe,
+                    "rejected_symbols": sorted(scan_result.filtered_out_reasons),
+                    "rejection_reason_counts": rejection_reason_counts,
+                    "rejection_reason_group_counts": rejection_reason_group_counts,
                 },
             )
 
         if not universe:
             LOGGER.info(
-                "worker_no_shortlist cycle_key=%s timeframe=%s scanned=%d reason=no_shortlisted_symbols",
+                "worker_no_shortlist cycle_key=%s timeframe=%s scanned=%d reason=no_shortlisted_symbols rejection_counts=%s",
                 heartbeat_cycle_key,
                 self._execution_timeframe,
                 len(scan_result.scanned_symbols),
+                ",".join(
+                    f"{reason}:{count}"
+                    for reason, count in rejection_reason_counts.items()
+                )
+                or "none",
             )
             self.repository.record_worker_heartbeat(
                 worker_name=self.settings.worker_name,
@@ -491,6 +529,9 @@ class TradingWorker:
                         symbol: list(reasons)
                         for symbol, reasons in scan_result.filtered_out_reasons.items()
                     },
+                    "filtered_out_reason_groups": rejection_reason_groups,
+                    "filtered_out_reason_counts": rejection_reason_counts,
+                    "filtered_out_reason_group_counts": rejection_reason_group_counts,
                 },
             )
             self.repository.append_log_event(
@@ -506,6 +547,9 @@ class TradingWorker:
                         symbol: list(reasons)
                         for symbol, reasons in scan_result.filtered_out_reasons.items()
                     },
+                    "filtered_out_reason_groups": rejection_reason_groups,
+                    "filtered_out_reason_counts": rejection_reason_counts,
+                    "filtered_out_reason_group_counts": rejection_reason_group_counts,
                     "warmup_active": warmup_active,
                     "effective_min_recent_trades": effective_min_recent_trades,
                 },
@@ -604,6 +648,9 @@ class TradingWorker:
                     symbol: list(reasons)
                     for symbol, reasons in scan_result.filtered_out_reasons.items()
                 },
+                "filtered_out_reason_groups": rejection_reason_groups,
+                "filtered_out_reason_counts": rejection_reason_counts,
+                "filtered_out_reason_group_counts": rejection_reason_group_counts,
                 "selected_symbol": (
                     selected_summary.symbol if selected_summary is not None else None
                 ),

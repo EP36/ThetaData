@@ -201,3 +201,44 @@ def test_intraday_stale_data_is_excluded() -> None:
     assert result.shortlisted_symbols == ()
     assert "AAA" in result.filtered_out_reasons
     assert "stale_market_data" in result.filtered_out_reasons["AAA"]
+
+
+def test_rejection_reason_group_aggregation_is_machine_readable() -> None:
+    scanner = UniverseScanner(
+        loader=StubLoader(
+            {
+                "AAA": make_frame([0.8, 0.85, 0.9], [500_000, 500_000, 500_000]),
+                "BBB": make_frame([15, 15.1, 15.2], [100, 120, 130]),
+                "CCC": make_frame([10, 10.0], [100_000, 110_000], bid_ask=(9.0, 11.0)),
+            }
+        ),
+        config=UniverseScannerConfig(
+            timeframe="1d",
+            max_candidates=5,
+            min_price=1.0,
+            min_average_volume=1_000.0,
+            min_relative_volume=0.0,
+            max_spread_pct=0.05,
+        ),
+    )
+
+    result = scanner.scan(
+        mode="static",
+        configured_symbols=("AAA", "BBB", "CCC"),
+        now=pd.Timestamp("2026-02-01", tz="UTC"),
+    )
+
+    assert result.filtered_out_reason_counts() == {
+        "below_min_avg_volume": 1,
+        "below_min_price": 1,
+        "spread_above_max": 1,
+    }
+    assert result.filtered_out_reason_groups() == {
+        "AAA": ["risk_blocked"],
+        "BBB": ["insufficient_volume_confirmation"],
+        "CCC": ["risk_blocked"],
+    }
+    assert result.filtered_out_reason_group_counts() == {
+        "insufficient_volume_confirmation": 1,
+        "risk_blocked": 2,
+    }

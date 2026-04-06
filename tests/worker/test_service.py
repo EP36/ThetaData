@@ -17,6 +17,40 @@ def build_repository(db_path) -> PersistenceRepository:
     )
 
 
+class LoaderStub:
+    """Minimal loader stub returning preconfigured frames by symbol."""
+
+    def __init__(self, frames: dict[str, pd.DataFrame]) -> None:
+        self.frames = frames
+
+    def load(
+        self,
+        symbol: str,
+        timeframe: str,
+        force_refresh: bool = False,
+    ) -> pd.DataFrame:
+        return self.frames[symbol].copy()
+
+
+def make_frame(
+    close_values: list[float],
+    volume_values: list[float],
+) -> pd.DataFrame:
+    """Create deterministic OHLCV frames for worker observability tests."""
+    index = pd.date_range("2026-01-01", periods=len(close_values), freq="D")
+    close = pd.Series(close_values, index=index, dtype=float)
+    return pd.DataFrame(
+        {
+            "open": close * 0.995,
+            "high": close * 1.01,
+            "low": close * 0.99,
+            "close": close,
+            "volume": pd.Series(volume_values, index=index, dtype=float),
+        },
+        index=index,
+    )
+
+
 def test_worker_stays_idle_when_paper_trading_disabled(tmp_path) -> None:
     db_path = tmp_path / "trauto.db"
     settings = DeploymentSettings(
@@ -148,6 +182,69 @@ def test_worker_evaluates_only_shortlisted_symbols(tmp_path) -> None:
     runs = repository.recent_runs(limit=10)
     worker_runs = [row for row in runs if str(row.get("service") or "").startswith("worker:")]
     assert len(worker_runs) == 1
+
+
+def test_worker_logs_scan_rejection_summary_when_no_shortlist(tmp_path) -> None:
+    db_path = tmp_path / "trauto.db"
+    settings = DeploymentSettings(
+        database_url=f"sqlite+pysqlite:///{db_path}",
+        worker_enable_trading=True,
+        paper_trading_enabled=True,
+        worker_name="no-shortlist-worker",
+        worker_symbols=("AAA", "BBB"),
+        worker_universe_mode="static",
+        worker_timeframe="1d",
+        worker_order_quantity=1.0,
+        min_price=5.0,
+        min_avg_volume=1_000.0,
+        app_env="development",
+        strict_env_validation=False,
+    )
+    repository = build_repository(db_path)
+    worker = TradingWorker(settings=settings, repository=repository)
+    stub = LoaderStub(
+        {
+            "AAA": make_frame([1.0, 1.1, 1.2], [100_000, 100_000, 100_000]),
+            "BBB": make_frame([10.0, 10.1, 10.2], [100.0, 120.0, 140.0]),
+        }
+    )
+    worker.loader = stub
+    worker.universe_scanner.loader = stub
+
+    worker.run_once()
+
+    filtered_events = repository.recent_log_events(limit=10, event="worker_symbol_filtered")
+    filtered_by_symbol = {
+        str(event.get("payload", {}).get("symbol")): dict(event.get("payload") or {})
+        for event in filtered_events
+    }
+    assert filtered_by_symbol["AAA"]["reasons"] == ["below_min_price"]
+    assert filtered_by_symbol["AAA"]["reason_groups"] == ["risk_blocked"]
+    assert filtered_by_symbol["BBB"]["reasons"] == ["below_min_avg_volume"]
+    assert filtered_by_symbol["BBB"]["reason_groups"] == ["insufficient_volume_confirmation"]
+
+    summary_events = repository.recent_log_events(
+        limit=5,
+        event="worker_universe_rejection_summary",
+    )
+    assert summary_events
+    summary_payload = dict(summary_events[0].get("payload") or {})
+    assert summary_payload["rejection_reason_counts"] == {
+        "below_min_avg_volume": 1,
+        "below_min_price": 1,
+    }
+    assert summary_payload["rejection_reason_group_counts"] == {
+        "insufficient_volume_confirmation": 1,
+        "risk_blocked": 1,
+    }
+
+    no_shortlist_events = repository.recent_log_events(limit=5, event="worker_no_shortlist")
+    assert no_shortlist_events
+    no_shortlist_payload = dict(no_shortlist_events[0].get("payload") or {})
+    assert no_shortlist_payload["filtered_out_reason_counts"] == {
+        "below_min_avg_volume": 1,
+        "below_min_price": 1,
+    }
 
 
 def test_worker_enforces_symbol_strategy_lock_reason(tmp_path) -> None:
