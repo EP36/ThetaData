@@ -148,6 +148,18 @@ class TradingWorker:
                 min_average_volume=self.settings.min_avg_volume,
                 min_relative_volume=self.settings.min_relative_volume,
                 max_spread_pct=self.settings.max_spread_pct,
+                trading_start=self.settings.trading_start,
+                trading_end=self.settings.trading_end,
+                allow_after_hours=self.settings.allow_after_hours,
+                only_open_new_positions_during_market_hours=(
+                    self.settings.only_open_new_positions_during_market_hours
+                ),
+                stale_market_data_grace_minutes=(
+                    self.settings.worker_stale_market_data_grace_minutes
+                ),
+                stale_market_data_interval_multiplier=(
+                    self.settings.worker_stale_market_data_interval_multiplier
+                ),
             ),
         )
         self.selector = StrategySelector(
@@ -461,7 +473,7 @@ class TradingWorker:
             or "none",
         )
         for symbol, reasons in sorted(scan_result.filtered_out_reasons.items()):
-            symbol_snapshot = scan_result.snapshots_by_symbol.get(symbol)
+            rejection_payload = scan_result.symbol_rejection_payload(symbol)
             self.repository.append_log_event(
                 level="INFO",
                 logger_name=LOGGER.name,
@@ -472,12 +484,26 @@ class TradingWorker:
                     "timeframe": self._execution_timeframe,
                     "symbol": symbol,
                     "reasons": list(reasons),
-                    "reason_groups": list(rejection_reason_groups.get(symbol, [])),
+                    "rejection_reasons": list(reasons),
+                    "reason_groups": rejection_payload.get("reason_groups", []),
                     "pipeline_stage": "universe_scan",
-                    "snapshot": (
-                        symbol_snapshot.as_dict()
-                        if symbol_snapshot is not None
-                        else None
+                    "latest_bar_timestamp": rejection_payload.get("latest_bar_timestamp"),
+                    "latest_bar_age_minutes": rejection_payload.get("latest_bar_age_minutes"),
+                    "min_avg_volume_threshold": rejection_payload.get(
+                        "min_avg_volume_threshold"
+                    ),
+                    "actual_avg_volume": rejection_payload.get("actual_avg_volume"),
+                    "min_relative_volume_threshold": rejection_payload.get(
+                        "min_relative_volume_threshold"
+                    ),
+                    "actual_relative_volume": rejection_payload.get(
+                        "actual_relative_volume"
+                    ),
+                    "market_session_state": rejection_payload.get(
+                        "market_session_state"
+                    ),
+                    "freshness_rejection_reason": rejection_payload.get(
+                        "freshness_rejection_reason"
                     ),
                 },
             )

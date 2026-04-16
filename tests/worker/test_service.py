@@ -219,7 +219,15 @@ def test_worker_logs_scan_rejection_summary_when_no_shortlist(tmp_path) -> None:
         for event in filtered_events
     }
     assert filtered_by_symbol["AAA"]["reasons"] == ["below_min_price"]
+    assert filtered_by_symbol["AAA"]["rejection_reasons"] == ["below_min_price"]
     assert filtered_by_symbol["AAA"]["reason_groups"] == ["risk_blocked"]
+    assert filtered_by_symbol["AAA"]["latest_bar_timestamp"] is not None
+    assert filtered_by_symbol["AAA"]["latest_bar_age_minutes"] is None
+    assert filtered_by_symbol["AAA"]["min_avg_volume_threshold"] == 1_000.0
+    assert filtered_by_symbol["AAA"]["actual_avg_volume"] == 100_000.0
+    assert filtered_by_symbol["AAA"]["min_relative_volume_threshold"] == 0.0
+    assert filtered_by_symbol["AAA"]["actual_relative_volume"] == 1.0
+    assert filtered_by_symbol["AAA"]["market_session_state"] == "not_applicable"
     assert filtered_by_symbol["BBB"]["reasons"] == ["below_min_avg_volume"]
     assert filtered_by_symbol["BBB"]["reason_groups"] == ["insufficient_volume_confirmation"]
 

@@ -127,6 +127,9 @@ class DeploymentSettings:
     worker_max_candidates: int = 10
     selection_min_recent_trades: int = 5
     worker_startup_warmup_cycles: int = 20
+    only_open_new_positions_during_market_hours: bool = True
+    worker_stale_market_data_grace_minutes: float = 120.0
+    worker_stale_market_data_interval_multiplier: float = 3.0
     enable_strategy_gating: bool = False
     enable_position_sizing: bool = False
     enable_risk_caps: bool = False
@@ -196,6 +199,12 @@ class DeploymentSettings:
             raise ValueError("selection_min_recent_trades cannot be negative")
         if self.worker_startup_warmup_cycles < 0:
             raise ValueError("worker_startup_warmup_cycles cannot be negative")
+        if self.worker_stale_market_data_grace_minutes <= 0:
+            raise ValueError("worker_stale_market_data_grace_minutes must be positive")
+        if self.worker_stale_market_data_interval_multiplier <= 0:
+            raise ValueError(
+                "worker_stale_market_data_interval_multiplier must be positive"
+            )
         if self.risk_per_trade_pct <= 0 or self.risk_per_trade_pct >= 1:
             raise ValueError("risk_per_trade_pct must be in (0, 1)")
         if self.max_concurrent_positions <= 0:
@@ -402,6 +411,16 @@ class DeploymentSettings:
             worker_max_candidates=int(os.getenv("WORKER_MAX_CANDIDATES", "10")),
             selection_min_recent_trades=int(os.getenv("SELECTION_MIN_RECENT_TRADES", "5")),
             worker_startup_warmup_cycles=int(os.getenv("WORKER_STARTUP_WARMUP_CYCLES", "20")),
+            only_open_new_positions_during_market_hours=_read_bool(
+                "ONLY_OPEN_NEW_POSITIONS_DURING_MARKET_HOURS",
+                default=True,
+            ),
+            worker_stale_market_data_grace_minutes=float(
+                os.getenv("WORKER_STALE_MARKET_DATA_GRACE_MINUTES", "120")
+            ),
+            worker_stale_market_data_interval_multiplier=float(
+                os.getenv("WORKER_STALE_MARKET_DATA_INTERVAL_MULTIPLIER", "3.0")
+            ),
             enable_strategy_gating=_read_bool("ENABLE_STRATEGY_GATING", default=False),
             enable_position_sizing=_read_bool("ENABLE_POSITION_SIZING", default=False),
             enable_risk_caps=_read_bool("ENABLE_RISK_CAPS", default=False),

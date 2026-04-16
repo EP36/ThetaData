@@ -150,6 +150,20 @@ def test_from_env_reads_selection_warmup_config(
     assert settings.worker_startup_warmup_cycles == 8
 
 
+def test_from_env_reads_worker_freshness_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ONLY_OPEN_NEW_POSITIONS_DURING_MARKET_HOURS", "false")
+    monkeypatch.setenv("WORKER_STALE_MARKET_DATA_GRACE_MINUTES", "90")
+    monkeypatch.setenv("WORKER_STALE_MARKET_DATA_INTERVAL_MULTIPLIER", "4")
+
+    settings = DeploymentSettings.from_env()
+
+    assert settings.only_open_new_positions_during_market_hours is False
+    assert settings.worker_stale_market_data_grace_minutes == 90.0
+    assert settings.worker_stale_market_data_interval_multiplier == 4.0
+
+
 def test_from_env_reads_trade_control_config(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

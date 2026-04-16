@@ -196,11 +196,86 @@ def test_intraday_stale_data_is_excluded() -> None:
     result = scanner.scan(
         mode="static",
         configured_symbols=("AAA",),
-        now=pd.Timestamp("2026-01-02T12:00:00Z"),
+        now=pd.Timestamp("2026-01-02T15:00:00Z"),
     )
     assert result.shortlisted_symbols == ()
     assert "AAA" in result.filtered_out_reasons
     assert "stale_market_data" in result.filtered_out_reasons["AAA"]
+
+
+def test_intraday_after_hours_scan_is_classified_as_outside_session() -> None:
+    recent_index = pd.date_range("2026-01-05T20:00:00Z", periods=3, freq="min")
+    recent = pd.DataFrame(
+        {
+            "open": [10.0, 10.1, 10.2],
+            "high": [10.1, 10.2, 10.3],
+            "low": [9.9, 10.0, 10.1],
+            "close": [10.0, 10.1, 10.2],
+            "volume": [100_000.0, 110_000.0, 120_000.0],
+        },
+        index=recent_index,
+    )
+    scanner = UniverseScanner(
+        loader=StubLoader({"AAA": recent}),
+        config=UniverseScannerConfig(
+            timeframe="1m",
+            max_candidates=5,
+            min_price=1.0,
+            min_average_volume=0.0,
+            min_relative_volume=0.0,
+            max_spread_pct=1.0,
+        ),
+    )
+
+    result = scanner.scan(
+        mode="static",
+        configured_symbols=("AAA",),
+        now=pd.Timestamp("2026-01-05T22:00:00Z"),
+    )
+
+    assert result.shortlisted_symbols == ()
+    assert result.filtered_out_reasons["AAA"] == ("outside_trading_session",)
+    payload = result.symbol_rejection_payload("AAA")
+    assert payload["market_session_state"] == "outside_trading_session"
+    assert payload["latest_bar_timestamp"] == recent_index[-1].isoformat()
+    assert payload["latest_bar_age_minutes"] == 118.0
+
+
+def test_missing_recent_bar_is_distinct_from_stale_market_data() -> None:
+    delayed_index = pd.date_range("2026-01-05T12:58:00Z", periods=3, freq="min")
+    delayed = pd.DataFrame(
+        {
+            "open": [10.0, 10.1, 10.2],
+            "high": [10.1, 10.2, 10.3],
+            "low": [9.9, 10.0, 10.1],
+            "close": [10.0, 10.1, 10.2],
+            "volume": [100_000.0, 110_000.0, 120_000.0],
+        },
+        index=delayed_index,
+    )
+    scanner = UniverseScanner(
+        loader=StubLoader({"AAA": delayed}),
+        config=UniverseScannerConfig(
+            timeframe="1m",
+            max_candidates=5,
+            min_price=1.0,
+            min_average_volume=0.0,
+            min_relative_volume=0.0,
+            max_spread_pct=1.0,
+        ),
+    )
+
+    result = scanner.scan(
+        mode="static",
+        configured_symbols=("AAA",),
+        now=pd.Timestamp("2026-01-05T15:01:00Z"),
+    )
+
+    assert result.shortlisted_symbols == ()
+    assert result.filtered_out_reasons["AAA"] == ("missing_recent_bar",)
+    payload = result.symbol_rejection_payload("AAA")
+    assert payload["market_session_state"] == "market_open"
+    assert payload["freshness_rejection_reason"] == "missing_recent_bar"
 
 
 def test_rejection_reason_group_aggregation_is_machine_readable() -> None:
@@ -242,3 +317,38 @@ def test_rejection_reason_group_aggregation_is_machine_readable() -> None:
         "insufficient_volume_confirmation": 1,
         "risk_blocked": 2,
     }
+
+
+def test_rejection_payload_includes_thresholds_and_actuals() -> None:
+    scanner = UniverseScanner(
+        loader=StubLoader(
+            {
+                "AAA": make_frame([10, 10.1, 10.2], [100.0, 120.0, 140.0]),
+            }
+        ),
+        config=UniverseScannerConfig(
+            timeframe="1d",
+            max_candidates=5,
+            min_price=1.0,
+            min_average_volume=1_000.0,
+            min_relative_volume=1.5,
+            max_spread_pct=1.0,
+        ),
+    )
+
+    result = scanner.scan(
+        mode="static",
+        configured_symbols=("AAA",),
+        now=pd.Timestamp("2026-02-01", tz="UTC"),
+    )
+    payload = result.symbol_rejection_payload("AAA")
+
+    assert payload["symbol"] == "AAA"
+    assert payload["rejection_reasons"] == [
+        "below_min_avg_volume",
+        "below_min_relative_volume",
+    ]
+    assert payload["min_avg_volume_threshold"] == 1_000.0
+    assert payload["actual_avg_volume"] == 120.0
+    assert payload["min_relative_volume_threshold"] == 1.5
+    assert payload["actual_relative_volume"] == 140.0 / 120.0
