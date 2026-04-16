@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import time
+from datetime import date, time
 import re
 from typing import Literal
 
@@ -21,6 +21,8 @@ UniverseMode = Literal[
 ]
 
 EPSILON = 1e-12
+AVERAGE_VOLUME_LOOKBACK_SESSIONS = 20
+RELATIVE_VOLUME_LOOKBACK_BARS = 20
 SCAN_REASON_GROUPS: dict[str, str] = {
     "data_unavailable": "missing_data",
     "invalid_snapshot": "missing_data",
@@ -52,8 +54,11 @@ class SymbolSnapshot:
     latest_timestamp: pd.Timestamp
     latest_price: float
     average_volume: float
+    average_volume_unit: str
+    average_volume_lookback_window: str
     latest_volume: float
     relative_volume: float
+    relative_volume_lookback_window: str
     percent_move: float
     atr_pct: float
     trend_strength: float
@@ -66,8 +71,11 @@ class SymbolSnapshot:
             "latest_timestamp": self.latest_timestamp.isoformat(),
             "latest_price": float(self.latest_price),
             "average_volume": float(self.average_volume),
+            "average_volume_unit": self.average_volume_unit,
+            "average_volume_lookback_window": self.average_volume_lookback_window,
             "latest_volume": float(self.latest_volume),
             "relative_volume": float(self.relative_volume),
+            "relative_volume_lookback_window": self.relative_volume_lookback_window,
             "percent_move": float(self.percent_move),
             "atr_pct": float(self.atr_pct),
             "trend_strength": float(self.trend_strength),
@@ -86,8 +94,11 @@ class SymbolScanContext:
     latest_bar_age_minutes: float | None
     min_avg_volume_threshold: float
     actual_avg_volume: float | None
+    avg_volume_unit: str | None
+    lookback_window: str | None
     min_relative_volume_threshold: float
     actual_relative_volume: float | None
+    relative_volume_lookback_window: str | None
     market_session_state: MarketSessionState
     freshness_rejection_reason: str | None
     missing_recent_bar_threshold_minutes: float | None
@@ -103,8 +114,11 @@ class SymbolScanContext:
             "latest_bar_age_minutes": self.latest_bar_age_minutes,
             "min_avg_volume_threshold": float(self.min_avg_volume_threshold),
             "actual_avg_volume": self.actual_avg_volume,
+            "avg_volume_unit": self.avg_volume_unit,
+            "lookback_window": self.lookback_window,
             "min_relative_volume_threshold": float(self.min_relative_volume_threshold),
             "actual_relative_volume": self.actual_relative_volume,
+            "relative_volume_lookback_window": self.relative_volume_lookback_window,
             "market_session_state": self.market_session_state,
             "freshness_rejection_reason": self.freshness_rejection_reason,
             "missing_recent_bar_threshold_minutes": self.missing_recent_bar_threshold_minutes,
@@ -276,7 +290,11 @@ class UniverseScanner:
                 continue
 
             try:
-                snapshot = _build_snapshot(symbol=symbol, data=data)
+                snapshot = _build_snapshot(
+                    symbol=symbol,
+                    data=data,
+                    timeframe=self.config.timeframe,
+                )
             except Exception:
                 filtered_out_reasons[symbol] = ("invalid_snapshot",)
                 scan_context_by_symbol[symbol] = self._build_scan_context(
@@ -304,6 +322,7 @@ class UniverseScanner:
                     refreshed_snapshot = _build_snapshot(
                         symbol=symbol,
                         data=refreshed_data,
+                        timeframe=self.config.timeframe,
                     )
                 except Exception:
                     pass
@@ -410,9 +429,24 @@ class UniverseScanner:
                 if snapshot is not None
                 else None
             ),
+            avg_volume_unit=(
+                snapshot.average_volume_unit
+                if snapshot is not None
+                else None
+            ),
+            lookback_window=(
+                snapshot.average_volume_lookback_window
+                if snapshot is not None
+                else None
+            ),
             min_relative_volume_threshold=float(self.config.min_relative_volume),
             actual_relative_volume=(
                 float(snapshot.relative_volume)
+                if snapshot is not None
+                else None
+            ),
+            relative_volume_lookback_window=(
+                snapshot.relative_volume_lookback_window
                 if snapshot is not None
                 else None
             ),
@@ -464,7 +498,11 @@ class UniverseScanner:
         return sorted(symbols, key=key_static)
 
 
-def _build_snapshot(symbol: str, data: pd.DataFrame) -> SymbolSnapshot:
+def _build_snapshot(
+    symbol: str,
+    data: pd.DataFrame,
+    timeframe: str,
+) -> SymbolSnapshot:
     """Compute one symbol snapshot from OHLCV (+ optional quote) data."""
     if data.empty:
         raise ValueError("empty_data")
@@ -481,8 +519,16 @@ def _build_snapshot(symbol: str, data: pd.DataFrame) -> SymbolSnapshot:
 
     latest_price = float(close.iloc[-1])
     latest_volume = float(volume.iloc[-1])
-    avg_volume = float(volume.tail(min(20, len(volume))).mean())
-    relative_volume = float(latest_volume / max(avg_volume, EPSILON))
+    avg_volume, avg_volume_unit, avg_volume_lookback_window = (
+        _compute_average_volume_for_filter(
+            volume=volume,
+            timeframe=timeframe,
+        )
+    )
+    relative_volume, relative_volume_lookback_window = _compute_relative_volume(
+        volume=volume,
+        latest_volume=latest_volume,
+    )
 
     if len(close) >= 2 and abs(float(close.iloc[-2])) > EPSILON:
         percent_move = float((close.iloc[-1] / close.iloc[-2]) - 1.0)
@@ -499,8 +545,11 @@ def _build_snapshot(symbol: str, data: pd.DataFrame) -> SymbolSnapshot:
         latest_timestamp=latest_timestamp,
         latest_price=float(latest_price),
         average_volume=float(avg_volume),
+        average_volume_unit=avg_volume_unit,
+        average_volume_lookback_window=avg_volume_lookback_window,
         latest_volume=float(latest_volume),
         relative_volume=float(relative_volume),
+        relative_volume_lookback_window=relative_volume_lookback_window,
         percent_move=float(percent_move),
         atr_pct=float(atr_pct),
         trend_strength=float(trend_strength),
@@ -558,6 +607,79 @@ def _compute_spread_pct(data: pd.DataFrame) -> float | None:
     if mid <= EPSILON:
         return None
     return float((ask_last - bid_last) / mid)
+
+
+def _compute_average_volume_for_filter(
+    volume: pd.Series,
+    timeframe: str,
+) -> tuple[float, str, str]:
+    """Return average daily volume for threshold filtering."""
+    valid_volume = pd.to_numeric(volume, errors="coerce").dropna()
+    if valid_volume.empty:
+        return 0.0, "shares_per_day", "no_valid_volume"
+
+    interval_minutes = _timeframe_to_minutes(timeframe)
+    if interval_minutes < 1_440:
+        daily_totals = _daily_volume_totals(
+            timestamps=valid_volume.index,
+            volume=valid_volume,
+            timeframe=timeframe,
+        )
+        latest_market_date = _bar_market_date(
+            pd.Timestamp(valid_volume.index[-1]),
+            timeframe=timeframe,
+        )
+        completed_sessions = daily_totals[daily_totals.index < latest_market_date]
+        if not completed_sessions.empty:
+            selected = completed_sessions.tail(AVERAGE_VOLUME_LOOKBACK_SESSIONS)
+            lookback_window = f"last_{len(selected)}_completed_sessions"
+        else:
+            selected = daily_totals.tail(AVERAGE_VOLUME_LOOKBACK_SESSIONS)
+            lookback_window = f"last_{len(selected)}_sessions_including_current"
+        return float(selected.mean()), "shares_per_day", lookback_window
+
+    selected_volume = valid_volume.tail(AVERAGE_VOLUME_LOOKBACK_SESSIONS)
+    return (
+        float(selected_volume.mean()),
+        "shares_per_day",
+        f"last_{len(selected_volume)}_bars",
+    )
+
+
+def _compute_relative_volume(
+    volume: pd.Series,
+    latest_volume: float,
+) -> tuple[float, str]:
+    """Return latest bar volume divided by recent average bar volume."""
+    valid_volume = pd.to_numeric(volume, errors="coerce").dropna()
+    if valid_volume.empty:
+        return 0.0, "no_valid_volume"
+
+    selected_volume = valid_volume.tail(RELATIVE_VOLUME_LOOKBACK_BARS)
+    avg_bar_volume = float(selected_volume.mean())
+    return (
+        float(latest_volume / max(avg_bar_volume, EPSILON)),
+        f"last_{len(selected_volume)}_bars_including_latest",
+    )
+
+
+def _daily_volume_totals(
+    timestamps: pd.Index,
+    volume: pd.Series,
+    timeframe: str,
+) -> pd.Series:
+    """Return per-market-date volume totals for intraday bars."""
+    market_dates = [
+        _bar_market_date(pd.Timestamp(timestamp), timeframe=timeframe)
+        for timestamp in timestamps
+    ]
+    daily = pd.DataFrame(
+        {
+            "market_date": market_dates,
+            "volume": volume.to_numpy(dtype=float),
+        }
+    )
+    return daily.groupby("market_date")["volume"].sum().sort_index()
 
 
 def _normalize_symbols(symbols: tuple[str, ...]) -> tuple[str, ...]:
@@ -717,6 +839,11 @@ def _to_bar_market_time(value: pd.Timestamp, timeframe: str) -> pd.Timestamp:
     """Normalize a bar timestamp to New York market time."""
     ts = _to_bar_utc_timestamp(value, timeframe=timeframe)
     return ts.tz_convert("America/New_York")
+
+
+def _bar_market_date(value: pd.Timestamp, timeframe: str) -> date:
+    """Return the market-local date for a bar timestamp."""
+    return _to_bar_market_time(value, timeframe=timeframe).date()
 
 
 def _to_utc_timestamp(value: pd.Timestamp) -> pd.Timestamp:

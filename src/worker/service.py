@@ -497,11 +497,16 @@ class TradingWorker:
                         "min_avg_volume_threshold"
                     ),
                     "actual_avg_volume": rejection_payload.get("actual_avg_volume"),
+                    "avg_volume_unit": rejection_payload.get("avg_volume_unit"),
+                    "lookback_window": rejection_payload.get("lookback_window"),
                     "min_relative_volume_threshold": rejection_payload.get(
                         "min_relative_volume_threshold"
                     ),
                     "actual_relative_volume": rejection_payload.get(
                         "actual_relative_volume"
+                    ),
+                    "relative_volume_lookback_window": rejection_payload.get(
+                        "relative_volume_lookback_window"
                     ),
                     "market_session_state": rejection_payload.get(
                         "market_session_state"

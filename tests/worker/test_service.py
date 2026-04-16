@@ -227,8 +227,14 @@ def test_worker_logs_scan_rejection_summary_when_no_shortlist(tmp_path) -> None:
     assert filtered_by_symbol["AAA"]["stale_threshold_minutes"] is None
     assert filtered_by_symbol["AAA"]["min_avg_volume_threshold"] == 1_000.0
     assert filtered_by_symbol["AAA"]["actual_avg_volume"] == 100_000.0
+    assert filtered_by_symbol["AAA"]["avg_volume_unit"] == "shares_per_day"
+    assert filtered_by_symbol["AAA"]["lookback_window"] == "last_3_bars"
     assert filtered_by_symbol["AAA"]["min_relative_volume_threshold"] == 0.0
     assert filtered_by_symbol["AAA"]["actual_relative_volume"] == 1.0
+    assert (
+        filtered_by_symbol["AAA"]["relative_volume_lookback_window"]
+        == "last_3_bars_including_latest"
+    )
     assert filtered_by_symbol["AAA"]["market_session_state"] == "not_applicable"
     assert filtered_by_symbol["BBB"]["reasons"] == ["below_min_avg_volume"]
     assert filtered_by_symbol["BBB"]["reason_groups"] == ["insufficient_volume_confirmation"]

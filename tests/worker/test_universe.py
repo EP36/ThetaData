@@ -109,6 +109,33 @@ def make_indexed_frame(index: pd.DatetimeIndex) -> pd.DataFrame:
     )
 
 
+def make_volume_frame(index: pd.DatetimeIndex, volumes: list[float]) -> pd.DataFrame:
+    """Create deterministic OHLCV frame with explicit volume values."""
+    close = pd.Series(
+        [10.0 + (0.01 * offset) for offset in range(len(index))],
+        index=index,
+        dtype=float,
+    )
+    return pd.DataFrame(
+        {
+            "open": close * 0.995,
+            "high": close * 1.01,
+            "low": close * 0.99,
+            "close": close,
+            "volume": pd.Series(volumes, index=index, dtype=float),
+        },
+        index=index,
+    )
+
+
+def append_indexes(*indexes: pd.DatetimeIndex) -> pd.DatetimeIndex:
+    """Return one DatetimeIndex from multiple deterministic test ranges."""
+    combined = indexes[0]
+    for index in indexes[1:]:
+        combined = combined.append(index)
+    return combined
+
+
 def test_static_mode_applies_filters_and_shortlist_limit() -> None:
     scanner = UniverseScanner(
         loader=StubLoader(
@@ -258,6 +285,92 @@ def test_intraday_stale_data_is_excluded() -> None:
     assert result.shortlisted_symbols == ()
     assert "AAA" in result.filtered_out_reasons
     assert "stale_market_data" in result.filtered_out_reasons["AAA"]
+
+
+def test_intraday_avg_volume_filter_uses_average_daily_shares() -> None:
+    completed_day_1 = pd.date_range("2026-04-14 09:30", periods=26, freq="15min")
+    completed_day_2 = pd.date_range("2026-04-15 09:30", periods=26, freq="15min")
+    current_day = pd.date_range("2026-04-16 10:30", periods=3, freq="15min")
+    index = append_indexes(completed_day_1, completed_day_2, current_day)
+    scanner = UniverseScanner(
+        loader=StubLoader({"AAA": make_volume_frame(index, [10_000.0] * len(index))}),
+        config=UniverseScannerConfig(
+            timeframe="15m",
+            max_candidates=5,
+            min_price=1.0,
+            min_average_volume=100_000.0,
+            min_relative_volume=0.0,
+            max_spread_pct=1.0,
+        ),
+    )
+
+    result = scanner.scan(
+        mode="static",
+        configured_symbols=("AAA",),
+        now=pd.Timestamp("2026-04-16T15:09:00Z"),
+    )
+
+    assert result.shortlisted_symbols == ("AAA",)
+    payload = result.symbol_rejection_payload("AAA")
+    assert payload["actual_avg_volume"] == 260_000.0
+    assert payload["avg_volume_unit"] == "shares_per_day"
+    assert payload["lookback_window"] == "last_2_completed_sessions"
+
+
+def test_relative_volume_threshold_uses_latest_bar_vs_recent_bar_average() -> None:
+    index = pd.date_range("2026-04-16 09:30", periods=20, freq="15min")
+    volumes = [10_000.0] * 19 + [5_000.0]
+    scanner = UniverseScanner(
+        loader=StubLoader({"AAA": make_volume_frame(index, volumes)}),
+        config=UniverseScannerConfig(
+            timeframe="15m",
+            max_candidates=5,
+            min_price=1.0,
+            min_average_volume=0.0,
+            min_relative_volume=1.0,
+            max_spread_pct=1.0,
+        ),
+    )
+
+    result = scanner.scan(
+        mode="static",
+        configured_symbols=("AAA",),
+        now=pd.Timestamp("2026-04-16T18:24:00Z"),
+    )
+
+    assert result.shortlisted_symbols == ()
+    assert result.filtered_out_reasons["AAA"] == ("below_min_relative_volume",)
+    payload = result.symbol_rejection_payload("AAA")
+    assert payload["actual_relative_volume"] == 5_000.0 / 9_750.0
+    assert payload["relative_volume_lookback_window"] == "last_20_bars_including_latest"
+
+
+def test_liquid_intraday_symbol_passes_volume_filters() -> None:
+    completed_day_1 = pd.date_range("2026-04-14 09:30", periods=26, freq="15min")
+    completed_day_2 = pd.date_range("2026-04-15 09:30", periods=26, freq="15min")
+    current_day = pd.date_range("2026-04-16 10:30", periods=3, freq="15min")
+    index = append_indexes(completed_day_1, completed_day_2, current_day)
+    volumes = ([20_000.0] * 52) + [20_000.0, 20_000.0, 40_000.0]
+    scanner = UniverseScanner(
+        loader=StubLoader({"AAA": make_volume_frame(index, volumes)}),
+        config=UniverseScannerConfig(
+            timeframe="15m",
+            max_candidates=5,
+            min_price=1.0,
+            min_average_volume=100_000.0,
+            min_relative_volume=1.0,
+            max_spread_pct=1.0,
+        ),
+    )
+
+    result = scanner.scan(
+        mode="static",
+        configured_symbols=("AAA",),
+        now=pd.Timestamp("2026-04-16T15:09:00Z"),
+    )
+
+    assert result.shortlisted_symbols == ("AAA",)
+    assert result.filtered_out_reasons == {}
 
 
 def test_fresh_naive_15m_bar_during_market_hours_is_not_stale() -> None:
@@ -511,7 +624,10 @@ def test_rejection_payload_includes_thresholds_and_actuals() -> None:
     ]
     assert payload["min_avg_volume_threshold"] == 1_000.0
     assert payload["actual_avg_volume"] == 120.0
+    assert payload["avg_volume_unit"] == "shares_per_day"
+    assert payload["lookback_window"] == "last_3_bars"
     assert payload["min_relative_volume_threshold"] == 1.5
     assert payload["actual_relative_volume"] == 140.0 / 120.0
+    assert payload["relative_volume_lookback_window"] == "last_3_bars_including_latest"
     assert payload["now_timestamp"] == "2026-02-01T00:00:00+00:00"
     assert payload["stale_threshold_minutes"] is None
