@@ -82,6 +82,7 @@ class SymbolScanContext:
     symbol: str
     timeframe: str
     latest_bar_timestamp: str | None
+    now_timestamp: str | None
     latest_bar_age_minutes: float | None
     min_avg_volume_threshold: float
     actual_avg_volume: float | None
@@ -98,6 +99,7 @@ class SymbolScanContext:
             "symbol": self.symbol,
             "timeframe": self.timeframe,
             "latest_bar_timestamp": self.latest_bar_timestamp,
+            "now_timestamp": self.now_timestamp,
             "latest_bar_age_minutes": self.latest_bar_age_minutes,
             "min_avg_volume_threshold": float(self.min_avg_volume_threshold),
             "actual_avg_volume": self.actual_avg_volume,
@@ -107,6 +109,7 @@ class SymbolScanContext:
             "freshness_rejection_reason": self.freshness_rejection_reason,
             "missing_recent_bar_threshold_minutes": self.missing_recent_bar_threshold_minutes,
             "stale_market_data_threshold_minutes": self.stale_market_data_threshold_minutes,
+            "stale_threshold_minutes": self.stale_market_data_threshold_minutes,
         }
 
 
@@ -288,6 +291,30 @@ class UniverseScanner:
                 snapshot=snapshot,
                 now=now,
             )
+            if _should_refresh_stale_intraday_data(
+                context=context,
+                force_refresh=force_refresh,
+            ):
+                try:
+                    refreshed_data = self.loader.load(
+                        symbol=symbol,
+                        timeframe=self.config.timeframe,
+                        force_refresh=True,
+                    )
+                    refreshed_snapshot = _build_snapshot(
+                        symbol=symbol,
+                        data=refreshed_data,
+                    )
+                except Exception:
+                    pass
+                else:
+                    snapshot = refreshed_snapshot
+                    snapshots_by_symbol[symbol] = snapshot
+                    context = self._build_scan_context(
+                        symbol=symbol,
+                        snapshot=snapshot,
+                        now=now,
+                    )
             scan_context_by_symbol[symbol] = context
 
             reasons = self._filter_reasons(snapshot=snapshot, context=context)
@@ -375,6 +402,7 @@ class UniverseScanner:
                 if snapshot is not None
                 else None
             ),
+            now_timestamp=assessment["now_timestamp"],
             latest_bar_age_minutes=assessment["latest_bar_age_minutes"],
             min_avg_volume_threshold=float(self.config.min_average_volume),
             actual_avg_volume=(
@@ -561,6 +589,7 @@ def _assess_bar_freshness(
 ) -> dict[str, float | str | None]:
     """Classify intraday bar freshness without hiding outside-session scans."""
     interval_minutes = _timeframe_to_minutes(timeframe)
+    now_ts = _to_utc_timestamp(pd.Timestamp.utcnow() if now is None else pd.Timestamp(now))
     market_session_state = _market_session_state(
         now=now,
         timeframe=timeframe,
@@ -568,6 +597,7 @@ def _assess_bar_freshness(
     )
     if interval_minutes >= 1_440:
         return {
+            "now_timestamp": now_ts.isoformat(),
             "latest_bar_age_minutes": None,
             "market_session_state": market_session_state,
             "freshness_rejection_reason": None,
@@ -586,9 +616,11 @@ def _assess_bar_freshness(
         and market_session_state == "outside_trading_session"
     ):
         return {
+            "now_timestamp": now_ts.isoformat(),
             "latest_bar_age_minutes": _bar_age_minutes(
                 latest_timestamp=latest_timestamp,
                 now=now,
+                timeframe=timeframe,
             ),
             "market_session_state": market_session_state,
             "freshness_rejection_reason": "outside_trading_session",
@@ -596,7 +628,11 @@ def _assess_bar_freshness(
             "stale_market_data_threshold_minutes": stale_threshold,
         }
 
-    age_minutes = _bar_age_minutes(latest_timestamp=latest_timestamp, now=now)
+    age_minutes = _bar_age_minutes(
+        latest_timestamp=latest_timestamp,
+        now=now,
+        timeframe=timeframe,
+    )
     freshness_rejection_reason: str | None = None
     if age_minutes is not None and age_minutes > stale_threshold:
         if (
@@ -604,6 +640,7 @@ def _assess_bar_freshness(
             and _is_same_market_date(
                 latest_timestamp=latest_timestamp,
                 now=now,
+                timeframe=timeframe,
             )
         ):
             freshness_rejection_reason = "missing_recent_bar"
@@ -611,6 +648,7 @@ def _assess_bar_freshness(
             freshness_rejection_reason = "stale_market_data"
 
     return {
+        "now_timestamp": now_ts.isoformat(),
         "latest_bar_age_minutes": age_minutes,
         "market_session_state": market_session_state,
         "freshness_rejection_reason": freshness_rejection_reason,
@@ -642,11 +680,12 @@ def _market_session_state(
 def _bar_age_minutes(
     latest_timestamp: pd.Timestamp | None,
     now: pd.Timestamp | None,
+    timeframe: str,
 ) -> float | None:
     """Return latest bar age in minutes, or None when unavailable."""
     if latest_timestamp is None:
         return None
-    latest = _to_utc_timestamp(pd.Timestamp(latest_timestamp))
+    latest = _to_bar_utc_timestamp(pd.Timestamp(latest_timestamp), timeframe=timeframe)
     now_ts = _to_utc_timestamp(pd.Timestamp.utcnow() if now is None else pd.Timestamp(now))
     age_minutes = (now_ts - latest).total_seconds() / 60.0
     return float(max(age_minutes, 0.0))
@@ -655,11 +694,15 @@ def _bar_age_minutes(
 def _is_same_market_date(
     latest_timestamp: pd.Timestamp | None,
     now: pd.Timestamp | None,
+    timeframe: str,
 ) -> bool:
     """Return true when latest bar and now land on the same market-local date."""
     if latest_timestamp is None:
         return False
-    latest_local = _to_market_time(pd.Timestamp(latest_timestamp))
+    latest_local = _to_bar_market_time(
+        pd.Timestamp(latest_timestamp),
+        timeframe=timeframe,
+    )
     now_local = _to_market_time(pd.Timestamp.utcnow() if now is None else pd.Timestamp(now))
     return latest_local.date() == now_local.date()
 
@@ -670,12 +713,41 @@ def _to_market_time(value: pd.Timestamp) -> pd.Timestamp:
     return ts.tz_convert("America/New_York")
 
 
+def _to_bar_market_time(value: pd.Timestamp, timeframe: str) -> pd.Timestamp:
+    """Normalize a bar timestamp to New York market time."""
+    ts = _to_bar_utc_timestamp(value, timeframe=timeframe)
+    return ts.tz_convert("America/New_York")
+
+
 def _to_utc_timestamp(value: pd.Timestamp) -> pd.Timestamp:
     """Normalize a timestamp to timezone-aware UTC."""
     ts = pd.Timestamp(value)
     if ts.tzinfo is None:
         return ts.tz_localize("UTC")
     return ts.tz_convert("UTC")
+
+
+def _to_bar_utc_timestamp(value: pd.Timestamp, timeframe: str) -> pd.Timestamp:
+    """Normalize a market bar timestamp to timezone-aware UTC."""
+    ts = pd.Timestamp(value)
+    if ts.tzinfo is not None:
+        return ts.tz_convert("UTC")
+    if _timeframe_to_minutes(timeframe) < 1_440:
+        return ts.tz_localize("America/New_York").tz_convert("UTC")
+    return ts.tz_localize("UTC")
+
+
+def _should_refresh_stale_intraday_data(
+    context: SymbolScanContext,
+    force_refresh: bool,
+) -> bool:
+    """Return true when a stale open-session cache read should be retried once."""
+    return (
+        not force_refresh
+        and context.market_session_state == "market_open"
+        and context.freshness_rejection_reason
+        in {"missing_recent_bar", "stale_market_data"}
+    )
 
 
 def _is_stale_timestamp(

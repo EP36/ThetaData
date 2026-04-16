@@ -222,7 +222,9 @@ def test_worker_logs_scan_rejection_summary_when_no_shortlist(tmp_path) -> None:
     assert filtered_by_symbol["AAA"]["rejection_reasons"] == ["below_min_price"]
     assert filtered_by_symbol["AAA"]["reason_groups"] == ["risk_blocked"]
     assert filtered_by_symbol["AAA"]["latest_bar_timestamp"] is not None
+    assert filtered_by_symbol["AAA"]["now_timestamp"] is not None
     assert filtered_by_symbol["AAA"]["latest_bar_age_minutes"] is None
+    assert filtered_by_symbol["AAA"]["stale_threshold_minutes"] is None
     assert filtered_by_symbol["AAA"]["min_avg_volume_threshold"] == 1_000.0
     assert filtered_by_symbol["AAA"]["actual_avg_volume"] == 100_000.0
     assert filtered_by_symbol["AAA"]["min_relative_volume_threshold"] == 0.0

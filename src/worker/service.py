@@ -488,7 +488,11 @@ class TradingWorker:
                     "reason_groups": rejection_payload.get("reason_groups", []),
                     "pipeline_stage": "universe_scan",
                     "latest_bar_timestamp": rejection_payload.get("latest_bar_timestamp"),
+                    "now_timestamp": rejection_payload.get("now_timestamp"),
                     "latest_bar_age_minutes": rejection_payload.get("latest_bar_age_minutes"),
+                    "stale_threshold_minutes": rejection_payload.get(
+                        "stale_threshold_minutes"
+                    ),
                     "min_avg_volume_threshold": rejection_payload.get(
                         "min_avg_volume_threshold"
                     ),
