@@ -228,6 +228,36 @@ def test_high_relative_volume_ranking_marks_rank_cutoff() -> None:
     assert "ranked_outside_max_candidates" in result.filtered_out_reasons["CCC"]
 
 
+def test_static_mode_ranks_by_candidate_score_not_just_relative_volume() -> None:
+    scanner = UniverseScanner(
+        loader=StubLoader(
+            {
+                "AAA": make_frame([10, 10], [100_000, 1_000_000]),
+                "BBB": make_frame([10, 11], [100_000, 100_000]),
+            }
+        ),
+        config=UniverseScannerConfig(
+            timeframe="1d",
+            max_candidates=2,
+            min_price=1.0,
+            min_average_volume=0.0,
+            min_relative_volume=0.0,
+            max_spread_pct=1.0,
+        ),
+    )
+
+    result = scanner.scan(
+        mode="static",
+        configured_symbols=("AAA", "BBB"),
+        now=pd.Timestamp("2026-02-01", tz="UTC"),
+    )
+
+    assert result.shortlisted_symbols[0] == "BBB"
+    assert result.snapshots_by_symbol["BBB"].candidate_score > (
+        result.snapshots_by_symbol["AAA"].candidate_score
+    )
+
+
 def test_spread_filter_blocks_wide_spread_when_quote_data_present() -> None:
     scanner = UniverseScanner(
         loader=StubLoader(
@@ -317,7 +347,7 @@ def test_intraday_avg_volume_filter_uses_average_daily_shares() -> None:
     assert payload["lookback_window"] == "last_2_completed_sessions"
 
 
-def test_relative_volume_threshold_uses_latest_bar_vs_recent_bar_average() -> None:
+def test_relative_volume_is_logged_but_not_a_global_gate_by_default() -> None:
     index = pd.date_range("2026-04-16 09:30", periods=20, freq="15min")
     volumes = [10_000.0] * 19 + [5_000.0]
     scanner = UniverseScanner(
@@ -338,9 +368,11 @@ def test_relative_volume_threshold_uses_latest_bar_vs_recent_bar_average() -> No
         now=pd.Timestamp("2026-04-16T18:24:00Z"),
     )
 
-    assert result.shortlisted_symbols == ()
-    assert result.filtered_out_reasons["AAA"] == ("below_min_relative_volume",)
+    assert result.shortlisted_symbols == ("AAA",)
+    assert result.filtered_out_reasons == {}
     payload = result.symbol_rejection_payload("AAA")
+    assert payload["rejection_reasons"] == []
+    assert payload["min_relative_volume_threshold"] == 1.0
     assert payload["actual_relative_volume"] == 5_000.0 / 9_750.0
     assert payload["relative_volume_lookback_window"] == "last_20_bars_including_latest"
 
@@ -400,7 +432,7 @@ def test_fresh_naive_15m_bar_during_market_hours_is_not_stale() -> None:
     assert result.shortlisted_symbols == ("AAA",)
     assert result.filtered_out_reasons == {}
     context = result.scan_context_by_symbol["AAA"]
-    assert context.market_session_state == "market_open"
+    assert context.market_session_state == "regular_session"
     assert context.latest_bar_age_minutes == 9.0
     assert context.freshness_rejection_reason is None
 
@@ -508,9 +540,10 @@ def test_intraday_after_hours_scan_is_classified_as_outside_session() -> None:
     )
 
     assert result.shortlisted_symbols == ()
-    assert result.filtered_out_reasons["AAA"] == ("outside_trading_session",)
+    assert result.filtered_out_reasons["AAA"] == ("extended_hours_disabled",)
     payload = result.symbol_rejection_payload("AAA")
-    assert payload["market_session_state"] == "outside_trading_session"
+    assert payload["market_session_state"] == "afterhours_session"
+    assert payload["freshness_rejection_reason"] == "extended_hours_disabled"
     assert payload["latest_bar_timestamp"] == recent_index[-1].isoformat()
     assert payload["latest_bar_age_minutes"] == 118.0
 
@@ -548,7 +581,7 @@ def test_missing_recent_bar_is_distinct_from_stale_market_data() -> None:
     assert result.shortlisted_symbols == ()
     assert result.filtered_out_reasons["AAA"] == ("missing_recent_bar",)
     payload = result.symbol_rejection_payload("AAA")
-    assert payload["market_session_state"] == "market_open"
+    assert payload["market_session_state"] == "regular_session"
     assert payload["freshness_rejection_reason"] == "missing_recent_bar"
 
 
@@ -607,6 +640,7 @@ def test_rejection_payload_includes_thresholds_and_actuals() -> None:
             min_average_volume=1_000.0,
             min_relative_volume=1.5,
             max_spread_pct=1.0,
+            enforce_relative_volume_filter=True,
         ),
     )
 
@@ -629,5 +663,7 @@ def test_rejection_payload_includes_thresholds_and_actuals() -> None:
     assert payload["min_relative_volume_threshold"] == 1.5
     assert payload["actual_relative_volume"] == 140.0 / 120.0
     assert payload["relative_volume_lookback_window"] == "last_3_bars_including_latest"
+    assert payload["candidate_score"] is not None
+    assert isinstance(payload["score_components"], dict)
     assert payload["now_timestamp"] == "2026-02-01T00:00:00+00:00"
     assert payload["stale_threshold_minutes"] is None

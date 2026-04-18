@@ -12,6 +12,11 @@ StrategyId = Literal[
     "breakout_momentum",
     "rsi_mean_reversion",
     "vwap_mean_reversion",
+    "breakout_momentum_intraday",
+    "opening_range_breakout",
+    "vwap_reclaim_intraday",
+    "pullback_trend_continuation",
+    "mean_reversion_scalp",
 ]
 MarketRegime = Literal["bullish", "sideways", "bearish", "unknown"]
 RiskRejectionReason = Literal[
@@ -36,6 +41,11 @@ SUPPORTED_STRATEGY_IDS: tuple[StrategyId, ...] = (
     "breakout_momentum",
     "rsi_mean_reversion",
     "vwap_mean_reversion",
+    "breakout_momentum_intraday",
+    "opening_range_breakout",
+    "vwap_reclaim_intraday",
+    "pullback_trend_continuation",
+    "mean_reversion_scalp",
 )
 
 

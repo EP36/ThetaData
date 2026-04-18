@@ -48,7 +48,19 @@ from src.trading import (
     get_market_regime,
     normalize_strategy_id,
 )
+from src.trading.session import (
+    SessionConfig,
+    SessionContext,
+    classify_trading_session,
+    minutes_until_regular_session_end,
+)
+from src.trading.strategy_filters import (
+    StrategyFilterConfig,
+    StrategyFilterMetrics,
+    evaluate_strategy_filters,
+)
 from src.worker.universe import (
+    SymbolSnapshot,
     UniverseMode,
     UniverseScanResult,
     UniverseScanner,
@@ -66,6 +78,16 @@ STRATEGY_LOGIC_REASONS = {
     "no_active_signal",
     "regime_incompatible",
     "score_below_threshold",
+    "strategy_session_not_allowed",
+    "strategy_relative_volume_below_threshold",
+    "extended_hours_unsupported",
+    "extended_hours_spread_too_wide",
+    "overnight_liquidity_too_low",
+    "max_trades_per_day_exceeded",
+    "max_trades_per_symbol_per_day_exceeded",
+    "symbol_cooldown_active",
+    "strategy_cooldown_active",
+    "symbol_session_trade_limit_reached",
 }
 GLOBAL_GATE_REASONS = {
     "kill_switch_enabled",
@@ -73,6 +95,13 @@ GLOBAL_GATE_REASONS = {
     "worker_trading_disabled",
     "insufficient_risk_budget",
     "max_open_positions_breached",
+}
+INTRADAY_STRATEGY_NAMES = {
+    "breakout_momentum_intraday",
+    "opening_range_breakout",
+    "vwap_reclaim_intraday",
+    "pullback_trend_continuation",
+    "mean_reversion_scalp",
 }
 
 
@@ -151,6 +180,12 @@ class TradingWorker:
                 trading_start=self.settings.trading_start,
                 trading_end=self.settings.trading_end,
                 allow_after_hours=self.settings.allow_after_hours,
+                extended_hours_enabled=self.settings.extended_hours_enabled,
+                overnight_trading_enabled=self.settings.overnight_trading_enabled,
+                broker_extended_hours_supported=(
+                    self.settings.broker_extended_hours_supported
+                ),
+                enforce_relative_volume_filter=self.settings.enforce_relative_volume_filter,
                 only_open_new_positions_during_market_hours=(
                     self.settings.only_open_new_positions_during_market_hours
                 ),
@@ -224,6 +259,7 @@ class TradingWorker:
     def run_once(self) -> None:
         """Execute one worker cycle across the configured symbol universe."""
         cycle_timestamp = pd.Timestamp.utcnow()
+        session_context = self._session_context(cycle_timestamp)
         heartbeat_cycle_key = self._heartbeat_cycle_key(cycle_timestamp)
         configured_universe = tuple(self.settings.worker_symbols)
 
@@ -233,7 +269,7 @@ class TradingWorker:
             last_cycle_key=heartbeat_cycle_key,
             message=(
                 f"cycle_start mode={self.settings.worker_universe_mode} "
-                f"configured={','.join(configured_universe)}"
+                f"session={session_context.state} configured={','.join(configured_universe)}"
             ),
         )
 
@@ -393,7 +429,9 @@ class TradingWorker:
             max_open_positions=effective_max_open_positions,
             trading_start=self.settings.trading_start,
             trading_end=self.settings.trading_end,
-            allow_after_hours=self.settings.allow_after_hours,
+            allow_after_hours=(
+                self.settings.allow_after_hours or self.settings.extended_hours_enabled
+            ),
             default_stop_loss_pct=self.settings.default_stop_loss_pct_for_sizing,
         )
         executor = PaperTradingExecutor(
@@ -437,7 +475,21 @@ class TradingWorker:
             force_refresh=self.settings.worker_force_refresh,
             now=cycle_timestamp,
         )
-        universe = tuple(scan_result.shortlisted_symbols)
+        open_position_symbols = tuple(
+            sorted(
+                symbol
+                for symbol, position in executor.positions.items()
+                if float(position.quantity) > EPSILON
+            )
+        )
+        universe = tuple(
+            dict.fromkeys((*scan_result.shortlisted_symbols, *open_position_symbols))
+        )
+        exit_management_symbols = tuple(
+            symbol
+            for symbol in open_position_symbols
+            if symbol not in scan_result.shortlisted_symbols
+        )
         rejection_reason_counts = scan_result.filtered_out_reason_counts()
         rejection_reason_group_counts = scan_result.filtered_out_reason_group_counts()
         rejection_reason_groups = scan_result.filtered_out_reason_groups()
@@ -450,8 +502,13 @@ class TradingWorker:
                 "worker_name": self.settings.worker_name,
                 "cycle_key": heartbeat_cycle_key,
                 "timeframe": self._execution_timeframe,
+                "session_state": session_context.state,
+                "session_can_open_new_positions": session_context.can_open_new_positions,
+                "session_reason": session_context.reason,
                 "warmup_active": warmup_active,
                 "effective_min_recent_trades": effective_min_recent_trades,
+                "execution_symbols": list(universe),
+                "exit_management_symbols": list(exit_management_symbols),
                 "filtered_out_reason_counts": rejection_reason_counts,
                 "filtered_out_reason_group_counts": rejection_reason_group_counts,
                 **scan_result.as_dict(),
@@ -605,6 +662,7 @@ class TradingWorker:
                     analytics=performance_snapshot,
                     symbol_strategy_locks=symbol_strategy_locks,
                     scan_result=scan_result,
+                    session_context=session_context,
                 )
             )
 
@@ -654,7 +712,7 @@ class TradingWorker:
             None,
         )
         LOGGER.info(
-            "worker_cycle_summary cycle_key=%s timeframe=%s dry_run=%s warmup_active=%s effective_min_recent_trades=%d scanned=%s shortlisted=%s selected_symbol=%s selected_strategy=%s no_trade_reason=%s",
+            "worker_cycle_summary cycle_key=%s timeframe=%s dry_run=%s warmup_active=%s effective_min_recent_trades=%d scanned=%s shortlisted=%s execution=%s selected_symbol=%s selected_strategy=%s no_trade_reason=%s",
             heartbeat_cycle_key,
             self._execution_timeframe,
             self.settings.worker_dry_run,
@@ -662,6 +720,7 @@ class TradingWorker:
             effective_min_recent_trades,
             ",".join(scan_result.scanned_symbols),
             ",".join(scan_result.shortlisted_symbols),
+            ",".join(universe),
             selected_summary.symbol if selected_summary is not None else "none",
             selected_summary.selected_strategy if selected_summary is not None else "none",
             last_no_trade_reason or "none",
@@ -674,11 +733,14 @@ class TradingWorker:
                 "cycle_key": heartbeat_cycle_key,
                 "worker_name": self.settings.worker_name,
                 "timeframe": self._execution_timeframe,
+                "session_state": session_context.state,
                 "dry_run": self.settings.worker_dry_run,
                 "warmup_active": warmup_active,
                 "effective_min_recent_trades": effective_min_recent_trades,
                 "scanned_symbols": list(scan_result.scanned_symbols),
                 "shortlisted_symbols": list(scan_result.shortlisted_symbols),
+                "execution_symbols": list(universe),
+                "exit_management_symbols": list(exit_management_symbols),
                 "filtered_out_reasons": {
                     symbol: list(reasons)
                     for symbol, reasons in scan_result.filtered_out_reasons.items()
@@ -714,6 +776,7 @@ class TradingWorker:
         analytics: PerformanceAnalyticsSnapshot,
         symbol_strategy_locks: dict[str, str],
         scan_result: UniverseScanResult,
+        session_context: SessionContext,
     ) -> SymbolCycleSummary:
         """Execute one symbol cycle and return a structured summary."""
         cycle_key = self._cycle_key(
@@ -740,6 +803,8 @@ class TradingWorker:
                 "configured_universe": list(self.settings.worker_symbols),
                 "scanned_symbols": list(scan_result.scanned_symbols),
                 "shortlisted_symbols": list(scan_result.shortlisted_symbols),
+                "exit_management_symbol": symbol not in scan_result.shortlisted_symbols,
+                "session_state": session_context.state,
                 "symbol_snapshot": (
                     symbol_snapshot.as_dict()
                     if symbol_snapshot is not None
@@ -901,6 +966,10 @@ class TradingWorker:
                 symbol=symbol,
                 locked_strategy=locked_strategy,
                 persisted_configs=persisted_configs,
+                symbol_snapshot=symbol_snapshot,
+                latest_timestamp=latest_timestamp,
+                session_context=session_context,
+                current_position=current_position,
             )
             candidates = self._apply_strategy_gates_for_new_entries(
                 candidates=candidates,
@@ -956,6 +1025,7 @@ class TradingWorker:
                 persisted_configs=persisted_configs,
                 cycle_key=cycle_key,
                 run_id=run_id,
+                session_context=session_context,
             )
             order = order_plan.order
 
@@ -1031,6 +1101,13 @@ class TradingWorker:
                             "side": order.side.upper(),
                             "quantity": float(order.quantity),
                             "price": float(order.price),
+                            "order_type": order.order_type,
+                            "limit_price": (
+                                float(order.limit_price)
+                                if order.limit_price is not None
+                                else None
+                            ),
+                            "extended_hours": order.extended_hours,
                         },
                         "selection": decision.as_dict(),
                         "no_trade_reason": "dry_run_enabled",
@@ -1133,6 +1210,13 @@ class TradingWorker:
                     "symbol": symbol,
                     "order_id": result.order_id,
                     "status": result.status,
+                    "order_type": order.order_type,
+                    "limit_price": (
+                        float(order.limit_price)
+                        if order.limit_price is not None
+                        else None
+                    ),
+                    "extended_hours": order.extended_hours,
                     "rejection_reasons": list(result.rejection_reasons),
                     "selection": decision.as_dict(),
                     "active_strategy": symbol_strategy_locks.get(symbol),
@@ -1308,16 +1392,33 @@ class TradingWorker:
         symbol: str,
         locked_strategy: str | None,
         persisted_configs: dict[str, dict[str, Any]] | None = None,
+        symbol_snapshot: SymbolSnapshot | None = None,
+        latest_timestamp: pd.Timestamp | None = None,
+        session_context: SessionContext | None = None,
+        current_position: Position | None = None,
     ) -> list[StrategyCandidate]:
         """Build normalized candidate inputs for all registered strategies."""
         if persisted_configs is None:
             persisted_configs = self.repository.load_strategy_configs()
+        if latest_timestamp is None:
+            latest_timestamp = pd.Timestamp(data.index[-1])
+        if session_context is None:
+            session_context = self._session_context(latest_timestamp)
         metrics_by_strategy = analytics.strategies_by_name
+        current_qty = 0.0 if current_position is None else float(current_position.quantity)
+        apply_entry_filters = current_qty <= EPSILON
 
         candidates: list[StrategyCandidate] = []
         for strategy_name in list_strategies():
             persisted = persisted_configs.get(strategy_name, {})
+            has_persisted_config = strategy_name in persisted_configs
             enabled = str(persisted.get("status", "enabled")) == "enabled"
+            if (
+                strategy_name in INTRADAY_STRATEGY_NAMES
+                and self.settings.execution_profile == "conservative"
+                and not has_persisted_config
+            ):
+                enabled = False
             params = self._resolve_strategy_parameters(strategy_name, persisted)
 
             required_data_available = True
@@ -1332,12 +1433,51 @@ class TradingWorker:
                     latest_signal = 0.0
 
             external_reasons: tuple[str, ...] = ()
+            reasons: list[str] = []
             if (
                 locked_strategy is not None
                 and strategy_name != locked_strategy
                 and not self.settings.worker_allow_multi_strategy_per_symbol
             ):
-                external_reasons = (f"symbol_locked_by_active_strategy:{locked_strategy}",)
+                reasons.append(f"symbol_locked_by_active_strategy:{locked_strategy}")
+
+            if symbol_snapshot is not None and apply_entry_filters:
+                reasons.extend(
+                    evaluate_strategy_filters(
+                        StrategyFilterMetrics(
+                            symbol=symbol,
+                            strategy=strategy_name,
+                            session_state=session_context.state,
+                            relative_volume=float(symbol_snapshot.relative_volume),
+                            average_volume=float(symbol_snapshot.average_volume),
+                            spread_pct=symbol_snapshot.spread_pct,
+                            price_vs_vwap_pct=float(symbol_snapshot.price_vs_vwap_pct),
+                            candidate_score=float(symbol_snapshot.candidate_score),
+                            extended_hours_supported=(
+                                self.settings.broker_extended_hours_supported
+                                or self.settings.allow_after_hours
+                            ),
+                        ),
+                        config=StrategyFilterConfig(
+                            extended_hours_max_spread_pct=self.settings.max_spread_pct,
+                            overnight_min_average_volume=max(
+                                self.settings.min_avg_volume,
+                                500_000.0,
+                            ),
+                        ),
+                    )
+                )
+
+            if apply_entry_filters:
+                reasons.extend(
+                    self._cooldown_reasons(
+                        symbol=symbol,
+                        strategy_name=strategy_name,
+                        timestamp=latest_timestamp,
+                        session_context=session_context,
+                    )
+                )
+            external_reasons = tuple(dict.fromkeys(reason for reason in reasons if reason))
 
             strategy_metrics = metrics_by_strategy.get(strategy_name)
             if strategy_metrics is None:
@@ -1423,6 +1563,109 @@ class TradingWorker:
             max_positions_breached=max_positions_breached,
             warmup_mode=warmup_active,
         )
+
+    def _session_config(self) -> SessionConfig:
+        """Build the worker session-classification config."""
+        return SessionConfig(
+            regular_start=self.settings.trading_start,
+            regular_end=self.settings.trading_end,
+            extended_hours_enabled=(
+                self.settings.extended_hours_enabled or self.settings.allow_after_hours
+            ),
+            overnight_trading_enabled=self.settings.overnight_trading_enabled,
+            broker_extended_hours_supported=(
+                self.settings.broker_extended_hours_supported
+                or self.settings.allow_after_hours
+            ),
+        )
+
+    def _session_context(self, timestamp: pd.Timestamp) -> SessionContext:
+        """Classify the current worker cycle timestamp."""
+        return classify_trading_session(timestamp, self._session_config())
+
+    def _cooldown_reasons(
+        self,
+        symbol: str,
+        strategy_name: str,
+        timestamp: pd.Timestamp,
+        session_context: SessionContext,
+    ) -> tuple[str, ...]:
+        """Return trade-count and cooldown reasons from recent worker fills."""
+        now_ts = self._to_utc_timestamp(timestamp)
+        market_date = session_context.timestamp_market.date()
+        symbol_key = symbol.strip().upper()
+        strategy_key = strategy_name.strip()
+        fills = self.repository.recent_fills(limit=1000, run_service_prefix="worker:")
+        buy_fills = [
+            fill
+            for fill in fills
+            if str(fill.get("side") or "").upper() == "BUY"
+        ]
+
+        todays_fills: list[dict[str, Any]] = []
+        for fill in buy_fills:
+            fill_ts = self._to_utc_timestamp(pd.Timestamp(fill.get("timestamp")))
+            if fill_ts.tz_convert("America/New_York").date() == market_date:
+                todays_fills.append(fill)
+
+        reasons: list[str] = []
+        if len(todays_fills) >= self.settings.max_trades_per_day:
+            reasons.append("max_trades_per_day_exceeded")
+
+        symbol_fills = [
+            fill
+            for fill in todays_fills
+            if str(fill.get("symbol") or "").upper() == symbol_key
+        ]
+        if len(symbol_fills) >= self.settings.max_trades_per_symbol_per_day:
+            reasons.append("max_trades_per_symbol_per_day_exceeded")
+        if self.settings.one_trade_per_symbol_per_session and symbol_fills:
+            reasons.append("symbol_session_trade_limit_reached")
+
+        strategy_fills = [
+            fill
+            for fill in todays_fills
+            if str(fill.get("strategy") or "") == strategy_key
+        ]
+
+        symbol_last = self._latest_fill_timestamp(symbol_fills)
+        if (
+            symbol_last is not None
+            and self.settings.symbol_cooldown_seconds > 0
+            and (now_ts - symbol_last).total_seconds()
+            < self.settings.symbol_cooldown_seconds
+        ):
+            reasons.append("symbol_cooldown_active")
+
+        strategy_last = self._latest_fill_timestamp(strategy_fills)
+        if (
+            strategy_last is not None
+            and self.settings.strategy_cooldown_seconds > 0
+            and (now_ts - strategy_last).total_seconds()
+            < self.settings.strategy_cooldown_seconds
+        ):
+            reasons.append("strategy_cooldown_active")
+
+        return tuple(sorted(set(reasons)))
+
+    @staticmethod
+    def _latest_fill_timestamp(fills: list[dict[str, Any]]) -> pd.Timestamp | None:
+        """Return latest UTC fill timestamp from persisted fill rows."""
+        if not fills:
+            return None
+        timestamps = [
+            TradingWorker._to_utc_timestamp(pd.Timestamp(fill.get("timestamp")))
+            for fill in fills
+        ]
+        return max(timestamps)
+
+    @staticmethod
+    def _to_utc_timestamp(value: pd.Timestamp) -> pd.Timestamp:
+        """Normalize a timestamp to timezone-aware UTC."""
+        ts = pd.Timestamp(value)
+        if ts.tzinfo is None:
+            return ts.tz_localize("UTC")
+        return ts.tz_convert("UTC")
 
     def _log_selection_decision(
         self,
@@ -1658,9 +1901,23 @@ class TradingWorker:
         persisted_configs: dict[str, dict[str, Any]],
         cycle_key: str,
         run_id: str,
+        session_context: SessionContext,
     ) -> OrderPlanningResult:
         """Prepare an order using optional gating, sizing, and risk-policy layers."""
         current_qty = 0.0 if current_position is None else float(current_position.quantity)
+        if current_qty > EPSILON and self._should_force_flatten(
+            latest_timestamp=latest_timestamp,
+            session_context=session_context,
+        ):
+            return OrderPlanningResult(
+                order=self._build_exit_order(
+                    symbol=symbol,
+                    quantity=current_qty,
+                    latest_price=latest_price,
+                    latest_timestamp=latest_timestamp,
+                    session_context=session_context,
+                )
+            )
         if current_qty > EPSILON:
             order = self._build_order(
                 symbol=symbol,
@@ -1670,6 +1927,7 @@ class TradingWorker:
                 latest_timestamp=latest_timestamp,
                 current_position=current_position,
                 sizing_multiplier=decision.sizing_multiplier,
+                session_context=session_context,
             )
             return OrderPlanningResult(order=order)
 
@@ -1690,6 +1948,7 @@ class TradingWorker:
                     latest_timestamp=latest_timestamp,
                     current_position=current_position,
                     sizing_multiplier=decision.sizing_multiplier,
+                    session_context=session_context,
                 )
             )
 
@@ -1728,6 +1987,12 @@ class TradingWorker:
                 )
         else:
             gated_intent = self._wrap_trade_intent_without_gate(intent)
+        gated_intent = replace(
+            gated_intent,
+            regime_size_multiplier=float(
+                gated_intent.regime_size_multiplier * session_context.size_multiplier
+            ),
+        )
 
         risk_state = self._build_trading_risk_state(
             executor=executor,
@@ -1766,7 +2031,11 @@ class TradingWorker:
             final_stop_loss_pct = sized_intent.stop_loss_pct
             trailing_stop_pct = sized_intent.trailing_stop_pct
         else:
-            quantity = float(self.settings.worker_order_quantity * max(decision.sizing_multiplier, 0.0))
+            quantity = float(
+                self.settings.worker_order_quantity
+                * max(decision.sizing_multiplier, 0.0)
+                * max(session_context.size_multiplier, 0.0)
+            )
             proposed_notional = float(quantity * latest_price)
             final_stop_loss_pct = gated_intent.stop_loss_pct
             trailing_stop_pct = gated_intent.trailing_stop_pct
@@ -1797,12 +2066,12 @@ class TradingWorker:
                 )
 
         return OrderPlanningResult(
-            order=Order(
+            order=self._build_entry_order(
                 symbol=symbol,
-                side="BUY",
                 quantity=quantity,
-                price=latest_price,
-                timestamp=latest_timestamp,
+                latest_price=latest_price,
+                latest_timestamp=latest_timestamp,
+                session_context=session_context,
                 stop_loss_pct=final_stop_loss_pct,
                 trailing_stop_pct=trailing_stop_pct,
             )
@@ -2005,31 +2274,125 @@ class TradingWorker:
         latest_timestamp: pd.Timestamp,
         current_position: Position | None,
         sizing_multiplier: float,
+        session_context: SessionContext,
     ) -> Order | None:
         """Convert selected strategy + current position into one order instruction."""
         current_qty = 0.0 if current_position is None else float(current_position.quantity)
 
         if selected_strategy is not None and selected_signal > EPSILON and current_qty <= EPSILON:
-            quantity = float(self.settings.worker_order_quantity * max(sizing_multiplier, 0.0))
+            quantity = float(
+                self.settings.worker_order_quantity
+                * max(sizing_multiplier, 0.0)
+                * max(session_context.size_multiplier, 0.0)
+            )
             if quantity <= EPSILON:
                 return None
-            return Order(
+            return self._build_entry_order(
                 symbol=symbol,
-                side="BUY",
                 quantity=quantity,
-                price=latest_price,
-                timestamp=latest_timestamp,
+                latest_price=latest_price,
+                latest_timestamp=latest_timestamp,
+                session_context=session_context,
             )
 
         if (selected_strategy is None or selected_signal <= EPSILON) and current_qty > EPSILON:
-            return Order(
+            return self._build_exit_order(
                 symbol=symbol,
-                side="SELL",
                 quantity=current_qty,
-                price=latest_price,
-                timestamp=latest_timestamp,
+                latest_price=latest_price,
+                latest_timestamp=latest_timestamp,
+                session_context=session_context,
             )
         return None
+
+    def _build_entry_order(
+        self,
+        symbol: str,
+        quantity: float,
+        latest_price: float,
+        latest_timestamp: pd.Timestamp,
+        session_context: SessionContext,
+        stop_loss_pct: float | None = None,
+        trailing_stop_pct: float | None = None,
+    ) -> Order:
+        """Build a BUY order with extended-hours limit metadata when needed."""
+        order_type, price, limit_price = self._order_pricing(
+            side="BUY",
+            latest_price=latest_price,
+            session_context=session_context,
+        )
+        return Order(
+            symbol=symbol,
+            side="BUY",
+            quantity=quantity,
+            price=price,
+            timestamp=latest_timestamp,
+            stop_loss_pct=stop_loss_pct,
+            trailing_stop_pct=trailing_stop_pct,
+            order_type=order_type,
+            limit_price=limit_price,
+            extended_hours=session_context.is_extended_hours,
+        )
+
+    def _build_exit_order(
+        self,
+        symbol: str,
+        quantity: float,
+        latest_price: float,
+        latest_timestamp: pd.Timestamp,
+        session_context: SessionContext,
+    ) -> Order:
+        """Build a SELL order with extended-hours limit metadata when needed."""
+        order_type, price, limit_price = self._order_pricing(
+            side="SELL",
+            latest_price=latest_price,
+            session_context=session_context,
+        )
+        return Order(
+            symbol=symbol,
+            side="SELL",
+            quantity=quantity,
+            price=price,
+            timestamp=latest_timestamp,
+            order_type=order_type,
+            limit_price=limit_price,
+            extended_hours=session_context.is_extended_hours,
+        )
+
+    def _order_pricing(
+        self,
+        side: str,
+        latest_price: float,
+        session_context: SessionContext,
+    ) -> tuple[str, float, float | None]:
+        """Return order type, execution price, and limit price for session."""
+        if session_context.is_extended_hours and self.settings.use_limit_orders_in_extended_hours:
+            adjustment = self.settings.limit_order_aggressiveness_pct
+            limit_price = (
+                latest_price * (1.0 + adjustment)
+                if side.upper() == "BUY"
+                else latest_price * (1.0 - adjustment)
+            )
+            return "LIMIT", float(limit_price), float(limit_price)
+        return "MARKET", float(latest_price), None
+
+    def _should_force_flatten(
+        self,
+        latest_timestamp: pd.Timestamp,
+        session_context: SessionContext,
+    ) -> bool:
+        """Return true when positions must be flattened before regular close."""
+        if not self.settings.force_flatten_before_session_end:
+            return False
+        if self.settings.allow_overnight_positions:
+            return False
+        if session_context.state != "regular_session":
+            return False
+        minutes_left = minutes_until_regular_session_end(
+            session_context.timestamp_utc,
+            regular_end=self.settings.trading_end,
+        )
+        return 0.0 <= minutes_left <= float(self.settings.flatten_buffer_minutes)
 
     def _determine_no_trade_reason(
         self,

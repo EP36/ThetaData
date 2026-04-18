@@ -12,6 +12,8 @@ def test_defaults_keep_trading_disabled() -> None:
     assert settings.paper_trading_enabled is False
     assert settings.worker_enable_trading is False
     assert settings.worker_dry_run is True
+    assert settings.execution_profile == "conservative"
+    assert settings.extended_hours_enabled is False
     assert settings.enable_strategy_gating is False
     assert settings.enable_position_sizing is False
     assert settings.enable_risk_caps is False
@@ -192,6 +194,68 @@ def test_from_env_reads_trade_control_config(
     assert settings.allow_rsi_in_bullish_regime is True
     assert settings.allow_bearish_mean_reversion is True
     assert settings.default_stop_loss_pct_for_sizing == 0.025
+
+
+def test_from_env_reads_active_day_trader_profile_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("EXECUTION_PROFILE", "active_day_trader")
+
+    settings = DeploymentSettings.from_env()
+
+    assert settings.execution_profile == "active_day_trader"
+    assert settings.worker_timeframe == "1m"
+    assert settings.worker_max_candidates == 25
+    assert settings.selection_min_recent_trades == 0
+    assert settings.worker_startup_warmup_cycles == 0
+    assert settings.min_avg_volume == 25_000.0
+    assert settings.risk_per_trade_pct == 0.0025
+    assert settings.max_concurrent_positions == 5
+    assert settings.max_trades_per_day == 20
+    assert settings.symbol_cooldown_seconds == 300
+    assert settings.strategy_cooldown_seconds == 180
+    assert settings.force_flatten_before_session_end is True
+
+
+def test_from_env_reads_balanced_profile_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("EXECUTION_PROFILE", "balanced")
+
+    settings = DeploymentSettings.from_env()
+
+    assert settings.execution_profile == "balanced"
+    assert settings.worker_timeframe == "5m"
+    assert settings.worker_poll_seconds == 300
+    assert settings.worker_max_candidates == 15
+    assert settings.selection_min_recent_trades == 3
+    assert settings.worker_startup_warmup_cycles == 10
+    assert settings.min_avg_volume == 50_000.0
+    assert settings.risk_per_trade_pct == 0.0035
+    assert settings.max_concurrent_positions == 4
+    assert settings.max_trades_per_day == 15
+
+
+def test_from_env_reads_extended_hours_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("EXTENDED_HOURS_ENABLED", "true")
+    monkeypatch.setenv("BROKER_EXTENDED_HOURS_SUPPORTED", "true")
+    monkeypatch.setenv("OVERNIGHT_TRADING_ENABLED", "true")
+    monkeypatch.setenv("ALLOW_OVERNIGHT_POSITIONS", "true")
+    monkeypatch.setenv("USE_LIMIT_ORDERS_IN_EXTENDED_HOURS", "false")
+    monkeypatch.setenv("LIMIT_ORDER_AGGRESSIVENESS_PCT", "0.002")
+    monkeypatch.setenv("ENFORCE_RELATIVE_VOLUME_FILTER", "true")
+
+    settings = DeploymentSettings.from_env()
+
+    assert settings.extended_hours_enabled is True
+    assert settings.broker_extended_hours_supported is True
+    assert settings.overnight_trading_enabled is True
+    assert settings.allow_overnight_positions is True
+    assert settings.use_limit_orders_in_extended_hours is False
+    assert settings.limit_order_aggressiveness_pct == 0.002
+    assert settings.enforce_relative_volume_filter is True
 
 
 def test_negative_selection_warmup_settings_are_rejected() -> None:

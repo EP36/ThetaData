@@ -315,9 +315,11 @@ Universe source of truth:
 - Scanner applies deterministic filters before strategy evaluation:
   - `MIN_PRICE`
   - `MIN_AVG_VOLUME`
-  - `MIN_RELATIVE_VOLUME`
   - `MAX_SPREAD_PCT` (only when quote columns exist)
   - stale intraday-data exclusion
+- `MIN_RELATIVE_VOLUME` is logged and used by strategy-specific filters by default. It is no longer a global universe gate unless `ENFORCE_RELATIVE_VOLUME_FILTER=true`.
+- `EXECUTION_PROFILE=active_day_trader` switches defaults toward intraday paper-trading readiness: `1m` timeframe, larger shortlist, lower per-trade risk, more daily trades, shorter cooldowns, and end-of-day flattening. It does not enable live trading.
+- Extended-hours trading is gated by `EXTENDED_HOURS_ENABLED=true` plus broker support (`BROKER_EXTENDED_HOURS_SUPPORTED=true`), and extended-hours orders use limit pricing by default.
 - `WORKER_MAX_CANDIDATES` limits shortlist size for each worker cycle.
 - Default behavior is non-executing until `WORKER_ENABLE_TRADING=true`.
 - With `WORKER_DRY_RUN=true` (default), the worker runs full scan/filter/select logic but does not submit orders.
@@ -395,10 +397,9 @@ WORKER_UNIVERSE_MODE=top_gainers
 WORKER_SYMBOLS=SPY,QQQ,NVDA,TSLA,AMD,AAPL,META,AMZN,MSFT,GOOGL
 WORKER_MAX_CANDIDATES=5
 
-# 3) High relative volume mode
+# 3) High relative volume ranking mode
 WORKER_UNIVERSE_MODE=high_relative_volume
 WORKER_SYMBOLS=SPY,QQQ,NVDA,TSLA,AMD,AAPL,META,AMZN,MSFT,GOOGL
-MIN_RELATIVE_VOLUME=1.5
 WORKER_MAX_CANDIDATES=5
 ```
 
@@ -563,6 +564,7 @@ Recommended:
 - `MIN_PRICE=1.0`
 - `MIN_AVG_VOLUME=100000`
 - `MIN_RELATIVE_VOLUME=0.0`
+- `ENFORCE_RELATIVE_VOLUME_FILTER=false`
 - `MAX_SPREAD_PCT=1.0`
 
 ### Worker and Web Separation

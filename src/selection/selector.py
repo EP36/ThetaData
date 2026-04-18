@@ -268,6 +268,11 @@ DEFAULT_STRATEGY_REGIME_COMPATIBILITY: dict[str, tuple[str, ...]] = {
     "breakout_momentum": ("trending",),
     "rsi_mean_reversion": ("mean_reverting", "neutral"),
     "vwap_mean_reversion": ("mean_reverting",),
+    "breakout_momentum_intraday": ("trending", "neutral"),
+    "opening_range_breakout": ("trending", "neutral"),
+    "vwap_reclaim_intraday": ("trending", "neutral"),
+    "pullback_trend_continuation": ("trending",),
+    "mean_reversion_scalp": ("mean_reverting", "neutral"),
 }
 
 

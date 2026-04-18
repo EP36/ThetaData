@@ -23,6 +23,11 @@ SUPPORTED_WORKER_UNIVERSE_MODES = (
     "high_relative_volume",
     "index_constituents",
 )
+SUPPORTED_EXECUTION_PROFILES = (
+    "conservative",
+    "balanced",
+    "active_day_trader",
+)
 
 STRICT_REQUIRED_ENV_VARS = (
     "APP_ENV",
@@ -122,6 +127,7 @@ class DeploymentSettings:
     worker_order_quantity: float = 1.0
     worker_force_refresh: bool = False
     worker_dry_run: bool = True
+    execution_profile: str = "conservative"
     worker_allow_multi_strategy_per_symbol: bool = False
     worker_universe_mode: str = "static"
     worker_max_candidates: int = 10
@@ -130,6 +136,20 @@ class DeploymentSettings:
     only_open_new_positions_during_market_hours: bool = True
     worker_stale_market_data_grace_minutes: float = 120.0
     worker_stale_market_data_interval_multiplier: float = 3.0
+    extended_hours_enabled: bool = False
+    broker_extended_hours_supported: bool = False
+    overnight_trading_enabled: bool = False
+    force_flatten_before_session_end: bool = False
+    flatten_buffer_minutes: int = 10
+    allow_overnight_positions: bool = False
+    max_trades_per_day: int = 10
+    max_trades_per_symbol_per_day: int = 2
+    symbol_cooldown_seconds: int = 900
+    strategy_cooldown_seconds: int = 300
+    one_trade_per_symbol_per_session: bool = False
+    use_limit_orders_in_extended_hours: bool = True
+    limit_order_aggressiveness_pct: float = 0.001
+    enforce_relative_volume_filter: bool = False
     enable_strategy_gating: bool = False
     enable_position_sizing: bool = False
     enable_risk_caps: bool = False
@@ -188,6 +208,11 @@ class DeploymentSettings:
             self.worker_symbol = self.worker_symbols[0]
         if self.worker_order_quantity <= 0:
             raise ValueError("worker_order_quantity must be positive")
+        if self.execution_profile not in SUPPORTED_EXECUTION_PROFILES:
+            raise ValueError(
+                "execution_profile must be one of "
+                f"{list(SUPPORTED_EXECUTION_PROFILES)}"
+            )
         if self.worker_universe_mode not in SUPPORTED_WORKER_UNIVERSE_MODES:
             raise ValueError(
                 "worker_universe_mode must be one of "
@@ -205,6 +230,18 @@ class DeploymentSettings:
             raise ValueError(
                 "worker_stale_market_data_interval_multiplier must be positive"
             )
+        if self.flatten_buffer_minutes < 0:
+            raise ValueError("flatten_buffer_minutes cannot be negative")
+        if self.max_trades_per_day <= 0:
+            raise ValueError("max_trades_per_day must be positive")
+        if self.max_trades_per_symbol_per_day <= 0:
+            raise ValueError("max_trades_per_symbol_per_day must be positive")
+        if self.symbol_cooldown_seconds < 0:
+            raise ValueError("symbol_cooldown_seconds cannot be negative")
+        if self.strategy_cooldown_seconds < 0:
+            raise ValueError("strategy_cooldown_seconds cannot be negative")
+        if self.limit_order_aggressiveness_pct < 0 or self.limit_order_aggressiveness_pct >= 1:
+            raise ValueError("limit_order_aggressiveness_pct must be in [0, 1)")
         if self.risk_per_trade_pct <= 0 or self.risk_per_trade_pct >= 1:
             raise ValueError("risk_per_trade_pct must be in (0, 1)")
         if self.max_concurrent_positions <= 0:
@@ -348,6 +385,46 @@ class DeploymentSettings:
         if not isinstance(strategy_params, dict):
             raise ValueError("WORKER_STRATEGY_PARAMS_JSON must decode to an object")
 
+        execution_profile = os.getenv("EXECUTION_PROFILE", "conservative").strip().lower()
+        active_profile = execution_profile == "active_day_trader"
+        balanced_profile = execution_profile == "balanced"
+        if active_profile:
+            default_worker_timeframe = "1m"
+            default_worker_poll_seconds = "60"
+            default_worker_max_candidates = "25"
+            default_selection_min_trades = "0"
+            default_warmup_cycles = "0"
+            default_min_avg_volume = "25000"
+            default_risk_per_trade = "0.0025"
+            default_max_concurrent_positions = "5"
+            default_max_trades_per_day = "20"
+            default_symbol_cooldown = "300"
+            default_strategy_cooldown = "180"
+        elif balanced_profile:
+            default_worker_timeframe = "5m"
+            default_worker_poll_seconds = "300"
+            default_worker_max_candidates = "15"
+            default_selection_min_trades = "3"
+            default_warmup_cycles = "10"
+            default_min_avg_volume = "50000"
+            default_risk_per_trade = "0.0035"
+            default_max_concurrent_positions = "4"
+            default_max_trades_per_day = "15"
+            default_symbol_cooldown = "600"
+            default_strategy_cooldown = "240"
+        else:
+            default_worker_timeframe = "1d"
+            default_worker_poll_seconds = "60"
+            default_worker_max_candidates = "10"
+            default_selection_min_trades = "5"
+            default_warmup_cycles = "20"
+            default_min_avg_volume = "100000"
+            default_risk_per_trade = "0.005"
+            default_max_concurrent_positions = "3"
+            default_max_trades_per_day = "10"
+            default_symbol_cooldown = "900"
+            default_strategy_cooldown = "300"
+
         database_url = _normalize_database_url(
             os.getenv("DATABASE_URL", "sqlite+pysqlite:///data/trauto.db")
         )
@@ -394,23 +471,24 @@ class DeploymentSettings:
             paper_trading_enabled=_read_bool("PAPER_TRADING", default=False),
             worker_enable_trading=_read_bool("WORKER_ENABLE_TRADING", default=False),
             worker_name=os.getenv("WORKER_NAME", "default-worker").strip(),
-            worker_poll_seconds=int(os.getenv("WORKER_POLL_SECONDS", "60")),
+            worker_poll_seconds=int(os.getenv("WORKER_POLL_SECONDS", default_worker_poll_seconds)),
             worker_symbol=(worker_symbols[0] if worker_symbols else "SPY"),
             worker_symbols=worker_symbols,
-            worker_timeframe=os.getenv("WORKER_TIMEFRAME", "1d").strip(),
+            worker_timeframe=os.getenv("WORKER_TIMEFRAME", default_worker_timeframe).strip(),
             worker_strategy=os.getenv("WORKER_STRATEGY", "moving_average_crossover").strip(),
             worker_strategy_params=strategy_params,
             worker_order_quantity=float(os.getenv("WORKER_ORDER_QUANTITY", "1.0")),
             worker_force_refresh=_read_bool("WORKER_FORCE_REFRESH", default=False),
             worker_dry_run=_read_bool("WORKER_DRY_RUN", default=True),
+            execution_profile=execution_profile,
             worker_allow_multi_strategy_per_symbol=_read_bool(
                 "WORKER_ALLOW_MULTI_STRATEGY_PER_SYMBOL",
                 default=False,
             ),
             worker_universe_mode=os.getenv("WORKER_UNIVERSE_MODE", "static").strip().lower(),
-            worker_max_candidates=int(os.getenv("WORKER_MAX_CANDIDATES", "10")),
-            selection_min_recent_trades=int(os.getenv("SELECTION_MIN_RECENT_TRADES", "5")),
-            worker_startup_warmup_cycles=int(os.getenv("WORKER_STARTUP_WARMUP_CYCLES", "20")),
+            worker_max_candidates=int(os.getenv("WORKER_MAX_CANDIDATES", default_worker_max_candidates)),
+            selection_min_recent_trades=int(os.getenv("SELECTION_MIN_RECENT_TRADES", default_selection_min_trades)),
+            worker_startup_warmup_cycles=int(os.getenv("WORKER_STARTUP_WARMUP_CYCLES", default_warmup_cycles)),
             only_open_new_positions_during_market_hours=_read_bool(
                 "ONLY_OPEN_NEW_POSITIONS_DURING_MARKET_HOURS",
                 default=True,
@@ -421,11 +499,50 @@ class DeploymentSettings:
             worker_stale_market_data_interval_multiplier=float(
                 os.getenv("WORKER_STALE_MARKET_DATA_INTERVAL_MULTIPLIER", "3.0")
             ),
+            extended_hours_enabled=_read_bool("EXTENDED_HOURS_ENABLED", default=False),
+            broker_extended_hours_supported=_read_bool(
+                "BROKER_EXTENDED_HOURS_SUPPORTED",
+                default=False,
+            ),
+            overnight_trading_enabled=_read_bool("OVERNIGHT_TRADING_ENABLED", default=False),
+            force_flatten_before_session_end=_read_bool(
+                "FORCE_FLATTEN_BEFORE_SESSION_END",
+                default=active_profile,
+            ),
+            flatten_buffer_minutes=int(os.getenv("FLATTEN_BUFFER_MINUTES", "10")),
+            allow_overnight_positions=_read_bool("ALLOW_OVERNIGHT_POSITIONS", default=False),
+            max_trades_per_day=int(os.getenv("MAX_TRADES_PER_DAY", default_max_trades_per_day)),
+            max_trades_per_symbol_per_day=int(
+                os.getenv("MAX_TRADES_PER_SYMBOL_PER_DAY", "2")
+            ),
+            symbol_cooldown_seconds=int(
+                os.getenv("SYMBOL_COOLDOWN_SECONDS", default_symbol_cooldown)
+            ),
+            strategy_cooldown_seconds=int(
+                os.getenv("STRATEGY_COOLDOWN_SECONDS", default_strategy_cooldown)
+            ),
+            one_trade_per_symbol_per_session=_read_bool(
+                "ONE_TRADE_PER_SYMBOL_PER_SESSION",
+                default=False,
+            ),
+            use_limit_orders_in_extended_hours=_read_bool(
+                "USE_LIMIT_ORDERS_IN_EXTENDED_HOURS",
+                default=True,
+            ),
+            limit_order_aggressiveness_pct=float(
+                os.getenv("LIMIT_ORDER_AGGRESSIVENESS_PCT", "0.001")
+            ),
+            enforce_relative_volume_filter=_read_bool(
+                "ENFORCE_RELATIVE_VOLUME_FILTER",
+                default=False,
+            ),
             enable_strategy_gating=_read_bool("ENABLE_STRATEGY_GATING", default=False),
             enable_position_sizing=_read_bool("ENABLE_POSITION_SIZING", default=False),
             enable_risk_caps=_read_bool("ENABLE_RISK_CAPS", default=False),
-            risk_per_trade_pct=float(os.getenv("RISK_PER_TRADE_PCT", "0.005")),
-            max_concurrent_positions=int(os.getenv("MAX_CONCURRENT_POSITIONS", "3")),
+            risk_per_trade_pct=float(os.getenv("RISK_PER_TRADE_PCT", default_risk_per_trade)),
+            max_concurrent_positions=int(
+                os.getenv("MAX_CONCURRENT_POSITIONS", default_max_concurrent_positions)
+            ),
             max_portfolio_exposure_pct=float(
                 os.getenv("MAX_PORTFOLIO_EXPOSURE_PCT", "0.30")
             ),
@@ -454,7 +571,7 @@ class DeploymentSettings:
                 else None
             ),
             min_price=float(os.getenv("MIN_PRICE", "1.0")),
-            min_avg_volume=float(os.getenv("MIN_AVG_VOLUME", "100000")),
+            min_avg_volume=float(os.getenv("MIN_AVG_VOLUME", default_min_avg_volume)),
             min_relative_volume=float(os.getenv("MIN_RELATIVE_VOLUME", "0.0")),
             max_spread_pct=float(os.getenv("MAX_SPREAD_PCT", "1.0")),
             initial_capital=float(os.getenv("INITIAL_CAPITAL", "100000")),

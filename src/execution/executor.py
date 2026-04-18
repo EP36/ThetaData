@@ -89,6 +89,12 @@ class PaperTradingExecutor:
             return self._reject(order, "non_positive_quantity")
         if order.price <= 0:
             return self._reject(order, "non_positive_price")
+        if order.extended_hours and order.order_type.upper() != "LIMIT":
+            return self._reject(order, "extended_hours_requires_limit_order")
+        if order.order_type.upper() == "LIMIT" and (
+            order.limit_price is None or order.limit_price <= 0
+        ):
+            return self._reject(order, "invalid_limit_price")
 
         self._update_day_anchor(order.timestamp)
         notional = order.quantity * order.price

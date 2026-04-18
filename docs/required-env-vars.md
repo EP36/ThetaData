@@ -34,7 +34,8 @@ These are optional for MVP paper deployment:
 - `WORKER_DRY_RUN` is optional and defaults to `true` (full worker evaluation with no order submission).
 - `SELECTION_MIN_RECENT_TRADES` is optional and defaults to `5`.
 - `WORKER_STARTUP_WARMUP_CYCLES` is optional and defaults to `20` to avoid permanent cold-start blocking.
-- Universe scanner controls (`WORKER_UNIVERSE_MODE`, `WORKER_MAX_CANDIDATES`, `MIN_PRICE`, `MIN_AVG_VOLUME`, `MIN_RELATIVE_VOLUME`, `MAX_SPREAD_PCT`) are optional and default to deterministic safe values.
+- Universe scanner controls (`WORKER_UNIVERSE_MODE`, `WORKER_MAX_CANDIDATES`, `MIN_PRICE`, `MIN_AVG_VOLUME`, `MIN_RELATIVE_VOLUME`, `ENFORCE_RELATIVE_VOLUME_FILTER`, `MAX_SPREAD_PCT`) are optional and default to deterministic safe values. Relative volume is a strategy-specific signal by default, not a global universe blocker.
+- Intraday/extended-hours controls (`EXECUTION_PROFILE`, `EXTENDED_HOURS_ENABLED`, `BROKER_EXTENDED_HOURS_SUPPORTED`, `OVERNIGHT_TRADING_ENABLED`, cooldowns, and flattening vars) are optional and default to disabled/conservative behavior.
 
 ## Notes
 

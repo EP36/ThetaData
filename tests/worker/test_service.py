@@ -5,7 +5,7 @@ from __future__ import annotations
 import pandas as pd
 
 from src.config.deployment import DeploymentSettings
-from src.execution.models import Position
+from src.execution.models import Fill, Position
 from src.persistence import DatabaseStore, PersistenceRepository
 from src.persistence.repository import PortfolioSnapshot
 from src.worker.service import TradingWorker
@@ -353,6 +353,78 @@ def test_worker_dry_run_evaluates_without_submitting_orders(tmp_path) -> None:
     assert fills == []
 
 
+def test_conservative_profile_does_not_auto_enable_intraday_strategies(tmp_path) -> None:
+    db_path = tmp_path / "trauto.db"
+    settings = DeploymentSettings(
+        database_url=f"sqlite+pysqlite:///{db_path}",
+        worker_enable_trading=True,
+        paper_trading_enabled=False,
+        worker_dry_run=True,
+        worker_name="conservative-profile-worker",
+        worker_symbols=("SPY",),
+        worker_timeframe="1d",
+        selection_min_recent_trades=0,
+        worker_startup_warmup_cycles=0,
+        app_env="development",
+        strict_env_validation=False,
+    )
+    repository = build_repository(db_path)
+    worker = TradingWorker(settings=settings, repository=repository)
+    stub = LoaderStub({"SPY": make_frame([100.0, 101.0, 102.0], [100_000] * 3)})
+    worker.loader = stub
+    worker.universe_scanner.loader = stub
+
+    worker.run_once()
+
+    runs = repository.recent_runs(limit=5)
+    details = dict(runs[0].get("details") or {})
+    candidates = dict(details.get("selection") or {}).get("candidates", [])
+    intraday_candidate = next(
+        candidate
+        for candidate in candidates
+        if isinstance(candidate, dict)
+        and candidate.get("strategy") == "breakout_momentum_intraday"
+    )
+    assert intraday_candidate["eligible"] is False
+    assert "strategy_disabled" in intraday_candidate["reasons"]
+
+
+def test_active_profile_auto_enables_intraday_strategies(tmp_path) -> None:
+    db_path = tmp_path / "trauto.db"
+    settings = DeploymentSettings(
+        database_url=f"sqlite+pysqlite:///{db_path}",
+        execution_profile="active_day_trader",
+        worker_enable_trading=True,
+        paper_trading_enabled=False,
+        worker_dry_run=True,
+        worker_name="active-profile-worker",
+        worker_symbols=("SPY",),
+        worker_timeframe="1d",
+        selection_min_recent_trades=0,
+        worker_startup_warmup_cycles=0,
+        app_env="development",
+        strict_env_validation=False,
+    )
+    repository = build_repository(db_path)
+    worker = TradingWorker(settings=settings, repository=repository)
+    stub = LoaderStub({"SPY": make_frame([100.0, 101.0, 102.0], [100_000] * 3)})
+    worker.loader = stub
+    worker.universe_scanner.loader = stub
+
+    worker.run_once()
+
+    runs = repository.recent_runs(limit=5)
+    details = dict(runs[0].get("details") or {})
+    candidates = dict(details.get("selection") or {}).get("candidates", [])
+    intraday_candidate = next(
+        candidate
+        for candidate in candidates
+        if isinstance(candidate, dict)
+        and candidate.get("strategy") == "breakout_momentum_intraday"
+    )
+    assert "strategy_disabled" not in intraday_candidate["reasons"]
+
+
 def test_worker_startup_warmup_bypasses_min_recent_trade_gate(tmp_path) -> None:
     db_path = tmp_path / "trauto.db"
     settings = DeploymentSettings(
@@ -413,3 +485,159 @@ def test_worker_without_warmup_enforces_min_recent_trade_gate(tmp_path) -> None:
         "insufficient_recent_trades" in (candidate.get("reasons", []) if isinstance(candidate, dict) else [])
         for candidate in candidates
     )
+
+
+def test_worker_builds_limit_orders_in_extended_hours(tmp_path) -> None:
+    db_path = tmp_path / "trauto.db"
+    settings = DeploymentSettings(
+        database_url=f"sqlite+pysqlite:///{db_path}",
+        extended_hours_enabled=True,
+        broker_extended_hours_supported=True,
+        limit_order_aggressiveness_pct=0.002,
+        app_env="development",
+        strict_env_validation=False,
+    )
+    repository = build_repository(db_path)
+    worker = TradingWorker(settings=settings, repository=repository)
+    session_context = worker._session_context(pd.Timestamp("2026-04-16T12:00:00Z"))
+
+    order = worker._build_entry_order(
+        symbol="SPY",
+        quantity=10.0,
+        latest_price=100.0,
+        latest_timestamp=pd.Timestamp("2026-04-16T12:00:00Z"),
+        session_context=session_context,
+    )
+
+    assert session_context.state == "premarket_session"
+    assert order.order_type == "LIMIT"
+    assert order.limit_price == 100.2
+    assert order.extended_hours is True
+
+
+def test_worker_force_flatten_triggers_inside_close_buffer(tmp_path) -> None:
+    db_path = tmp_path / "trauto.db"
+    settings = DeploymentSettings(
+        database_url=f"sqlite+pysqlite:///{db_path}",
+        force_flatten_before_session_end=True,
+        flatten_buffer_minutes=10,
+        allow_overnight_positions=False,
+        app_env="development",
+        strict_env_validation=False,
+    )
+    repository = build_repository(db_path)
+    worker = TradingWorker(settings=settings, repository=repository)
+    timestamp = pd.Timestamp("2026-04-16T19:55:00Z")
+    session_context = worker._session_context(timestamp)
+
+    assert worker._should_force_flatten(
+        latest_timestamp=timestamp,
+        session_context=session_context,
+    )
+
+
+def test_worker_processes_open_position_for_flatten_even_when_not_shortlisted(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    db_path = tmp_path / "trauto.db"
+    settings = DeploymentSettings(
+        database_url=f"sqlite+pysqlite:///{db_path}",
+        worker_enable_trading=True,
+        paper_trading_enabled=True,
+        worker_dry_run=False,
+        worker_name="flatten-worker",
+        worker_symbols=("SPY",),
+        worker_timeframe="1d",
+        min_price=5.0,
+        allow_after_hours=True,
+        force_flatten_before_session_end=True,
+        flatten_buffer_minutes=10,
+        allow_overnight_positions=False,
+        app_env="development",
+        strict_env_validation=False,
+    )
+    repository = build_repository(db_path)
+    worker = TradingWorker(settings=settings, repository=repository)
+    timestamp = pd.Timestamp("2026-04-16T19:55:00Z")
+    regular_close_context = worker._session_context(timestamp)
+    monkeypatch.setattr(
+        TradingWorker,
+        "_session_context",
+        lambda self, _: regular_close_context,
+    )
+    repository.save_portfolio_snapshot(
+        PortfolioSnapshot(
+            cash=99_900.0,
+            day_start_equity=100_000.0,
+            peak_equity=100_000.0,
+            positions={
+                "SPY": Position(
+                    symbol="SPY",
+                    quantity=1.0,
+                    avg_price=100.0,
+                    realized_pnl=0.0,
+                    unrealized_pnl=0.0,
+                )
+            },
+        )
+    )
+    stub = LoaderStub({"SPY": make_frame([1.0, 1.1, 1.2], [100_000, 100_000, 100_000])})
+    worker.loader = stub
+    worker.universe_scanner.loader = stub
+
+    worker.run_once()
+
+    fills = repository.recent_fills(limit=5, run_service_prefix="worker:")
+    assert len(fills) == 1
+    assert fills[0]["side"] == "SELL"
+    runs = repository.recent_runs(limit=5)
+    details = dict(runs[0].get("details") or {})
+    assert details.get("exit_management_symbol") is True
+
+
+def test_worker_cooldown_reasons_use_recent_symbol_and_strategy_fills(tmp_path) -> None:
+    db_path = tmp_path / "trauto.db"
+    repository = build_repository(db_path)
+    repository.initialize(starting_cash=100_000.0)
+    run_id = "cooldown-run"
+    repository.start_run(
+        run_id=run_id,
+        service="worker:test",
+        cycle_key="cooldown-cycle",
+        symbol="SPY",
+        timeframe="1m",
+        strategy="breakout_momentum_intraday",
+        details={"selection": {"selected_strategy": "breakout_momentum_intraday"}},
+    )
+    repository.record_fill(
+        Fill(
+            order_id="order-1",
+            symbol="SPY",
+            side="BUY",
+            quantity=1.0,
+            price=100.0,
+            timestamp=pd.Timestamp("2026-04-16T15:00:00Z"),
+            notional=100.0,
+        ),
+        run_id=run_id,
+    )
+    settings = DeploymentSettings(
+        database_url=f"sqlite+pysqlite:///{db_path}",
+        symbol_cooldown_seconds=300,
+        strategy_cooldown_seconds=300,
+        app_env="development",
+        strict_env_validation=False,
+    )
+    worker = TradingWorker(settings=settings, repository=repository)
+    timestamp = pd.Timestamp("2026-04-16T15:02:00Z")
+
+    reasons = worker._cooldown_reasons(
+        symbol="SPY",
+        strategy_name="breakout_momentum_intraday",
+        timestamp=timestamp,
+        session_context=worker._session_context(timestamp),
+    )
+
+    assert "symbol_cooldown_active" in reasons
+    assert "strategy_cooldown_active" in reasons

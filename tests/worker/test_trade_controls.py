@@ -36,6 +36,11 @@ def _configure_strategy_rows(repository: PersistenceRepository) -> None:
     )
     repository.upsert_strategy_config(
         name="breakout_momentum",
+        status="disabled",
+        parameters={},
+    )
+    repository.upsert_strategy_config(
+        name="breakout_momentum_intraday",
         status="enabled",
         parameters={
             "lookback_period": 2,
@@ -55,6 +60,13 @@ def _configure_strategy_rows(repository: PersistenceRepository) -> None:
         status="disabled",
         parameters={},
     )
+    for name in (
+        "opening_range_breakout",
+        "vwap_reclaim_intraday",
+        "pullback_trend_continuation",
+        "mean_reversion_scalp",
+    ):
+        repository.upsert_strategy_config(name=name, status="disabled", parameters={})
 
 
 def _settings(db_path) -> DeploymentSettings:
@@ -91,7 +103,7 @@ def _approved_breakout_data() -> pd.DataFrame:
             "high": [96.0, 97.0, 98.0, 99.0, 100.0],
             "low": [95.0, 96.0, 97.0, 98.0, 99.0],
             "close": [96.0, 97.0, 98.0, 99.0, 100.0],
-            "volume": [200_000.0, 200_000.0, 200_000.0, 200_000.0, 300_000.0],
+            "volume": [200_000.0, 200_000.0, 200_000.0, 200_000.0, 500_000.0],
         },
         index=index,
     )
@@ -106,17 +118,26 @@ def _sideways_breakout_data() -> pd.DataFrame:
             "high": [100.0, 100.0, 100.0, 100.0, 100.1],
             "low": [99.9, 99.9, 99.9, 99.9, 100.0],
             "close": [100.0, 100.0, 100.0, 100.0, 100.1],
-            "volume": [200_000.0, 200_000.0, 200_000.0, 200_000.0, 300_000.0],
+            "volume": [200_000.0, 200_000.0, 200_000.0, 200_000.0, 500_000.0],
         },
         index=index,
     )
 
 
-def test_worker_executes_sized_trade_when_gate_and_risk_allow(tmp_path) -> None:
+def test_worker_executes_sized_trade_when_gate_and_risk_allow(
+    tmp_path,
+    monkeypatch,
+) -> None:
     db_path = tmp_path / "trauto.db"
     repository = _build_repository(db_path)
     _configure_strategy_rows(repository)
     worker = TradingWorker(settings=_settings(db_path), repository=repository)
+    regular_context = worker._session_context(pd.Timestamp("2026-04-16T15:00:00Z"))
+    monkeypatch.setattr(
+        TradingWorker,
+        "_session_context",
+        lambda self, _: regular_context,
+    )
     worker.selector = StrategySelector(
         SelectionConfig(min_recent_trades=0, min_score_threshold=-1.0)
     )
@@ -127,7 +148,7 @@ def test_worker_executes_sized_trade_when_gate_and_risk_allow(tmp_path) -> None:
 
     fills = repository.recent_fills(limit=5, run_service_prefix="worker:")
     assert len(fills) == 1
-    assert fills[0]["strategy"] == "breakout_momentum"
+    assert fills[0]["strategy"] == "breakout_momentum_intraday"
     assert fills[0]["quantity"] == 250.0
 
     sized_events = repository.recent_log_events(limit=5, event="trade_intent_sized")
@@ -138,11 +159,18 @@ def test_worker_executes_sized_trade_when_gate_and_risk_allow(tmp_path) -> None:
 
 def test_worker_blocks_trade_before_execution_when_regime_gate_rejects(
     tmp_path,
+    monkeypatch,
 ) -> None:
     db_path = tmp_path / "trauto.db"
     repository = _build_repository(db_path)
     _configure_strategy_rows(repository)
     worker = TradingWorker(settings=_settings(db_path), repository=repository)
+    regular_context = worker._session_context(pd.Timestamp("2026-04-16T15:00:00Z"))
+    monkeypatch.setattr(
+        TradingWorker,
+        "_session_context",
+        lambda self, _: regular_context,
+    )
     worker.selector = StrategySelector(
         SelectionConfig(min_recent_trades=0, min_score_threshold=-1.0)
     )

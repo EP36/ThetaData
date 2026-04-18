@@ -32,21 +32,38 @@ def gate_trade_intent(
     if intent.regime == "bullish":
         if intent.strategy_id == "rsi_mean_reversion" and not config.allow_rsi_in_bullish:
             return None, RiskDecision.reject("rsi_blocked_in_bullish_regime")
-        if intent.strategy_id not in {"breakout_momentum", "vwap_mean_reversion"} and not (
+        if intent.strategy_id not in {
+            "breakout_momentum",
+            "vwap_mean_reversion",
+            "breakout_momentum_intraday",
+            "opening_range_breakout",
+            "vwap_reclaim_intraday",
+            "pullback_trend_continuation",
+            "mean_reversion_scalp",
+        } and not (
             intent.strategy_id == "rsi_mean_reversion" and config.allow_rsi_in_bullish
         ):
             return None, RiskDecision.reject("strategy_blocked_by_regime")
         multiplier = config.bullish_regime_size_multiplier
     elif intent.regime == "sideways":
-        if intent.strategy_id == "breakout_momentum":
+        if intent.strategy_id in {"breakout_momentum", "breakout_momentum_intraday", "opening_range_breakout"}:
             return None, RiskDecision.reject("breakout_blocked_in_sideways_regime")
-        if intent.strategy_id not in {"rsi_mean_reversion", "vwap_mean_reversion"}:
+        if intent.strategy_id not in {
+            "rsi_mean_reversion",
+            "vwap_mean_reversion",
+            "vwap_reclaim_intraday",
+            "mean_reversion_scalp",
+        }:
             return None, RiskDecision.reject("strategy_blocked_by_regime")
         multiplier = config.sideways_regime_size_multiplier
     else:
         if not config.allow_bearish_mean_reversion:
             return None, RiskDecision.reject("long_entries_blocked_in_bearish_regime")
-        if intent.strategy_id not in {"rsi_mean_reversion", "vwap_mean_reversion"}:
+        if intent.strategy_id not in {
+            "rsi_mean_reversion",
+            "vwap_mean_reversion",
+            "mean_reversion_scalp",
+        }:
             return None, RiskDecision.reject("mean_reversion_blocked_in_bearish_regime")
         multiplier = config.bearish_regime_size_multiplier
 

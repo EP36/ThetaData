@@ -11,6 +11,12 @@ import numpy as np
 import pandas as pd
 
 from src.data.loaders import HistoricalDataLoader
+from src.trading.session import (
+    SessionConfig,
+    SessionContext,
+    SessionState,
+    classify_trading_session,
+)
 
 UniverseMode = Literal[
     "static",
@@ -30,6 +36,10 @@ SCAN_REASON_GROUPS: dict[str, str] = {
     "missing_required_columns": "missing_data",
     "invalid_price_or_volume": "missing_data",
     "outside_trading_session": "outside_trading_session",
+    "closed_session": "outside_trading_session",
+    "weekend_closed": "outside_trading_session",
+    "extended_hours_disabled": "outside_trading_session",
+    "extended_hours_unsupported": "outside_trading_session",
     "missing_recent_bar": "missing_recent_bar",
     "stale_market_data": "stale_market_data",
     "below_min_avg_volume": "insufficient_volume_confirmation",
@@ -38,12 +48,7 @@ SCAN_REASON_GROUPS: dict[str, str] = {
     "below_min_price": "risk_blocked",
     "ranked_outside_max_candidates": "ranking_cutoff",
 }
-MarketSessionState = Literal[
-    "market_open",
-    "outside_trading_session",
-    "not_applicable",
-    "unknown",
-]
+MarketSessionState = SessionState | Literal["unknown"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,12 +64,17 @@ class SymbolSnapshot:
     latest_volume: float
     relative_volume: float
     relative_volume_lookback_window: str
+    vwap: float
+    price_vs_vwap_pct: float
+    range_expansion: float
+    candidate_score: float
+    score_components: dict[str, float]
     percent_move: float
     atr_pct: float
     trend_strength: float
     spread_pct: float | None
 
-    def as_dict(self) -> dict[str, float | str | None]:
+    def as_dict(self) -> dict[str, object]:
         """Serialize snapshot for logs/API payloads."""
         return {
             "symbol": self.symbol,
@@ -76,6 +86,11 @@ class SymbolSnapshot:
             "latest_volume": float(self.latest_volume),
             "relative_volume": float(self.relative_volume),
             "relative_volume_lookback_window": self.relative_volume_lookback_window,
+            "vwap": float(self.vwap),
+            "price_vs_vwap_pct": float(self.price_vs_vwap_pct),
+            "range_expansion": float(self.range_expansion),
+            "candidate_score": float(self.candidate_score),
+            "score_components": dict(self.score_components),
             "percent_move": float(self.percent_move),
             "atr_pct": float(self.atr_pct),
             "trend_strength": float(self.trend_strength),
@@ -99,12 +114,16 @@ class SymbolScanContext:
     min_relative_volume_threshold: float
     actual_relative_volume: float | None
     relative_volume_lookback_window: str | None
+    candidate_score: float | None
+    score_components: dict[str, float] | None
+    price_vs_vwap_pct: float | None
+    spread_pct: float | None
     market_session_state: MarketSessionState
     freshness_rejection_reason: str | None
     missing_recent_bar_threshold_minutes: float | None
     stale_market_data_threshold_minutes: float | None
 
-    def as_dict(self) -> dict[str, float | str | None]:
+    def as_dict(self) -> dict[str, object]:
         """Serialize context for structured logs."""
         return {
             "symbol": self.symbol,
@@ -119,6 +138,10 @@ class SymbolScanContext:
             "min_relative_volume_threshold": float(self.min_relative_volume_threshold),
             "actual_relative_volume": self.actual_relative_volume,
             "relative_volume_lookback_window": self.relative_volume_lookback_window,
+            "candidate_score": self.candidate_score,
+            "score_components": self.score_components,
+            "price_vs_vwap_pct": self.price_vs_vwap_pct,
+            "spread_pct": self.spread_pct,
             "market_session_state": self.market_session_state,
             "freshness_rejection_reason": self.freshness_rejection_reason,
             "missing_recent_bar_threshold_minutes": self.missing_recent_bar_threshold_minutes,
@@ -224,6 +247,10 @@ class UniverseScannerConfig:
     trading_start: str = "09:30"
     trading_end: str = "16:00"
     allow_after_hours: bool = False
+    extended_hours_enabled: bool = False
+    overnight_trading_enabled: bool = False
+    broker_extended_hours_supported: bool = False
+    enforce_relative_volume_filter: bool = False
     only_open_new_positions_during_market_hours: bool = True
     stale_market_data_grace_minutes: float = 120.0
     stale_market_data_interval_multiplier: float = 3.0
@@ -389,7 +416,10 @@ class UniverseScanner:
             reasons.append("below_min_price")
         if snapshot.average_volume < self.config.min_average_volume:
             reasons.append("below_min_avg_volume")
-        if snapshot.relative_volume < self.config.min_relative_volume:
+        if (
+            self.config.enforce_relative_volume_filter
+            and snapshot.relative_volume < self.config.min_relative_volume
+        ):
             reasons.append("below_min_relative_volume")
         if (
             snapshot.spread_pct is not None
@@ -450,6 +480,26 @@ class UniverseScanner:
                 if snapshot is not None
                 else None
             ),
+            candidate_score=(
+                float(snapshot.candidate_score)
+                if snapshot is not None
+                else None
+            ),
+            score_components=(
+                dict(snapshot.score_components)
+                if snapshot is not None
+                else None
+            ),
+            price_vs_vwap_pct=(
+                float(snapshot.price_vs_vwap_pct)
+                if snapshot is not None
+                else None
+            ),
+            spread_pct=(
+                float(snapshot.spread_pct)
+                if snapshot is not None and snapshot.spread_pct is not None
+                else None
+            ),
             market_session_state=assessment["market_session_state"],  # type: ignore[arg-type]
             freshness_rejection_reason=assessment["freshness_rejection_reason"],
             missing_recent_bar_threshold_minutes=assessment[
@@ -469,23 +519,23 @@ class UniverseScanner:
         """Rank filtered symbols according to selected universe mode."""
         def key_top_gainers(symbol: str) -> tuple[float, float, float, str]:
             snap = snapshots[symbol]
-            return (-snap.percent_move, -snap.relative_volume, -snap.atr_pct, symbol)
+            return (-snap.percent_move, -snap.candidate_score, -snap.relative_volume, symbol)
 
         def key_top_losers(symbol: str) -> tuple[float, float, float, str]:
             snap = snapshots[symbol]
-            return (snap.percent_move, -snap.relative_volume, -snap.atr_pct, symbol)
+            return (snap.percent_move, -snap.candidate_score, -snap.relative_volume, symbol)
 
         def key_relative_volume(symbol: str) -> tuple[float, float, float, str]:
             snap = snapshots[symbol]
-            return (-snap.relative_volume, -abs(snap.percent_move), -snap.atr_pct, symbol)
+            return (-snap.relative_volume, -snap.candidate_score, -abs(snap.percent_move), symbol)
 
         def key_static(symbol: str) -> tuple[float, float, float, float, str]:
             snap = snapshots[symbol]
             return (
+                -snap.candidate_score,
                 -snap.trend_strength,
-                -abs(snap.percent_move),
                 -snap.relative_volume,
-                -snap.atr_pct,
+                -abs(snap.percent_move),
                 symbol,
             )
 
@@ -535,9 +585,21 @@ def _build_snapshot(
     else:
         percent_move = 0.0
 
+    vwap = _compute_recent_vwap(data=data)
+    price_vs_vwap_pct = float((latest_price - vwap) / max(abs(vwap), EPSILON))
     atr_pct = _compute_atr_pct(high=high, low=low, close=close)
+    range_expansion = _compute_range_expansion(high=high, low=low, close=close)
     trend_strength = _compute_trend_strength(close=close)
     spread_pct = _compute_spread_pct(data=data)
+    candidate_score, score_components = _compute_candidate_score(
+        trend_strength=trend_strength,
+        percent_move=percent_move,
+        price_vs_vwap_pct=price_vs_vwap_pct,
+        atr_pct=atr_pct,
+        range_expansion=range_expansion,
+        relative_volume=relative_volume,
+        average_volume=avg_volume,
+    )
 
     latest_timestamp = pd.Timestamp(data.index[-1])
     return SymbolSnapshot(
@@ -550,6 +612,11 @@ def _build_snapshot(
         latest_volume=float(latest_volume),
         relative_volume=float(relative_volume),
         relative_volume_lookback_window=relative_volume_lookback_window,
+        vwap=float(vwap),
+        price_vs_vwap_pct=float(price_vs_vwap_pct),
+        range_expansion=float(range_expansion),
+        candidate_score=float(candidate_score),
+        score_components=score_components,
         percent_move=float(percent_move),
         atr_pct=float(atr_pct),
         trend_strength=float(trend_strength),
@@ -607,6 +674,77 @@ def _compute_spread_pct(data: pd.DataFrame) -> float | None:
     if mid <= EPSILON:
         return None
     return float((ask_last - bid_last) / mid)
+
+
+def _compute_recent_vwap(data: pd.DataFrame, lookback: int = 20) -> float:
+    """Compute recent rolling VWAP for ranking diagnostics."""
+    high = pd.to_numeric(data["high"], errors="coerce")
+    low = pd.to_numeric(data["low"], errors="coerce")
+    close = pd.to_numeric(data["close"], errors="coerce")
+    volume = pd.to_numeric(data["volume"], errors="coerce")
+    typical = (high + low + close) / 3.0
+    selected_typical = typical.tail(min(lookback, len(typical)))
+    selected_volume = volume.tail(min(lookback, len(volume)))
+    volume_sum = float(selected_volume.sum())
+    if volume_sum <= EPSILON:
+        return float(close.iloc[-1])
+    return float((selected_typical * selected_volume).sum() / volume_sum)
+
+
+def _compute_range_expansion(
+    high: pd.Series,
+    low: pd.Series,
+    close: pd.Series,
+    lookback: int = 20,
+) -> float:
+    """Return latest true range divided by recent average true range."""
+    prev_close = close.shift(1)
+    true_range = pd.concat(
+        [
+            (high - low).abs(),
+            (high - prev_close).abs(),
+            (low - prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    selected = true_range.tail(min(lookback, len(true_range)))
+    avg_range = float(selected.mean()) if not selected.empty else 0.0
+    latest_range = float(true_range.iloc[-1]) if len(true_range) else 0.0
+    if avg_range <= EPSILON:
+        return 0.0
+    return float(latest_range / avg_range)
+
+
+def _compute_candidate_score(
+    *,
+    trend_strength: float,
+    percent_move: float,
+    price_vs_vwap_pct: float,
+    atr_pct: float,
+    range_expansion: float,
+    relative_volume: float,
+    average_volume: float,
+) -> tuple[float, dict[str, float]]:
+    """Score one candidate using soft signals rather than hard global gates."""
+    components = {
+        "trend_alignment": min(max(trend_strength / 0.02, 0.0), 1.0),
+        "momentum": min(max(percent_move / 0.02, 0.0), 1.0),
+        "price_vs_vwap": min(max(price_vs_vwap_pct / 0.01, 0.0), 1.0),
+        "volatility": min(max(atr_pct / 0.03, 0.0), 1.0),
+        "range_expansion": min(max(range_expansion / 2.0, 0.0), 1.0),
+        "relative_volume": min(max(relative_volume / 2.0, 0.0), 1.0),
+        "liquidity": min(max(average_volume / 1_000_000.0, 0.0), 1.0),
+    }
+    score = (
+        (components["trend_alignment"] * 0.20)
+        + (components["momentum"] * 0.20)
+        + (components["price_vs_vwap"] * 0.15)
+        + (components["volatility"] * 0.10)
+        + (components["range_expansion"] * 0.10)
+        + (components["relative_volume"] * 0.15)
+        + (components["liquidity"] * 0.10)
+    )
+    return float(score), components
 
 
 def _compute_average_volume_for_filter(
@@ -712,11 +850,12 @@ def _assess_bar_freshness(
     """Classify intraday bar freshness without hiding outside-session scans."""
     interval_minutes = _timeframe_to_minutes(timeframe)
     now_ts = _to_utc_timestamp(pd.Timestamp.utcnow() if now is None else pd.Timestamp(now))
-    market_session_state = _market_session_state(
+    market_session = _market_session_context(
         now=now,
         timeframe=timeframe,
         config=config,
     )
+    market_session_state = market_session.state
     if interval_minutes >= 1_440:
         return {
             "now_timestamp": now_ts.isoformat(),
@@ -734,8 +873,7 @@ def _assess_bar_freshness(
     missing_recent_bar_threshold = stale_threshold
     if (
         config.only_open_new_positions_during_market_hours
-        and not config.allow_after_hours
-        and market_session_state == "outside_trading_session"
+        and not market_session.can_open_new_positions
     ):
         return {
             "now_timestamp": now_ts.isoformat(),
@@ -745,7 +883,7 @@ def _assess_bar_freshness(
                 timeframe=timeframe,
             ),
             "market_session_state": market_session_state,
-            "freshness_rejection_reason": "outside_trading_session",
+            "freshness_rejection_reason": market_session.reason or market_session_state,
             "missing_recent_bar_threshold_minutes": missing_recent_bar_threshold,
             "stale_market_data_threshold_minutes": stale_threshold,
         }
@@ -758,7 +896,7 @@ def _assess_bar_freshness(
     freshness_rejection_reason: str | None = None
     if age_minutes is not None and age_minutes > stale_threshold:
         if (
-            market_session_state == "market_open"
+            market_session.can_open_new_positions
             and _is_same_market_date(
                 latest_timestamp=latest_timestamp,
                 now=now,
@@ -779,24 +917,45 @@ def _assess_bar_freshness(
     }
 
 
+def _market_session_context(
+    now: pd.Timestamp | None,
+    timeframe: str,
+    config: UniverseScannerConfig,
+) -> SessionContext:
+    """Return regular-session state for intraday worker scans."""
+    if _timeframe_to_minutes(timeframe) >= 1_440:
+        now_ts = _to_utc_timestamp(pd.Timestamp.utcnow() if now is None else pd.Timestamp(now))
+        market_ts = now_ts.tz_convert("America/New_York")
+        return SessionContext(
+            state="not_applicable",
+            timestamp_utc=now_ts,
+            timestamp_market=market_ts,
+            can_open_new_positions=True,
+            size_multiplier=1.0,
+        )
+
+    return classify_trading_session(
+        pd.Timestamp.utcnow() if now is None else pd.Timestamp(now),
+        SessionConfig(
+            regular_start=config.trading_start,
+            regular_end=config.trading_end,
+            extended_hours_enabled=config.allow_after_hours or config.extended_hours_enabled,
+            overnight_trading_enabled=config.overnight_trading_enabled,
+            broker_extended_hours_supported=(
+                config.broker_extended_hours_supported
+                or (config.allow_after_hours and not config.extended_hours_enabled)
+            ),
+        ),
+    )
+
+
 def _market_session_state(
     now: pd.Timestamp | None,
     timeframe: str,
     config: UniverseScannerConfig,
 ) -> MarketSessionState:
-    """Return regular-session state for intraday worker scans."""
-    if _timeframe_to_minutes(timeframe) >= 1_440:
-        return "not_applicable"
-
-    now_local = _to_market_time(pd.Timestamp.utcnow() if now is None else pd.Timestamp(now))
-    if now_local.weekday() >= 5:
-        return "outside_trading_session"
-
-    trading_start = _parse_session_time(config.trading_start)
-    trading_end = _parse_session_time(config.trading_end)
-    if trading_start <= now_local.time() <= trading_end:
-        return "market_open"
-    return "outside_trading_session"
+    """Return regular/extended session state for scanner diagnostics."""
+    return _market_session_context(now=now, timeframe=timeframe, config=config).state
 
 
 def _bar_age_minutes(
@@ -871,7 +1030,13 @@ def _should_refresh_stale_intraday_data(
     """Return true when a stale open-session cache read should be retried once."""
     return (
         not force_refresh
-        and context.market_session_state == "market_open"
+        and context.market_session_state
+        in {
+            "regular_session",
+            "premarket_session",
+            "afterhours_session",
+            "overnight_session",
+        }
         and context.freshness_rejection_reason
         in {"missing_recent_bar", "stale_market_data"}
     )

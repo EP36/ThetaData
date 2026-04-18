@@ -24,6 +24,9 @@ class Order:
     timestamp: pd.Timestamp
     stop_loss_pct: float | None = None
     trailing_stop_pct: float | None = None
+    order_type: str = "MARKET"
+    limit_price: float | None = None
+    extended_hours: bool = False
     order_id: str = field(default_factory=lambda: uuid4().hex)
     status: str = ORDER_STATUS_SUBMITTED
     rejection_reasons: tuple[str, ...] = ()

@@ -16,6 +16,11 @@ def test_registry_contains_default_strategy() -> None:
     assert "rsi_mean_reversion" in list_strategies()
     assert "breakout_momentum" in list_strategies()
     assert "vwap_mean_reversion" in list_strategies()
+    assert "breakout_momentum_intraday" in list_strategies()
+    assert "opening_range_breakout" in list_strategies()
+    assert "vwap_reclaim_intraday" in list_strategies()
+    assert "pullback_trend_continuation" in list_strategies()
+    assert "mean_reversion_scalp" in list_strategies()
     strategy_cls = get_strategy_class("moving_average_crossover")
     strategy = strategy_cls(short_window=5, long_window=10)
     assert strategy.name == "moving_average_crossover"
@@ -68,9 +73,14 @@ def test_register_duplicate_strategy_name_raises() -> None:
     # Restore default strategies for other tests.
     clear_registry()
     from src.strategies import (
+        BreakoutMomentumIntradayStrategy,
         BreakoutMomentumStrategy,
+        MeanReversionScalpStrategy,
         MovingAverageCrossoverStrategy,
+        OpeningRangeBreakoutStrategy,
+        PullbackTrendContinuationStrategy,
         RSIMeanReversionStrategy,
+        VWAPReclaimIntradayStrategy,
         VWAPMeanReversionStrategy,
     )
 
@@ -78,6 +88,11 @@ def test_register_duplicate_strategy_name_raises() -> None:
     register_strategy(RSIMeanReversionStrategy)
     register_strategy(BreakoutMomentumStrategy)
     register_strategy(VWAPMeanReversionStrategy)
+    register_strategy(BreakoutMomentumIntradayStrategy)
+    register_strategy(OpeningRangeBreakoutStrategy)
+    register_strategy(VWAPReclaimIntradayStrategy)
+    register_strategy(PullbackTrendContinuationStrategy)
+    register_strategy(MeanReversionScalpStrategy)
 
 
 def test_engine_uses_strategy_required_column_validation() -> None:

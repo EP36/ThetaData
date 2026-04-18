@@ -9,12 +9,16 @@ from src.execution.models import Order
 from src.risk.manager import RiskManager
 
 
-def build_risk_manager(max_position_size: float = 1.0) -> RiskManager:
+def build_risk_manager(
+    max_position_size: float = 1.0,
+    allow_after_hours: bool = False,
+) -> RiskManager:
     return RiskManager(
         max_position_size=max_position_size,
         max_daily_loss=2_000.0,
         max_gross_exposure=2.0,
         max_open_positions=10,
+        allow_after_hours=allow_after_hours,
     )
 
 
@@ -41,7 +45,7 @@ def test_risk_rejection_path() -> None:
 def test_fill_simulation_and_order_tracking() -> None:
     executor = PaperTradingExecutor(
         starting_cash=10_000.0,
-        risk_manager=build_risk_manager(),
+        risk_manager=build_risk_manager(allow_after_hours=True),
         paper_trading_enabled=True,
     )
     buy = executor.submit_order(
@@ -175,3 +179,48 @@ def test_restore_and_snapshot_state_round_trip() -> None:
     assert restored_cash == cash
     assert "SPY" in restored_positions
     assert restored_positions["SPY"].quantity == positions["SPY"].quantity
+
+
+def test_extended_hours_market_order_is_rejected() -> None:
+    executor = PaperTradingExecutor(
+        starting_cash=10_000.0,
+        risk_manager=build_risk_manager(),
+        paper_trading_enabled=True,
+    )
+
+    result = executor.submit_order(
+        Order(
+            symbol="SPY",
+            side="BUY",
+            quantity=1.0,
+            price=100.0,
+            timestamp=pd.Timestamp("2025-01-01 18:00:00"),
+            extended_hours=True,
+        )
+    )
+
+    assert result.status == "REJECTED"
+    assert "extended_hours_requires_limit_order" in result.rejection_reasons
+
+
+def test_extended_hours_limit_order_is_allowed() -> None:
+    executor = PaperTradingExecutor(
+        starting_cash=10_000.0,
+        risk_manager=build_risk_manager(allow_after_hours=True),
+        paper_trading_enabled=True,
+    )
+
+    result = executor.submit_order(
+        Order(
+            symbol="SPY",
+            side="BUY",
+            quantity=1.0,
+            price=100.0,
+            timestamp=pd.Timestamp("2025-01-01 18:00:00"),
+            order_type="LIMIT",
+            limit_price=100.0,
+            extended_hours=True,
+        )
+    )
+
+    assert result.status == "FILLED"
