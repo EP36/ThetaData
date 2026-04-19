@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "updated_at": null,
+  "updated_by": "manual",
+  "params": {
+    "direction_bullish_up_multiplier": 1.2,
+    "direction_bullish_down_multiplier": 0.7,
+    "direction_bearish_down_multiplier": 1.2,
+    "direction_bearish_up_multiplier": 0.7,
+    "rsi_overbought_multiplier": 0.85,
+    "rsi_oversold_multiplier": 0.85,
+    "macd_crossover_bonus": 0.05,
+    "streak_bonus": 0.03,
+    "volume_spike_bonus": 0.05,
+    "volume_low_multiplier": 0.8,
+    "proximity_close_multiplier": 0.75,
+    "proximity_far_bonus": 0.08,
+    "volatility_high_multiplier": 0.85,
+    "atr_high_multiplier": 0.85
+  },
+  "performance": {
+    "total_trades": 0,
+    "win_rate": null,
+    "avg_pnl_pct": null,
+    "last_evaluated_at": null
+  }
+}
