@@ -96,3 +96,7 @@ class ClobClient:
     def fetch_orderbook(self, token_id: str) -> dict[str, Any]:
         """Fetch the L2 orderbook for a single token (YES or NO outcome)."""
         return self._get("/book", params={"token_id": token_id})
+
+    def fetch_market_detail(self, condition_id: str) -> dict[str, Any]:
+        """Fetch full market detail including resolution status and end date."""
+        return self._get(f"/markets/{condition_id}")

@@ -30,6 +30,13 @@ class PolymarketConfig:
     dry_run: bool = True               # True = log intent only, never place orders
     min_volume_24h: float = 10_000.0   # minimum 24h USDC volume to trade a market
     positions_path: str = "data/polymarket_positions.json"
+    # --- Phase 3: position monitoring ---
+    monitor_interval_sec: int = 60     # how often to run monitor_positions()
+    take_profit_pct: float = 15.0      # close when unrealized P&L >= this %
+    stop_loss_pct: float = 10.0        # close when unrealized P&L <= -this %
+    max_hold_hours: int = 72           # force-close after this many hours
+    unhedged_grace_minutes: int = 5    # attempt close of unhedged leg after this many minutes
+    poly_log_dir: str = "logs"         # directory for poly_YYYY-MM-DD.log daily summaries
 
     def __post_init__(self) -> None:
         if not self.api_key.strip():
@@ -54,6 +61,16 @@ class PolymarketConfig:
             raise ValueError("max_positions must be positive")
         if self.daily_loss_limit <= 0:
             raise ValueError("daily_loss_limit must be positive")
+        if self.monitor_interval_sec <= 0:
+            raise ValueError("monitor_interval_sec must be positive")
+        if self.take_profit_pct <= 0:
+            raise ValueError("take_profit_pct must be positive")
+        if self.stop_loss_pct <= 0:
+            raise ValueError("stop_loss_pct must be positive")
+        if self.max_hold_hours <= 0:
+            raise ValueError("max_hold_hours must be positive")
+        if self.unhedged_grace_minutes < 0:
+            raise ValueError("unhedged_grace_minutes must be non-negative")
 
     @classmethod
     def from_env(cls, env_path: str | Path | None = None) -> "PolymarketConfig":
@@ -90,4 +107,10 @@ class PolymarketConfig:
             positions_path=os.getenv(
                 "POLY_POSITIONS_PATH", "data/polymarket_positions.json"
             ),
+            monitor_interval_sec=int(os.getenv("POLY_MONITOR_INTERVAL_SEC", "60")),
+            take_profit_pct=float(os.getenv("POLY_TAKE_PROFIT_PCT", "15.0")),
+            stop_loss_pct=float(os.getenv("POLY_STOP_LOSS_PCT", "10.0")),
+            max_hold_hours=int(os.getenv("POLY_MAX_HOLD_HOURS", "72")),
+            unhedged_grace_minutes=int(os.getenv("POLY_UNHEDGED_GRACE_MINUTES", "5")),
+            poly_log_dir=os.getenv("POLY_LOG_DIR", "logs"),
         )

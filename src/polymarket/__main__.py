@@ -11,8 +11,12 @@ from __future__ import annotations
 import logging
 import time
 
+from src.dashboard.aggregator import is_poly_paused
 from src.observability.logging import configure_logging
+from src.polymarket.client import ClobClient
 from src.polymarket.config import PolymarketConfig
+from src.polymarket.monitor import monitor_positions
+from src.polymarket.positions import make_ledger
 from src.polymarket.runner import scan_and_execute
 
 LOGGER = logging.getLogger("theta.polymarket.main")
@@ -23,19 +27,35 @@ def main() -> None:
     config = PolymarketConfig.from_env()
 
     LOGGER.info(
-        "polymarket_scanner_starting interval_sec=%d min_edge_pct=%.2f "
-        "dry_run=%s max_trade_usdc=%.2f",
+        "polymarket_scanner_starting interval_sec=%d monitor_interval_sec=%d "
+        "min_edge_pct=%.2f dry_run=%s max_trade_usdc=%.2f",
         config.scan_interval_sec,
+        config.monitor_interval_sec,
         config.min_edge_pct,
         config.dry_run,
         config.max_trade_usdc,
     )
 
+    client = ClobClient(config=config)
+    ledger = make_ledger(config.positions_path)
+    last_monitor_time = 0.0
+
     while True:
-        try:
-            scan_and_execute(config)
-        except Exception as exc:
-            LOGGER.error("polymarket_scan_error error=%s", exc)
+        if is_poly_paused():
+            LOGGER.info("polymarket_scan_skipped reason=dashboard_pause_flag")
+        else:
+            try:
+                scan_and_execute(config)
+            except Exception as exc:
+                LOGGER.error("polymarket_scan_error error=%s", exc)
+
+        now = time.monotonic()
+        if now - last_monitor_time >= config.monitor_interval_sec:
+            try:
+                monitor_positions(config, client, ledger)
+            except Exception as exc:
+                LOGGER.error("polymarket_monitor_error error=%s", exc)
+            last_monitor_time = time.monotonic()
 
         LOGGER.info("polymarket_scan_sleeping seconds=%d", config.scan_interval_sec)
         time.sleep(config.scan_interval_sec)

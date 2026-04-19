@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from datetime import datetime
 from typing import Literal
@@ -42,9 +43,12 @@ from src.api.schemas import (
     PasswordChangeResponse,
     WorkerExecutionStatusResponse,
 )
+from src.dashboard.api import router as poly_router, register as _poly_register
 from src.api.services import TradingApiService
 from src.config.deployment import DeploymentSettings
 from src.persistence import DatabaseStore, PersistenceRepository
+
+_APP_LOGGER = logging.getLogger("theta.api.app")
 
 AnalyticsSource = Literal["execution", "paper", "backtest"]
 
@@ -84,6 +88,38 @@ app.state.api_service = service
 app.state.deployment_settings = deployment_settings
 app.state.repository = repository
 app.state.auth_service = auth_service
+
+app.include_router(poly_router)
+
+# Attempt to initialise the Polymarket dashboard module.
+# If POLY_API_KEY / credentials are not set this is a no-op.
+try:
+    from src.polymarket.config import PolymarketConfig as _PolyConfig
+    from src.polymarket.client import ClobClient as _ClobClient
+    from src.polymarket.positions import make_ledger as _make_ledger
+    from src.dashboard.aggregator import DashboardAggregator as _DashAgg
+
+    _poly_cfg = _PolyConfig.from_env()
+    _poly_client = _ClobClient(config=_poly_cfg)
+    _poly_ledger = _make_ledger(_poly_cfg.positions_path)
+    _poly_agg = _DashAgg(
+        poly_config=_poly_cfg,
+        ledger=_poly_ledger,
+        repository=repository,
+    )
+    _poly_register(_poly_agg, _poly_cfg, _poly_client, _poly_ledger)
+    app.state.poly_aggregator = _poly_agg
+    _APP_LOGGER.info(
+        "trauto_dashboard_ready dry_run=%s positions_path=%s",
+        _poly_cfg.dry_run,
+        _poly_cfg.positions_path,
+    )
+except Exception as _poly_init_exc:
+    _APP_LOGGER.warning(
+        "trauto_dashboard_poly_unavailable reason=%s — GET / and /api/* poly endpoints will return 503",
+        _poly_init_exc,
+    )
+    app.state.poly_aggregator = None
 
 app.add_middleware(
     CORSMiddleware,

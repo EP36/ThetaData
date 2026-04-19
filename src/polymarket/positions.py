@@ -6,28 +6,67 @@ import json
 import logging
 import os
 import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 LOGGER = logging.getLogger("theta.polymarket.positions")
 
+# ---------------------------------------------------------------------------
+# Status state machine
+# ---------------------------------------------------------------------------
+
+#: Valid next statuses for each current status. Terminal states map to empty set.
+VALID_TRANSITIONS: dict[str, set[str]] = {
+    "open":     {"closing", "resolved", "stale"},
+    "closing":  {"closed", "closing"},   # "closing" → "closing" allows retry
+    "unhedged": {"closing", "closed"},
+    "closed":   set(),                   # terminal
+    "resolved": set(),                   # terminal
+    "stale":    set(),                   # terminal — requires human review
+}
+
+#: Statuses that represent an active (not-yet-final) position.
+ACTIVE_STATUSES: frozenset[str] = frozenset({"open", "unhedged", "closing"})
+
+#: Statuses that have finalized P&L.
+FINAL_STATUSES: frozenset[str] = frozenset({"closed", "resolved"})
+
+
+# ---------------------------------------------------------------------------
+# Domain model
+# ---------------------------------------------------------------------------
 
 @dataclass
 class PositionRecord:
     """One side (or both sides) of an entered arb position."""
 
+    # Phase 1+2: required fields
     id: str
     market_condition_id: str
     market_question: str
-    strategy: str          # "orderbook_spread" | "cross_market" | "correlated_markets"
-    side: str              # "YES" | "NO" | "YES+NO"
+    strategy: str       # "orderbook_spread" | "cross_market" | "correlated_markets"
+    side: str           # "YES" | "NO" | "YES+NO"
     entry_price: float
     size_usdc: float
-    opened_at: str         # ISO-8601 UTC timestamp
-    status: str            # "open" | "closed" | "unhedged"
+    opened_at: str      # ISO-8601 UTC
+    status: str         # see VALID_TRANSITIONS above
     pnl: float | None = None
+    # Phase 3: monitoring fields (all optional — existing JSON records use defaults)
+    yes_token_id: str = ""
+    no_token_id: str = ""
+    end_date: str = ""              # market end date ISO-8601; used for stale detection
+    exit_price: float | None = None
+    closed_at: str = ""
+    unrealized_pnl: float | None = None
+    unrealized_pnl_pct: float | None = None
+    contracts_held: float = 0.0    # outcome tokens held per leg
 
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 def _new_id() -> str:
     return str(uuid.uuid4())
@@ -40,6 +79,10 @@ def _now_iso() -> str:
 def _today_date() -> str:
     return datetime.now(tz=timezone.utc).strftime("%Y-%m-%d")
 
+
+# ---------------------------------------------------------------------------
+# Ledger
+# ---------------------------------------------------------------------------
 
 @dataclass(slots=True)
 class PositionsLedger:
@@ -77,6 +120,10 @@ class PositionsLedger:
         """Return all persisted position records."""
         return [PositionRecord(**r) for r in self._load_raw()]
 
+    def open_positions(self) -> list[PositionRecord]:
+        """Return positions in any active (non-terminal) state."""
+        return [p for p in self.load() if p.status in ACTIVE_STATUSES]
+
     def add(self, record: PositionRecord) -> None:
         """Append a new position record and persist."""
         raw = self._load_raw()
@@ -97,44 +144,96 @@ class PositionsLedger:
         status: str,
         pnl: float | None = None,
     ) -> None:
-        """Update status and optional P&L for one position record."""
+        """Update status and optional P&L for one position record (legacy helper)."""
+        extra: dict[str, Any] = {}
+        if pnl is not None:
+            extra["pnl"] = pnl
+        self.update_fields(position_id, status=status, **extra)
+
+    def update_fields(self, position_id: str, **fields: Any) -> None:
+        """Update arbitrary fields on one position record without state validation."""
         raw = self._load_raw()
         found = False
         for r in raw:
             if r.get("id") == position_id:
-                r["status"] = status
-                if pnl is not None:
-                    r["pnl"] = pnl
+                r.update(fields)
                 found = True
                 break
         if not found:
-            LOGGER.warning("positions_update_not_found id=%s", position_id)
+            LOGGER.warning("positions_update_not_found id=%s fields=%s", position_id, list(fields))
             return
         self._save_raw(raw)
-        LOGGER.info(
-            "positions_update id=%s status=%s pnl=%s",
-            position_id,
-            status,
-            pnl,
+
+    def transition(
+        self,
+        position_id: str,
+        new_status: str,
+        reason: str,
+        **extra_fields: Any,
+    ) -> bool:
+        """Validate and apply a state transition.
+
+        Logs every transition. Returns False (and logs a warning) if the
+        transition is invalid — never silently applies a bad state change.
+        """
+        raw = self._load_raw()
+        target: dict | None = next(
+            (r for r in raw if r.get("id") == position_id), None
         )
+        if target is None:
+            LOGGER.warning("positions_transition_not_found id=%s", position_id)
+            return False
+
+        current_status = target.get("status", "")
+        valid_next = VALID_TRANSITIONS.get(current_status, set())
+
+        if new_status not in valid_next:
+            LOGGER.warning(
+                "positions_invalid_transition id=%s from=%s to=%s reason=%s",
+                position_id,
+                current_status,
+                new_status,
+                reason,
+            )
+            return False
+
+        target["status"] = new_status
+        target.update(extra_fields)
+        self._save_raw(raw)
+        LOGGER.info(
+            "positions_transition id=%s from=%s to=%s reason=%s",
+            position_id,
+            current_status,
+            new_status,
+            reason,
+        )
+        return True
 
     def open_count(self) -> int:
-        """Return the number of currently open (or unhedged) positions."""
-        return sum(
-            1 for r in self._load_raw() if r.get("status") in {"open", "unhedged"}
-        )
+        """Count active positions (open, unhedged, closing)."""
+        return sum(1 for r in self._load_raw() if r.get("status") in ACTIVE_STATUSES)
 
     def daily_pnl(self) -> float:
-        """Sum realized P&L for positions closed today (UTC)."""
+        """Sum realized P&L for positions finalized today (UTC).
+
+        Includes both 'closed' and 'resolved' statuses.
+        """
         today = _today_date()
         total = 0.0
         for r in self._load_raw():
-            if r.get("status") == "closed" and r.get("opened_at", "").startswith(today):
+            if (
+                r.get("status") in FINAL_STATUSES
+                and r.get("opened_at", "").startswith(today)
+            ):
                 pnl = r.get("pnl")
                 if pnl is not None:
                     total += float(pnl)
         return total
 
+
+# ---------------------------------------------------------------------------
+# Factories
+# ---------------------------------------------------------------------------
 
 def make_ledger(positions_path: str) -> PositionsLedger:
     """Construct a PositionsLedger from a file path string."""
@@ -149,6 +248,10 @@ def new_position(
     entry_price: float,
     size_usdc: float,
     status: str = "open",
+    yes_token_id: str = "",
+    no_token_id: str = "",
+    end_date: str = "",
+    contracts_held: float = 0.0,
 ) -> PositionRecord:
     """Build a new PositionRecord with a fresh UUID and current timestamp."""
     return PositionRecord(
@@ -162,4 +265,8 @@ def new_position(
         opened_at=_now_iso(),
         status=status,
         pnl=None,
+        yes_token_id=yes_token_id,
+        no_token_id=no_token_id,
+        end_date=end_date,
+        contracts_held=contracts_held,
     )

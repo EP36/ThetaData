@@ -1,0 +1,658 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trauto Dashboard</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<style>
+:root {
+  --bg: #f5f7fa;
+  --surface: #ffffff;
+  --surface2: #f0f2f5;
+  --border: #e1e4e8;
+  --text: #1a1d23;
+  --text2: #6b7280;
+  --green: #16a34a;
+  --red: #dc2626;
+  --yellow: #d97706;
+  --blue: #2563eb;
+  --purple: #7c3aed;
+  --badge-live: #dcfce7;
+  --badge-live-text: #15803d;
+  --badge-paused: #fef3c7;
+  --badge-paused-text: #92400e;
+  --badge-dry: #dbeafe;
+  --badge-dry-text: #1e40af;
+  --badge-alpaca: #ede9fe;
+  --badge-alpaca-text: #6d28d9;
+  --badge-poly: #fce7f3;
+  --badge-poly-text: #9d174d;
+  --shadow: 0 1px 3px rgba(0,0,0,.08);
+  --radius: 8px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #22263a;
+    --border: #2d3147;
+    --text: #e8eaf0;
+    --text2: #8b91a8;
+    --badge-live: #14532d;
+    --badge-live-text: #86efac;
+    --badge-paused: #451a03;
+    --badge-paused-text: #fcd34d;
+    --badge-dry: #1e3a8a;
+    --badge-dry-text: #93c5fd;
+    --badge-alpaca: #2e1065;
+    --badge-alpaca-text: #c4b5fd;
+    --badge-poly: #4a044e;
+    --badge-poly-text: #f0abfc;
+  }
+}
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.5; }
+a { color: var(--blue); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* Layout */
+#app { max-width: 1400px; margin: 0 auto; padding: 16px; }
+
+/* Alerts */
+#alerts-wrap { margin-bottom: 12px; }
+.alert { display: flex; align-items: flex-start; gap: 10px; padding: 10px 14px; border-radius: var(--radius); margin-bottom: 6px; font-size: 13px; }
+.alert-critical { background: #fef2f2; border: 1px solid #fca5a5; color: #991b1b; }
+.alert-error    { background: #fef2f2; border: 1px solid #fca5a5; color: #991b1b; }
+.alert-warning  { background: #fffbeb; border: 1px solid #fcd34d; color: #92400e; }
+.alert-info     { background: #eff6ff; border: 1px solid #93c5fd; color: #1d4ed8; }
+@media (prefers-color-scheme: dark) {
+  .alert-critical, .alert-error { background: #450a0a; border-color: #dc2626; color: #fca5a5; }
+  .alert-warning { background: #451a03; border-color: #d97706; color: #fcd34d; }
+  .alert-info    { background: #1e3a8a; border-color: #3b82f6; color: #93c5fd; }
+}
+.alert-dismiss { margin-left: auto; cursor: pointer; opacity: .6; font-size: 16px; line-height: 1; border: none; background: transparent; color: inherit; }
+.alert-dismiss:hover { opacity: 1; }
+
+/* Header / account bar */
+#header { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px 20px; margin-bottom: 12px; display: flex; flex-wrap: wrap; gap: 20px; align-items: center; box-shadow: var(--shadow); }
+.header-stat { display: flex; flex-direction: column; }
+.header-stat .label { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--text2); }
+.header-stat .value { font-size: 22px; font-weight: 700; }
+.header-stat .value.pos { color: var(--green); }
+.header-stat .value.neg { color: var(--red); }
+.header-divider { width: 1px; height: 40px; background: var(--border); }
+#header-right { margin-left: auto; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.badge { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: 9999px; font-size: 12px; font-weight: 600; }
+.badge.live    { background: var(--badge-live); color: var(--badge-live-text); }
+.badge.paused  { background: var(--badge-paused); color: var(--badge-paused-text); }
+.badge.dry_run { background: var(--badge-dry); color: var(--badge-dry-text); }
+.badge.unknown { background: var(--surface2); color: var(--text2); }
+.badge::before { content: "●"; font-size: 8px; }
+.badge-label { font-size: 11px; color: var(--text2); margin-right: 4px; }
+
+/* Last-updated + refresh */
+#toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+#last-updated { font-size: 12px; color: var(--text2); }
+#refresh-btn { font-size: 12px; padding: 4px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); cursor: pointer; }
+#refresh-btn:hover { background: var(--surface2); }
+#token-btn { font-size: 12px; padding: 4px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); cursor: pointer; margin-left: auto; }
+
+/* Two-column grid */
+#grid { display: grid; grid-template-columns: 1fr 340px; gap: 12px; }
+@media (max-width: 900px) { #grid { grid-template-columns: 1fr; } }
+
+/* Card */
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; box-shadow: var(--shadow); }
+.card h2 { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--text2); margin-bottom: 14px; }
+
+/* Risk panel */
+#risk-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.risk-item .rlabel { font-size: 11px; color: var(--text2); margin-bottom: 2px; }
+.risk-item .rvalue { font-size: 18px; font-weight: 700; }
+.progress-bar-wrap { margin-top: 8px; }
+.progress-bar-track { height: 8px; background: var(--surface2); border-radius: 4px; overflow: hidden; }
+.progress-bar-fill { height: 100%; background: var(--green); border-radius: 4px; transition: width .4s; }
+.progress-bar-fill.warn { background: var(--yellow); }
+.progress-bar-fill.danger { background: var(--red); }
+.progress-label { font-size: 11px; color: var(--text2); margin-top: 3px; display: flex; justify-content: space-between; }
+
+/* Positions table */
+#positions-section { grid-column: 1 / -1; }
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { padding: 8px 10px; text-align: left; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--text2); border-bottom: 2px solid var(--border); cursor: pointer; user-select: none; white-space: nowrap; }
+th:hover { color: var(--text); }
+th.sort-asc::after  { content: " ↑"; }
+th.sort-desc::after { content: " ↓"; }
+td { padding: 10px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+tr:hover td { background: var(--surface2); }
+.broker-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+.broker-alpaca    { background: var(--badge-alpaca); color: var(--badge-alpaca-text); }
+.broker-polymarket{ background: var(--badge-poly); color: var(--badge-poly-text); }
+.pnl-pos { color: var(--green); font-weight: 600; }
+.pnl-neg { color: var(--red); font-weight: 600; }
+.close-btn { font-size: 11px; padding: 3px 10px; border: 1px solid var(--border); border-radius: 5px; background: transparent; color: var(--text2); cursor: pointer; }
+.close-btn:hover { border-color: var(--red); color: var(--red); }
+.empty-row td { text-align: center; color: var(--text2); padding: 24px; }
+
+/* Opportunities panel */
+.opp-card { padding: 10px 0; border-bottom: 1px solid var(--border); }
+.opp-card:last-child { border-bottom: none; }
+.opp-header { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.opp-strategy { font-size: 10px; font-weight: 700; text-transform: uppercase; padding: 2px 8px; border-radius: 4px; background: var(--surface2); color: var(--text2); }
+.opp-edge { font-weight: 700; color: var(--green); margin-left: auto; }
+.opp-question { font-size: 12px; color: var(--text2); margin-bottom: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.opp-conf { height: 4px; background: var(--surface2); border-radius: 2px; overflow: hidden; margin-bottom: 6px; }
+.opp-conf-fill { height: 100%; background: var(--blue); border-radius: 2px; }
+.opp-footer { display: flex; gap: 8px; }
+.scan-btn { font-size: 11px; padding: 3px 10px; border: 1px solid var(--blue); border-radius: 5px; background: transparent; color: var(--blue); cursor: pointer; }
+.scan-btn:hover { background: var(--blue); color: #fff; }
+.no-opps { text-align: center; color: var(--text2); padding: 20px 0; font-size: 13px; }
+
+/* Chart */
+#chart-wrap { position: relative; height: 140px; }
+
+/* Token modal */
+#token-modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 100; align-items: center; justify-content: center; }
+#token-modal.open { display: flex; }
+#token-box { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; width: 360px; max-width: 90vw; }
+#token-box h3 { font-size: 15px; margin-bottom: 12px; }
+#token-box p  { font-size: 12px; color: var(--text2); margin-bottom: 12px; }
+#token-input  { width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface2); color: var(--text); font-size: 13px; }
+#token-modal-btns { display: flex; gap: 8px; margin-top: 12px; justify-content: flex-end; }
+.btn-primary { padding: 6px 16px; border: none; border-radius: 6px; background: var(--blue); color: #fff; font-size: 13px; cursor: pointer; }
+.btn-secondary { padding: 6px 16px; border: 1px solid var(--border); border-radius: 6px; background: transparent; color: var(--text); font-size: 13px; cursor: pointer; }
+</style>
+</head>
+<body>
+<div id="app">
+
+  <!-- Alerts -->
+  <div id="alerts-wrap"></div>
+
+  <!-- Account summary bar -->
+  <div id="header">
+    <div class="header-stat">
+      <span class="label">Combined Value</span>
+      <span class="value" id="h-total">—</span>
+    </div>
+    <div class="header-divider"></div>
+    <div class="header-stat">
+      <span class="label">Today's P&L</span>
+      <span class="value" id="h-today-pnl">—</span>
+    </div>
+    <div class="header-divider"></div>
+    <div class="header-stat">
+      <span class="label">Unrealized</span>
+      <span class="value" id="h-unrealized">—</span>
+    </div>
+    <div id="header-right">
+      <span class="badge-label">Alpaca</span>
+      <span class="badge" id="badge-alpaca">—</span>
+      <span class="badge-label">Polymarket</span>
+      <span class="badge" id="badge-poly">—</span>
+    </div>
+  </div>
+
+  <!-- Toolbar -->
+  <div id="toolbar">
+    <span id="last-updated">Never refreshed</span>
+    <button id="refresh-btn" onclick="fetchAndRender(true)">↻ Refresh</button>
+    <button id="token-btn" onclick="openTokenModal()">🔑 Set API Token</button>
+  </div>
+
+  <div id="grid">
+    <!-- Left column: chart + positions -->
+    <div style="display:flex;flex-direction:column;gap:12px;">
+
+      <!-- P&L sparkline -->
+      <div class="card">
+        <h2>Today's Combined P&L</h2>
+        <div id="chart-wrap">
+          <canvas id="pnl-chart"></canvas>
+        </div>
+      </div>
+
+      <!-- Positions table -->
+      <div class="card" id="positions-section">
+        <h2>Open Positions</h2>
+        <div class="table-wrap">
+          <table id="positions-table">
+            <thead>
+              <tr>
+                <th onclick="sortTable('broker')">Broker</th>
+                <th onclick="sortTable('symbol_or_market')">Market / Symbol</th>
+                <th onclick="sortTable('side')">Side</th>
+                <th onclick="sortTable('entry_price')">Entry</th>
+                <th onclick="sortTable('current_price')">Current</th>
+                <th onclick="sortTable('size_usd')">Size ($)</th>
+                <th onclick="sortTable('unrealized_pnl')">Unreal. P&L</th>
+                <th onclick="sortTable('unrealized_pnl_pct')">P&L %</th>
+                <th onclick="sortTable('opened_at')">Opened</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="positions-body">
+              <tr class="empty-row"><td colspan="10">Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Right column: risk + opportunities -->
+    <div style="display:flex;flex-direction:column;gap:12px;">
+
+      <!-- Risk panel -->
+      <div class="card">
+        <h2>Risk</h2>
+        <div id="risk-grid">
+          <div class="risk-item">
+            <div class="rlabel">Poly Positions</div>
+            <div class="rvalue"><span id="r-open">—</span> / <span id="r-max">—</span></div>
+          </div>
+          <div class="risk-item">
+            <div class="rlabel">Buying Power</div>
+            <div class="rvalue" id="r-buying-power">—</div>
+          </div>
+        </div>
+        <div class="progress-bar-wrap" style="margin-top:14px;">
+          <div class="rlabel" style="margin-bottom:4px;">Daily Loss Limit</div>
+          <div class="progress-bar-track">
+            <div class="progress-bar-fill" id="r-loss-bar" style="width:0%"></div>
+          </div>
+          <div class="progress-label">
+            <span id="r-loss-used">$0</span>
+            <span id="r-loss-limit">/ $0</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Opportunities panel -->
+      <div class="card">
+        <h2>Arb Opportunities</h2>
+        <div id="opps-list"><div class="no-opps">No opportunities cached — click scan.</div></div>
+        <div style="margin-top:12px;">
+          <button class="scan-btn" onclick="triggerScan()" style="width:100%;padding:6px;">
+            ▶ Trigger Scan
+          </button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- Token modal -->
+<div id="token-modal">
+  <div id="token-box">
+    <h3>Set Dashboard API Token</h3>
+    <p>Required for pause, resume, scan, and close actions. Stored in your browser only.</p>
+    <input id="token-input" type="password" placeholder="DASHBOARD_API_TOKEN value">
+    <div id="token-modal-btns">
+      <button class="btn-secondary" onclick="closeTokenModal()">Cancel</button>
+      <button class="btn-primary" onclick="saveToken()">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
+let _snap = null;
+let _sortKey = 'unrealized_pnl';
+let _sortDir = -1; // -1 = desc, 1 = asc
+let _pnlChart = null;
+let _dismissed = new Set();
+
+// ---------------------------------------------------------------------------
+// Token helpers
+// ---------------------------------------------------------------------------
+function getToken() { return localStorage.getItem('dashboard_api_token') || ''; }
+function openTokenModal() {
+  document.getElementById('token-input').value = getToken();
+  document.getElementById('token-modal').classList.add('open');
+}
+function closeTokenModal() { document.getElementById('token-modal').classList.remove('open'); }
+function saveToken() {
+  localStorage.setItem('dashboard_api_token', document.getElementById('token-input').value.trim());
+  closeTokenModal();
+}
+
+// ---------------------------------------------------------------------------
+// API helpers
+// ---------------------------------------------------------------------------
+async function apiFetch(path, opts = {}) {
+  const res = await fetch(path, opts);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+function authHeaders() {
+  const tok = getToken();
+  return tok ? { 'Authorization': 'Bearer ' + tok, 'Content-Type': 'application/json' } : {};
+}
+
+// ---------------------------------------------------------------------------
+// Formatting
+// ---------------------------------------------------------------------------
+function fmt$(v) { return '$' + Number(v).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2}); }
+function fmtPct(v) { return (v >= 0 ? '+' : '') + Number(v).toFixed(2) + '%'; }
+function pnlClass(v) { return v >= 0 ? 'pnl-pos' : 'pnl-neg'; }
+function fmtDate(iso) {
+  if (!iso) return '—';
+  try { return new Date(iso).toLocaleString(); } catch { return iso; }
+}
+function fmtShort(iso) {
+  if (!iso) return '—';
+  try {
+    const d = new Date(iso);
+    return d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+  } catch { return iso; }
+}
+function badgeClass(status) {
+  if (['live','active'].includes(status)) return 'live';
+  if (status === 'paused') return 'paused';
+  if (status === 'dry_run') return 'dry_run';
+  return 'unknown';
+}
+function confScore(c) { return c === 'high' ? 1 : c === 'medium' ? 0.5 : 0.15; }
+
+// ---------------------------------------------------------------------------
+// Render alerts
+// ---------------------------------------------------------------------------
+function renderAlerts(alerts) {
+  const wrap = document.getElementById('alerts-wrap');
+  wrap.innerHTML = '';
+  (alerts || []).forEach(a => {
+    if (_dismissed.has(a.message)) return;
+    const div = document.createElement('div');
+    div.className = `alert alert-${a.level || 'info'}`;
+    div.innerHTML = `<strong>${a.source || ''}:</strong>&nbsp;${escHtml(a.message)}
+      <button class="alert-dismiss" title="Dismiss" onclick="dismissAlert('${escAttr(a.message)}',this.parentElement)">✕</button>`;
+    wrap.appendChild(div);
+  });
+}
+function dismissAlert(msg, el) { _dismissed.add(msg); el.remove(); }
+
+// ---------------------------------------------------------------------------
+// Render header
+// ---------------------------------------------------------------------------
+function renderHeader(snap) {
+  const acc = snap.account || {};
+  const pnl = snap.pnl || {};
+  const risk = snap.risk || {};
+
+  const total = acc.combined_total_value || 0;
+  const today = pnl.combined_today || 0;
+  const unreal = pnl.combined_unrealized || 0;
+
+  setText('h-total', fmt$(total));
+  setValClass('h-today-pnl', fmt$(today) + ' (' + fmtPct(total ? today/total*100 : 0) + ')', pnlClass(today));
+  setValClass('h-unrealized', fmt$(unreal), pnlClass(unreal));
+
+  setBadge('badge-alpaca', risk.alpaca_bot_status || 'unknown');
+  setBadge('badge-poly',   risk.poly_bot_status   || 'unknown');
+}
+
+function setText(id, v) { const el = document.getElementById(id); if (el) el.textContent = v; }
+function setValClass(id, v, cls) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = v;
+  el.className = 'value ' + cls;
+}
+function setBadge(id, status) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = status;
+  el.className = 'badge ' + badgeClass(status);
+}
+
+// ---------------------------------------------------------------------------
+// Render risk panel
+// ---------------------------------------------------------------------------
+function renderRisk(snap) {
+  const risk = snap.risk || {};
+  setText('r-open', risk.poly_open_positions ?? '—');
+  setText('r-max',  risk.poly_max_positions  ?? '—');
+  setText('r-buying-power', fmt$(risk.alpaca_buying_power || 0));
+
+  const used  = risk.poly_daily_loss_used  || 0;
+  const limit = risk.poly_daily_loss_limit || 1;
+  const pct   = Math.min(risk.poly_daily_loss_pct || 0, 100);
+
+  setText('r-loss-used',  fmt$(used));
+  setText('r-loss-limit', '/ ' + fmt$(limit));
+
+  const bar = document.getElementById('r-loss-bar');
+  bar.style.width = pct + '%';
+  bar.className = 'progress-bar-fill' + (pct >= 80 ? ' danger' : pct >= 50 ? ' warn' : '');
+}
+
+// ---------------------------------------------------------------------------
+// Render positions table
+// ---------------------------------------------------------------------------
+function renderPositions(snap) {
+  const positions = [
+    ...(snap.alpaca_positions || []),
+    ...(snap.poly_positions   || []),
+  ];
+
+  // Sort
+  positions.sort((a, b) => {
+    let av = a[_sortKey] ?? '', bv = b[_sortKey] ?? '';
+    if (typeof av === 'string') return av.localeCompare(bv) * _sortDir;
+    return (av - bv) * _sortDir;
+  });
+
+  // Update sort indicators
+  document.querySelectorAll('#positions-table th').forEach(th => {
+    th.classList.remove('sort-asc', 'sort-desc');
+  });
+
+  const tbody = document.getElementById('positions-body');
+  if (!positions.length) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="10">No open positions</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = positions.map(p => {
+    const brokerBadge = `<span class="broker-badge broker-${p.broker}">${p.broker}</span>`;
+    const market = p.broker === 'polymarket'
+      ? `<a href="${escAttr(p.broker_url)}" target="_blank" title="${escAttr(p.symbol_or_market)}">${escHtml(p.symbol_or_market.slice(0,50))}…</a>`
+      : escHtml(p.symbol_or_market);
+    const pnl = p.unrealized_pnl || 0;
+    const pnlPct = p.unrealized_pnl_pct || 0;
+    const closeBtn = p.broker === 'polymarket'
+      ? `<button class="close-btn" onclick="closePosition('${escAttr(p.id)}')">Close</button>`
+      : '—';
+    return `<tr>
+      <td>${brokerBadge}</td>
+      <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${market}</td>
+      <td>${escHtml(p.side)}</td>
+      <td>${fmt$(p.entry_price || 0)}</td>
+      <td>${fmt$(p.current_price || 0)}</td>
+      <td>${fmt$(p.size_usd || 0)}</td>
+      <td class="${pnlClass(pnl)}">${fmt$(pnl)}</td>
+      <td class="${pnlClass(pnlPct)}">${fmtPct(pnlPct)}</td>
+      <td style="font-size:11px;color:var(--text2);">${fmtDate(p.opened_at)}</td>
+      <td>${closeBtn}</td>
+    </tr>`;
+  }).join('');
+}
+
+function sortTable(key) {
+  if (_sortKey === key) _sortDir *= -1;
+  else { _sortKey = key; _sortDir = -1; }
+  if (_snap) renderPositions(_snap);
+}
+
+// ---------------------------------------------------------------------------
+// Render opportunities
+// ---------------------------------------------------------------------------
+function renderOpps(snap) {
+  const opps = snap.poly_opportunities || [];
+  const container = document.getElementById('opps-list');
+  if (!opps.length) {
+    container.innerHTML = '<div class="no-opps">No opportunities cached — click scan.</div>';
+    return;
+  }
+  container.innerHTML = opps.map(o => {
+    const edge = Number(o.edge_pct || 0).toFixed(2);
+    const conf = confScore(o.confidence);
+    return `<div class="opp-card">
+      <div class="opp-header">
+        <span class="opp-strategy">${escHtml(o.strategy)}</span>
+        <span class="opp-edge">+${edge}%</span>
+      </div>
+      <div class="opp-question">${escHtml((o.market_question||'').slice(0,90))}</div>
+      <div class="opp-conf" title="${escAttr(o.confidence)} confidence">
+        <div class="opp-conf-fill" style="width:${Math.round(conf*100)}%"></div>
+      </div>
+      <div class="opp-footer">
+        <span style="font-size:11px;color:var(--text2);">${escHtml(o.confidence)} · ${escHtml(o.action)}</span>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ---------------------------------------------------------------------------
+// Render P&L chart
+// ---------------------------------------------------------------------------
+function renderChart(snap) {
+  const series = snap.pnl_series || [];
+  const labels = series.map(p => fmtShort(p.ts));
+  const data   = series.map(p => p.combined_daily_pnl || 0);
+
+  const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  const gridColor  = isDark ? 'rgba(255,255,255,.06)' : 'rgba(0,0,0,.06)';
+  const textColor  = isDark ? '#8b91a8' : '#6b7280';
+  const lineColor  = data[data.length - 1] >= 0 ? '#16a34a' : '#dc2626';
+
+  const ctx = document.getElementById('pnl-chart').getContext('2d');
+
+  if (_pnlChart) {
+    _pnlChart.data.labels = labels;
+    _pnlChart.data.datasets[0].data = data;
+    _pnlChart.data.datasets[0].borderColor = lineColor;
+    _pnlChart.data.datasets[0].backgroundColor = lineColor + '22';
+    _pnlChart.update('none');
+    return;
+  }
+
+  _pnlChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Combined P&L (USDC)',
+        data,
+        borderColor: lineColor,
+        backgroundColor: lineColor + '22',
+        borderWidth: 2,
+        pointRadius: data.length > 20 ? 0 : 3,
+        fill: true,
+        tension: 0.3,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: { mode: 'index', intersect: false,
+          callbacks: { label: ctx => ' ' + fmt$(ctx.parsed.y) } }
+      },
+      scales: {
+        x: { grid: { color: gridColor }, ticks: { color: textColor, maxTicksLimit: 8 } },
+        y: { grid: { color: gridColor }, ticks: { color: textColor, callback: v => fmt$(v) } },
+      }
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Main fetch + render
+// ---------------------------------------------------------------------------
+async function fetchAndRender(force) {
+  const url = force ? '/api/snapshot?force=1' : '/api/snapshot';
+  try {
+    const snap = await apiFetch(url);
+    _snap = snap;
+    renderAlerts(snap.alerts);
+    renderHeader(snap);
+    renderRisk(snap);
+    renderPositions(snap);
+    renderOpps(snap);
+    renderChart(snap);
+    document.getElementById('last-updated').textContent =
+      'Last updated: ' + new Date().toLocaleTimeString();
+  } catch (e) {
+    document.getElementById('last-updated').textContent = 'Error: ' + e.message;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Actions
+// ---------------------------------------------------------------------------
+async function closePosition(id) {
+  if (!confirm('Close position ' + id + '?')) return;
+  const tok = getToken();
+  if (!tok) { openTokenModal(); return; }
+  try {
+    const res = await apiFetch('/api/poly/close/' + encodeURIComponent(id), {
+      method: 'POST',
+      headers: authHeaders(),
+    });
+    alert(res.message);
+    await fetchAndRender(true);
+  } catch (e) {
+    alert('Close failed: ' + e.message);
+  }
+}
+
+async function triggerScan() {
+  const tok = getToken();
+  if (!tok) { openTokenModal(); return; }
+  try {
+    const res = await apiFetch('/api/poly/scan', {
+      method: 'POST',
+      headers: authHeaders(),
+    });
+    await fetchAndRender(true);
+    alert(res.message);
+  } catch (e) {
+    alert('Scan failed: ' + e.message);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+function escHtml(s) {
+  return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function escAttr(s) { return escHtml(s); }
+
+// ---------------------------------------------------------------------------
+// Close modal on outside click
+// ---------------------------------------------------------------------------
+document.getElementById('token-modal').addEventListener('click', e => {
+  if (e.target === document.getElementById('token-modal')) closeTokenModal();
+});
+
+// ---------------------------------------------------------------------------
+// Boot
+// ---------------------------------------------------------------------------
+fetchAndRender(false);
+setInterval(() => fetchAndRender(false), 30_000);
+</script>
+</body>
+</html>

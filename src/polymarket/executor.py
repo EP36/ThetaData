@@ -190,6 +190,7 @@ def _execute_orderbook_spread(
         )
     except Exception as exc:
         # YES filled but NO failed — position is now UNHEDGED
+        yes_contracts = yes_usdc / yes_fill if yes_fill > 0 else 0.0
         unhedged = new_position(
             market_condition_id=opportunity.condition_id,
             market_question=opportunity.market_question,
@@ -198,6 +199,8 @@ def _execute_orderbook_spread(
             entry_price=yes_fill,
             size_usdc=yes_usdc,
             status="unhedged",
+            yes_token_id=opportunity.yes_token_id,
+            contracts_held=yes_contracts,
         )
         ledger.add(unhedged)
         LOGGER.critical(
@@ -228,6 +231,9 @@ def _execute_orderbook_spread(
         entry_price=avg_fill,
         size_usdc=total_usdc,
         status="open",
+        yes_token_id=opportunity.yes_token_id,
+        no_token_id=opportunity.no_token_id,
+        contracts_held=n_shares,
     )
     ledger.add(position)
 
