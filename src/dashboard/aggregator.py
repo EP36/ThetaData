@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from src.polymarket.alpaca_signals import get_cached_signals
 from src.polymarket.config import PolymarketConfig
 from src.polymarket.positions import (
     ACTIVE_STATUSES,
@@ -218,6 +219,37 @@ def _read_pnl_series(poly_log_dir: str) -> list[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
+# BTC signal summary for snapshot
+# ---------------------------------------------------------------------------
+
+def _btc_signals_dict() -> dict[str, Any]:
+    """Return a JSON-serializable dict of cached BTC signals."""
+    s = get_cached_signals()
+    if not s.data_available:
+        return {"data_available": False}
+    overall_bias = (
+        "bullish" if s.change_24h_pct > 2 and s.rsi_14 < 70
+        else "bearish" if s.change_24h_pct < -2 and s.rsi_14 > 30
+        else "neutral"
+    )
+    signal_strength = min(100, int(abs(s.change_24h_pct) * 10 + (s.volume_ratio - 1) * 20))
+    return {
+        "data_available": True,
+        "price_usd": s.price_usd,
+        "change_24h_pct": s.change_24h_pct,
+        "rsi_14": s.rsi_14,
+        "macd_crossover": s.macd_crossover,
+        "consecutive_bars": s.consecutive_bars,
+        "streak_direction": s.streak_direction,
+        "volume_ratio": s.volume_ratio,
+        "bb_width_ratio": s.bb_width_ratio,
+        "atr_ratio": s.atr_ratio,
+        "overall_bias": overall_bias,
+        "signal_strength": signal_strength,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Aggregator
 # ---------------------------------------------------------------------------
 
@@ -254,6 +286,10 @@ class DashboardAggregator:
                 "notes": o.notes,
                 "condition_id": o.condition_id,
                 "volume_24h": o.volume_24h,
+                "direction": o.direction,
+                "confidence_score": o.confidence_score,
+                "rank_score": o.rank_score,
+                "signal_notes": list(o.signal_notes),
             }
             for o in opps
         ]
@@ -408,6 +444,7 @@ class DashboardAggregator:
             "poly_opportunities": self._last_opps[:5],
             "pnl_series": pnl_series,
             "alerts": alerts,
+            "btc_signals": _btc_signals_dict(),
         }
 
         self._cache = snapshot

@@ -45,6 +45,11 @@ class Opportunity:
     entry_price_yes: float = 0.0 # YES best_ask at scan time
     entry_price_no: float = 0.0  # NO best_ask at scan time
     volume_24h: float = 0.0      # 24-hour USDC volume at scan time
+    # --- Phase 5: signal engine fields (optional, defaults allow Phases 1-4 to omit) ---
+    direction: str = ""                # "bullish" | "bearish" | "neutral" (set by signal engine)
+    signal_notes: tuple[str, ...] = () # per-rule annotations from score_opportunity()
+    confidence_score: float = 0.0      # signal-adjusted float confidence; 0.0 = unscored
+    rank_score: float = 0.0            # confidence_score * edge_pct; used for post-signal ranking
 
 
 # ---------------------------------------------------------------------------

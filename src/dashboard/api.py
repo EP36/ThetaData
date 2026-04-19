@@ -35,6 +35,13 @@ _poly_config = None    # PolymarketConfig | None
 _poly_client = None    # ClobClient | None
 _poly_ledger = None    # PositionsLedger | None
 
+# Tuner singletons
+_tuner_params_path: str = os.getenv("POLY_SIGNAL_PARAMS_PATH", "polymarket/signal_params.json")
+_tuner_proposal_path: str = "polymarket/signal_params_proposed.json"
+_tuner_history_dir: str = "polymarket/signal_params_history"
+_tuner_last_run: str = ""
+_tuner_last_trade_count: int = 0
+
 
 def register(aggregator: Any, poly_config: Any, poly_client: Any, poly_ledger: Any) -> None:
     """Wire live infrastructure into the router (called once at app startup)."""
@@ -233,3 +240,108 @@ def post_poly_close(
     except Exception as exc:
         LOGGER.error("api_poly_close_error id=%s error=%s", position_id, exc)
         raise HTTPException(status_code=500, detail=f"Close error: {exc}") from exc
+
+
+# ---------------------------------------------------------------------------
+# Tuner endpoints
+# ---------------------------------------------------------------------------
+
+@router.get("/api/poly/tuner/status")
+def get_tuner_status() -> JSONResponse:
+    """Return current tuner status and active signal params."""
+    from src.polymarket.tuner import read_proposal
+    from src.polymarket.signals import get_signal_params
+    proposal = read_proposal(_tuner_proposal_path)
+    return JSONResponse({
+        "last_run_at": _tuner_last_run,
+        "last_trade_count": _tuner_last_trade_count,
+        "proposal_pending": proposal is not None,
+        "proposal_change_count": (
+            len(proposal.get("proposed_changes", [])) if proposal else 0
+        ),
+        "current_params": get_signal_params(),
+    })
+
+
+@router.get("/api/poly/tuner/proposal")
+def get_tuner_proposal() -> JSONResponse:
+    """Return the pending tuning proposal, or 404 if none exists."""
+    from src.polymarket.tuner import read_proposal
+    proposal = read_proposal(_tuner_proposal_path)
+    if proposal is None:
+        raise HTTPException(status_code=404, detail="No pending proposal")
+    return JSONResponse(proposal)
+
+
+@router.post("/api/poly/tuner/run")
+def post_tuner_run(
+    authorization: str | None = Header(default=None, alias="Authorization"),
+) -> Any:
+    """Trigger a tuning cycle (requires auth). Writes proposal if changes are found."""
+    _require_dashboard_token(authorization)
+    if _poly_config is None:
+        raise _unavailable()
+
+    global _tuner_last_run, _tuner_last_trade_count
+
+    from src.polymarket.feedback import load_feedback_records
+    from src.polymarket.tuner import check_minimum_data, propose_tuning, write_proposal
+
+    records = load_feedback_records(
+        days=30,
+        positions_path=_poly_config.positions_path,
+        log_dir=_poly_config.poly_log_dir,
+    )
+    _tuner_last_trade_count = len(records)
+    _tuner_last_run = datetime.now(tz=timezone.utc).isoformat()
+
+    ok, reason = check_minimum_data(records)
+    if not ok:
+        return _ok_response(
+            f"Tuning skipped \u2014 {reason}", skipped=True, reason=reason
+        )
+
+    result = propose_tuning(records, days=30, params_path=_tuner_params_path)
+    if not result.proposed_changes:
+        return _ok_response(
+            "Tuning complete \u2014 no adjustments needed",
+            changes=0,
+            trade_count=result.trade_count,
+        )
+
+    write_proposal(result, _tuner_proposal_path)
+    return _ok_response(
+        f"Tuning proposal written \u2014 {len(result.proposed_changes)} parameter change(s)",
+        changes=len(result.proposed_changes),
+        trade_count=result.trade_count,
+    )
+
+
+@router.post("/api/poly/tuner/apply")
+def post_tuner_apply(
+    authorization: str | None = Header(default=None, alias="Authorization"),
+) -> Any:
+    """Apply the pending tuning proposal (requires auth)."""
+    _require_dashboard_token(authorization)
+    from src.polymarket.tuner import read_proposal, apply_proposal
+    proposal = read_proposal(_tuner_proposal_path)
+    if proposal is None:
+        raise HTTPException(status_code=404, detail="No pending proposal to apply")
+
+    change_log = apply_proposal(
+        _tuner_proposal_path, _tuner_params_path, _tuner_history_dir
+    )
+    return _ok_response(
+        f"Applied {len(change_log)} parameter change(s)", changes=change_log
+    )
+
+
+@router.post("/api/poly/tuner/reject")
+def post_tuner_reject(
+    authorization: str | None = Header(default=None, alias="Authorization"),
+) -> Any:
+    """Reject and discard the pending tuning proposal (requires auth)."""
+    _require_dashboard_token(authorization)
+    from src.polymarket.tuner import reject_proposal
+    reject_proposal(_tuner_proposal_path)
+    return _ok_response("Tuning proposal rejected \u2014 keeping current params")

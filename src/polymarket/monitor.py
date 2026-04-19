@@ -426,6 +426,30 @@ def _monitor_one(
 
 
 # ---------------------------------------------------------------------------
+# BTC signals snapshot helper
+# ---------------------------------------------------------------------------
+
+def _btc_signals_snapshot() -> dict:
+    """Return a plain dict of cached BTC signals for the daily log."""
+    from src.polymarket.alpaca_signals import get_cached_signals
+    s = get_cached_signals()
+    if not s.data_available:
+        return {"data_available": False}
+    return {
+        "data_available": True,
+        "price_usd": s.price_usd,
+        "change_24h_pct": s.change_24h_pct,
+        "rsi_14": s.rsi_14,
+        "macd_crossover": s.macd_crossover,
+        "consecutive_bars": s.consecutive_bars,
+        "streak_direction": s.streak_direction,
+        "volume_ratio": s.volume_ratio,
+        "bb_width_ratio": s.bb_width_ratio,
+        "atr_ratio": s.atr_ratio,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Daily P&L summary
 # ---------------------------------------------------------------------------
 
@@ -474,6 +498,7 @@ def emit_daily_summary(
         "combined_daily_pnl": round(combined, 4),
         "daily_loss_limit": config.daily_loss_limit,
         "within_20pct_of_limit": within_warning,
+        "btc_signals": _btc_signals_snapshot(),
     }
 
     log_path = Path(config.poly_log_dir) / f"poly_{_today_date()}.log"

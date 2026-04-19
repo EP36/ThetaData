@@ -163,6 +163,55 @@ tr:hover td { background: var(--surface2); }
 #token-modal-btns { display: flex; gap: 8px; margin-top: 12px; justify-content: flex-end; }
 .btn-primary { padding: 6px 16px; border: none; border-radius: 6px; background: var(--blue); color: #fff; font-size: 13px; cursor: pointer; }
 .btn-secondary { padding: 6px 16px; border: 1px solid var(--border); border-radius: 6px; background: transparent; color: var(--text); font-size: 13px; cursor: pointer; }
+
+/* Tuner panel */
+#tuner-panel { margin-top: 12px; }
+#tuner-panel .card h2 { margin-bottom: 10px; }
+.tuner-status-row { display: flex; gap: 20px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+.tuner-stat { display: flex; flex-direction: column; }
+.tuner-stat .tl { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--text2); margin-bottom: 2px; }
+.tuner-stat .tv { font-size: 15px; font-weight: 700; }
+.tuner-badge { display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 9999px; font-size: 12px; font-weight: 600; }
+.tuner-badge.pending { background: #fef3c7; color: #92400e; }
+.tuner-badge.none    { background: var(--surface2); color: var(--text2); }
+@media (prefers-color-scheme: dark) {
+  .tuner-badge.pending { background: #451a03; color: #fcd34d; }
+}
+.tuner-params-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 14px; }
+.tuner-params-table th { padding: 6px 8px; text-align: left; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--text2); border-bottom: 2px solid var(--border); }
+.tuner-params-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); }
+.tuner-params-table tr:hover td { background: var(--surface2); }
+.tuner-change-up   { color: var(--green); font-weight: 600; }
+.tuner-change-down { color: var(--red); font-weight: 600; }
+.tuner-change-none { color: var(--text2); }
+.tuner-actions { display: flex; gap: 8px; margin-bottom: 14px; }
+.tuner-btn { padding: 6px 16px; border-radius: 6px; font-size: 13px; cursor: pointer; border: 1px solid var(--border); background: var(--surface); color: var(--text); }
+.tuner-btn:hover:not(:disabled) { background: var(--surface2); }
+.tuner-btn:disabled { opacity: .4; cursor: not-allowed; }
+.tuner-btn.primary { background: var(--blue); border-color: var(--blue); color: #fff; }
+.tuner-btn.primary:hover:not(:disabled) { opacity: .85; }
+.tuner-btn.danger  { border-color: var(--red); color: var(--red); }
+.tuner-btn.danger:hover:not(:disabled) { background: var(--red); color: #fff; }
+#tuner-chart-wrap { position: relative; height: 160px; margin-top: 14px; }
+
+/* BTC signal bar */
+#signal-bar { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 16px; margin-bottom: 12px; display: flex; align-items: center; gap: 20px; flex-wrap: wrap; box-shadow: var(--shadow); }
+.sig-item { display: flex; flex-direction: column; align-items: center; gap: 1px; }
+.sig-label { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--text2); }
+.sig-value { font-size: 14px; font-weight: 700; }
+.sig-divider { width: 1px; height: 32px; background: var(--border); }
+.sig-bias { padding: 3px 10px; border-radius: 9999px; font-size: 12px; font-weight: 700; }
+.sig-bias.bullish { background: #dcfce7; color: #15803d; }
+.sig-bias.bearish { background: #fee2e2; color: #991b1b; }
+.sig-bias.neutral  { background: var(--surface2); color: var(--text2); }
+@media (prefers-color-scheme: dark) {
+  .sig-bias.bullish { background: #14532d; color: #86efac; }
+  .sig-bias.bearish { background: #450a0a; color: #fca5a5; }
+}
+.sig-strength-wrap { display: flex; align-items: center; gap: 8px; }
+.sig-strength-track { width: 60px; height: 6px; background: var(--surface2); border-radius: 3px; overflow: hidden; }
+.sig-strength-fill { height: 100%; border-radius: 3px; background: var(--blue); }
+#signal-bar.unavailable { opacity: .5; }
 </style>
 </head>
 <body>
@@ -192,6 +241,30 @@ tr:hover td { background: var(--surface2); }
       <span class="badge" id="badge-alpaca">—</span>
       <span class="badge-label">Polymarket</span>
       <span class="badge" id="badge-poly">—</span>
+    </div>
+  </div>
+
+  <!-- BTC signal bar -->
+  <div id="signal-bar" class="unavailable">
+    <div class="sig-item"><span class="sig-label">BTC Price</span><span class="sig-value" id="sig-price">—</span></div>
+    <div class="sig-divider"></div>
+    <div class="sig-item"><span class="sig-label">24h Change</span><span class="sig-value" id="sig-change">—</span></div>
+    <div class="sig-divider"></div>
+    <div class="sig-item"><span class="sig-label">RSI(14)</span><span class="sig-value" id="sig-rsi">—</span></div>
+    <div class="sig-divider"></div>
+    <div class="sig-item"><span class="sig-label">Vol Ratio</span><span class="sig-value" id="sig-vol">—</span></div>
+    <div class="sig-divider"></div>
+    <div class="sig-item">
+      <span class="sig-label">Bias</span>
+      <span class="sig-bias neutral" id="sig-bias">—</span>
+    </div>
+    <div class="sig-divider"></div>
+    <div class="sig-item">
+      <span class="sig-label">Signal Strength</span>
+      <div class="sig-strength-wrap">
+        <div class="sig-strength-track"><div class="sig-strength-fill" id="sig-strength-fill" style="width:0%"></div></div>
+        <span class="sig-value" id="sig-strength">—</span>
+      </div>
     </div>
   </div>
 
@@ -283,6 +356,69 @@ tr:hover td { background: var(--surface2); }
 
     </div>
   </div>
+
+  <!-- Signal Tuner panel -->
+  <div id="tuner-panel">
+    <div class="card">
+      <h2>Signal Parameter Tuner</h2>
+
+      <!-- Status row -->
+      <div class="tuner-status-row" id="tuner-status-row">
+        <div class="tuner-stat">
+          <span class="tl">Last Run</span>
+          <span class="tv" id="tuner-last-run">—</span>
+        </div>
+        <div class="tuner-stat">
+          <span class="tl">Trades Analyzed</span>
+          <span class="tv" id="tuner-trade-count">—</span>
+        </div>
+        <div class="tuner-stat">
+          <span class="tl">Win Rate</span>
+          <span class="tv" id="tuner-win-rate">—</span>
+        </div>
+        <div class="tuner-stat">
+          <span class="tl">Avg P&amp;L</span>
+          <span class="tv" id="tuner-avg-pnl">—</span>
+        </div>
+        <div class="tuner-stat" style="margin-left:auto;">
+          <span class="tl">Proposal</span>
+          <span class="tuner-badge none" id="tuner-proposal-badge">None</span>
+        </div>
+      </div>
+
+      <!-- Action buttons -->
+      <div class="tuner-actions">
+        <button class="tuner-btn primary" onclick="runTuner()">&#9654; Run Tuner</button>
+        <button class="tuner-btn" id="tuner-apply-btn" onclick="applyTuner()" disabled>&#10003; Apply Proposal</button>
+        <button class="tuner-btn danger" id="tuner-reject-btn" onclick="rejectTuner()" disabled>&#10005; Reject</button>
+      </div>
+
+      <!-- Parameter table -->
+      <div id="tuner-params-wrap">
+        <table class="tuner-params-table">
+          <thead>
+            <tr>
+              <th>Parameter</th>
+              <th>Current</th>
+              <th>Proposed</th>
+              <th>Change</th>
+              <th>Effectiveness</th>
+              <th>Trades</th>
+            </tr>
+          </thead>
+          <tbody id="tuner-params-body">
+            <tr><td colspan="6" style="text-align:center;color:var(--text2);padding:16px;">Run tuning to see parameter analysis.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Strategy win-rate bar chart -->
+      <div id="tuner-chart-wrap" style="display:none;">
+        <canvas id="tuner-chart"></canvas>
+      </div>
+    </div>
+  </div>
+
 </div>
 
 <!-- Token modal -->
@@ -495,6 +631,38 @@ function sortTable(key) {
 }
 
 // ---------------------------------------------------------------------------
+// Render BTC signals bar
+// ---------------------------------------------------------------------------
+function renderSignals(snap) {
+  const s = snap.btc_signals || {};
+  const bar = document.getElementById('signal-bar');
+  if (!s.data_available) {
+    bar.classList.add('unavailable');
+    return;
+  }
+  bar.classList.remove('unavailable');
+
+  setText('sig-price', '$' + Number(s.price_usd || 0).toLocaleString('en-US', {maximumFractionDigits:0}));
+
+  const chg = Number(s.change_24h_pct || 0);
+  const chgEl = document.getElementById('sig-change');
+  chgEl.textContent = (chg >= 0 ? '+' : '') + chg.toFixed(2) + '%';
+  chgEl.style.color = chg >= 0 ? 'var(--green)' : 'var(--red)';
+
+  setText('sig-rsi', Number(s.rsi_14 || 50).toFixed(1));
+  setText('sig-vol', Number(s.volume_ratio || 1).toFixed(2) + 'x');
+
+  const bias = s.overall_bias || 'neutral';
+  const biasEl = document.getElementById('sig-bias');
+  biasEl.textContent = bias;
+  biasEl.className = 'sig-bias ' + bias;
+
+  const strength = Math.min(100, s.signal_strength || 0);
+  document.getElementById('sig-strength-fill').style.width = strength + '%';
+  setText('sig-strength', strength + '%');
+}
+
+// ---------------------------------------------------------------------------
 // Render opportunities
 // ---------------------------------------------------------------------------
 function renderOpps(snap) {
@@ -506,18 +674,25 @@ function renderOpps(snap) {
   }
   container.innerHTML = opps.map(o => {
     const edge = Number(o.edge_pct || 0).toFixed(2);
-    const conf = confScore(o.confidence);
+    const confPct = o.confidence_score > 0
+      ? Math.round(o.confidence_score * 100)
+      : Math.round(confScore(o.confidence) * 100);
+    const dirLabel = o.direction ? `<span style="font-size:10px;color:var(--text2);">${escHtml(o.direction)}</span>` : '';
+    const rankLabel = o.rank_score > 0 ? `<span style="font-size:10px;color:var(--text2);">rank=${Number(o.rank_score).toFixed(4)}</span>` : '';
+    const notes = (o.signal_notes || []).slice(0,2).join(' · ');
     return `<div class="opp-card">
       <div class="opp-header">
         <span class="opp-strategy">${escHtml(o.strategy)}</span>
+        ${dirLabel}
         <span class="opp-edge">+${edge}%</span>
+        ${rankLabel}
       </div>
       <div class="opp-question">${escHtml((o.market_question||'').slice(0,90))}</div>
-      <div class="opp-conf" title="${escAttr(o.confidence)} confidence">
-        <div class="opp-conf-fill" style="width:${Math.round(conf*100)}%"></div>
+      <div class="opp-conf" title="${confPct}% signal confidence">
+        <div class="opp-conf-fill" style="width:${confPct}%"></div>
       </div>
       <div class="opp-footer">
-        <span style="font-size:11px;color:var(--text2);">${escHtml(o.confidence)} · ${escHtml(o.action)}</span>
+        <span style="font-size:11px;color:var(--text2);">${escHtml(o.confidence)}${notes ? ' · ' + escHtml(notes) : ''}</span>
       </div>
     </div>`;
   }).join('');
@@ -588,10 +763,12 @@ async function fetchAndRender(force) {
     _snap = snap;
     renderAlerts(snap.alerts);
     renderHeader(snap);
+    renderSignals(snap);
     renderRisk(snap);
     renderPositions(snap);
     renderOpps(snap);
     renderChart(snap);
+    renderTuner();
     document.getElementById('last-updated').textContent =
       'Last updated: ' + new Date().toLocaleTimeString();
   } catch (e) {
@@ -630,6 +807,243 @@ async function triggerScan() {
     alert(res.message);
   } catch (e) {
     alert('Scan failed: ' + e.message);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Tuner
+// ---------------------------------------------------------------------------
+let _tunerChart = null;
+let _tunerProposal = null;
+
+async function fetchTunerStatus() {
+  try {
+    const status = await apiFetch('/api/poly/tuner/status');
+    _renderTunerStatus(status);
+  } catch (e) {
+    // Silently ignore — tuner may not be configured
+  }
+}
+
+async function fetchTunerProposal() {
+  try {
+    _tunerProposal = await apiFetch('/api/poly/tuner/proposal');
+    _renderTunerProposal(_tunerProposal);
+  } catch (e) {
+    if (e.message && e.message.includes('404')) {
+      _tunerProposal = null;
+      _renderTunerProposal(null);
+    }
+  }
+}
+
+function _renderTunerStatus(status) {
+  const lastRun = status.last_run_at
+    ? new Date(status.last_run_at).toLocaleString()
+    : '—';
+  setText('tuner-last-run', lastRun);
+  setText('tuner-trade-count', status.last_trade_count != null ? String(status.last_trade_count) : '—');
+
+  const badge = document.getElementById('tuner-proposal-badge');
+  if (status.proposal_pending) {
+    badge.textContent = status.proposal_change_count + ' change(s) pending';
+    badge.className = 'tuner-badge pending';
+    document.getElementById('tuner-apply-btn').disabled = false;
+    document.getElementById('tuner-reject-btn').disabled = false;
+  } else {
+    badge.textContent = 'None';
+    badge.className = 'tuner-badge none';
+    document.getElementById('tuner-apply-btn').disabled = true;
+    document.getElementById('tuner-reject-btn').disabled = true;
+  }
+
+  // Fill param table from current_params if no proposal loaded yet
+  if (!_tunerProposal && status.current_params) {
+    _renderParamTableCurrentOnly(status.current_params);
+  }
+}
+
+function _renderParamTableCurrentOnly(params) {
+  const tbody = document.getElementById('tuner-params-body');
+  if (!params || Object.keys(params).length === 0) return;
+  tbody.innerHTML = Object.entries(params).map(([k, v]) =>
+    `<tr>
+      <td>${escHtml(k)}</td>
+      <td>${Number(v).toFixed(4)}</td>
+      <td class="tuner-change-none">—</td>
+      <td class="tuner-change-none">—</td>
+      <td class="tuner-change-none">—</td>
+      <td class="tuner-change-none">—</td>
+    </tr>`
+  ).join('');
+}
+
+function _renderTunerProposal(proposal) {
+  if (!proposal) {
+    // Reset win rate / avg pnl
+    setText('tuner-win-rate', '—');
+    setText('tuner-avg-pnl', '—');
+    return;
+  }
+
+  setText('tuner-win-rate', proposal.overall_win_rate != null
+    ? (proposal.overall_win_rate * 100).toFixed(1) + '%' : '—');
+  setText('tuner-avg-pnl', proposal.avg_pnl_pct != null
+    ? fmtPct(proposal.avg_pnl_pct) : '—');
+  setText('tuner-trade-count', proposal.trade_count != null ? String(proposal.trade_count) : '—');
+
+  // Build param table from proposed_params + proposed_changes
+  const current_params = {};
+  const change_map = {};
+  const eff_map = {};
+  const count_map = {};
+
+  (proposal.proposed_changes || []).forEach(c => {
+    current_params[c.param] = c.current_value;
+    change_map[c.param] = c.proposed_value;
+    eff_map[c.param] = c.effectiveness;
+    count_map[c.param] = c.applied_count;
+  });
+
+  // Also include unchanged params from proposed_params
+  const allParams = proposal.proposed_params || {};
+  const tbody = document.getElementById('tuner-params-body');
+  tbody.innerHTML = Object.entries(allParams).map(([k, v]) => {
+    const hasProp = k in change_map;
+    const cur = hasProp ? current_params[k] : v;
+    const prop = hasProp ? change_map[k] : null;
+    const eff = hasProp ? eff_map[k] : null;
+    const cnt = hasProp ? count_map[k] : null;
+    const delta = prop != null ? prop - cur : null;
+    const deltaClass = delta == null ? 'tuner-change-none'
+      : delta > 0 ? 'tuner-change-up' : 'tuner-change-down';
+    const deltaStr = delta == null ? '—'
+      : (delta > 0 ? '+' : '') + delta.toFixed(4);
+    return `<tr>
+      <td>${escHtml(k)}</td>
+      <td>${Number(cur).toFixed(4)}</td>
+      <td class="${hasProp ? (delta > 0 ? 'tuner-change-up' : 'tuner-change-down') : 'tuner-change-none'}">${prop != null ? Number(prop).toFixed(4) : '—'}</td>
+      <td class="${deltaClass}">${deltaStr}</td>
+      <td class="${deltaClass}">${eff != null ? (eff >= 0 ? '+' : '') + (eff * 100).toFixed(1) + '%' : '—'}</td>
+      <td style="color:var(--text2);">${cnt != null ? cnt : '—'}</td>
+    </tr>`;
+  }).join('');
+
+  // Strategy breakdown bar chart
+  const breakdown = proposal.strategy_breakdown || {};
+  const strategies = Object.keys(breakdown);
+  if (strategies.length > 0) {
+    const chartWrap = document.getElementById('tuner-chart-wrap');
+    chartWrap.style.display = '';
+    _renderTunerChart(
+      strategies,
+      strategies.map(s => +(breakdown[s].win_rate * 100).toFixed(1)),
+      strategies.map(s => breakdown[s].count),
+    );
+  }
+}
+
+function _renderTunerChart(labels, winRates, counts) {
+  const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  const gridColor = isDark ? 'rgba(255,255,255,.06)' : 'rgba(0,0,0,.06)';
+  const textColor = isDark ? '#8b91a8' : '#6b7280';
+  const ctx = document.getElementById('tuner-chart').getContext('2d');
+
+  if (_tunerChart) {
+    _tunerChart.data.labels = labels;
+    _tunerChart.data.datasets[0].data = winRates;
+    _tunerChart.update('none');
+    return;
+  }
+
+  _tunerChart = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Win Rate %',
+        data: winRates,
+        backgroundColor: '#2563eb99',
+        borderColor: '#2563eb',
+        borderWidth: 1,
+        borderRadius: 4,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: ctx => ` ${ctx.parsed.y.toFixed(1)}% win rate (${counts[ctx.dataIndex]} trades)`,
+          },
+        },
+      },
+      scales: {
+        x: { grid: { color: gridColor }, ticks: { color: textColor } },
+        y: {
+          grid: { color: gridColor },
+          ticks: { color: textColor, callback: v => v + '%' },
+          min: 0,
+          max: 100,
+        },
+      },
+    },
+  });
+}
+
+async function renderTuner() {
+  await fetchTunerStatus();
+  await fetchTunerProposal();
+}
+
+async function runTuner() {
+  const tok = getToken();
+  if (!tok) { openTokenModal(); return; }
+  try {
+    const res = await apiFetch('/api/poly/tuner/run', {
+      method: 'POST',
+      headers: authHeaders(),
+    });
+    alert(res.message);
+    await renderTuner();
+  } catch (e) {
+    alert('Tuner run failed: ' + e.message);
+  }
+}
+
+async function applyTuner() {
+  if (!confirm('Apply the tuning proposal? This will update signal_params.json.')) return;
+  const tok = getToken();
+  if (!tok) { openTokenModal(); return; }
+  try {
+    const res = await apiFetch('/api/poly/tuner/apply', {
+      method: 'POST',
+      headers: authHeaders(),
+    });
+    alert(res.message);
+    _tunerProposal = null;
+    await renderTuner();
+  } catch (e) {
+    alert('Apply failed: ' + e.message);
+  }
+}
+
+async function rejectTuner() {
+  if (!confirm('Reject the tuning proposal? Changes will be discarded.')) return;
+  const tok = getToken();
+  if (!tok) { openTokenModal(); return; }
+  try {
+    const res = await apiFetch('/api/poly/tuner/reject', {
+      method: 'POST',
+      headers: authHeaders(),
+    });
+    alert(res.message);
+    _tunerProposal = null;
+    await renderTuner();
+  } catch (e) {
+    alert('Reject failed: ' + e.message);
   }
 }
 

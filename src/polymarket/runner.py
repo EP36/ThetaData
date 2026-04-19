@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+import os
 
+from src.polymarket.alpaca_signals import get_cached_signals, refresh_btc_signals_if_stale
 from src.polymarket.client import ClobClient
 from src.polymarket.config import PolymarketConfig
 from src.polymarket.executor import ExecutionResult, execute
@@ -11,8 +13,11 @@ from src.polymarket.opportunities import Opportunity, run_all_scanners
 from src.polymarket.positions import PositionsLedger, make_ledger
 from src.polymarket.risk import RiskGuard
 from src.polymarket.scanner import fetch_btc_markets, fetch_market_orderbooks
+from src.polymarket.signals import score_opportunity
 
 LOGGER = logging.getLogger("theta.polymarket.runner")
+
+_SIGNAL_INTERVAL_SEC = float(os.getenv("POLY_SIGNAL_INTERVAL_SEC", "300"))
 
 
 def scan(config: PolymarketConfig) -> list[Opportunity]:
@@ -38,23 +43,37 @@ def scan(config: PolymarketConfig) -> list[Opportunity]:
         timeout=config.timeout_seconds,
     )
 
+    # Score and re-rank by signal engine
+    signals = refresh_btc_signals_if_stale(_SIGNAL_INTERVAL_SEC)
+    if signals.data_available:
+        opps = [score_opportunity(opp, signals) for opp in opps]
+        opps.sort(key=lambda o: o.rank_score, reverse=True)
+    # else: order stays by edge_pct (from run_all_scanners)
+
     LOGGER.info(
-        "polymarket_scan_complete markets=%d opportunities=%d",
+        "polymarket_scan_complete markets=%d opportunities=%d signals_available=%s",
         len(markets),
         len(opps),
+        signals.data_available,
     )
 
-    for opp in opps:
+    for i, opp in enumerate(opps[:3]):
         LOGGER.info(
-            "polymarket_opportunity strategy=%s edge_pct=%.4f confidence=%s "
-            "market=%s action=%s notes=%s",
+            "polymarket_opportunity rank=%d strategy=%s edge_pct=%.4f "
+            "confidence=%s rank_score=%.4f direction=%s signal_notes=%s "
+            "market=%s action=%s",
+            i + 1,
             opp.strategy,
             opp.edge_pct,
             opp.confidence,
+            opp.rank_score,
+            opp.direction or "unscored",
+            " | ".join(opp.signal_notes) or "none",
             opp.market_question[:80],
             opp.action,
-            opp.notes,
         )
+    if len(opps) > 3:
+        LOGGER.info("polymarket_opportunity_additional count=%d (not shown)", len(opps) - 3)
 
     return opps
 
