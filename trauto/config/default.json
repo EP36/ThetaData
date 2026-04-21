@@ -1,0 +1,72 @@
+{
+  "engine": {
+    "tick_ms": 100,
+    "dry_run": true,
+    "emergency_stop": false,
+    "log_level": "INFO"
+  },
+  "risk": {
+    "global_daily_loss_limit": 500,
+    "global_max_positions": 20,
+    "circuit_breaker_error_threshold": 3,
+    "circuit_breaker_cooldown_sec": 60,
+    "circuit_breaker_hourly_trip_limit": 3
+  },
+  "backtester": {
+    "slippage_pct": 0.001,
+    "initial_capital": 100000,
+    "risk_free_rate": 0.05
+  },
+  "dashboard": {
+    "port": 8080,
+    "api_token": "change_me",
+    "snapshot_ttl_sec": 30
+  },
+  "alpaca": {
+    "base_url": "https://paper-api.alpaca.markets",
+    "data_base_url": "https://data.alpaca.markets",
+    "data_feed": "iex",
+    "paper_trading": true,
+    "initial_capital": 100000,
+    "position_size_pct": 1.0,
+    "fixed_fee": 1.0,
+    "slippage_pct": 0.0005,
+    "max_position_size": 0.25,
+    "max_daily_loss": 2000,
+    "max_notional_per_trade": 100000,
+    "max_open_positions": 3,
+    "daily_loss_cap": 2000
+  },
+  "polymarket": {
+    "clob_base_url": "https://clob.polymarket.com",
+    "kalshi_base_url": "https://trading-api.kalshi.com/trade-api/v2",
+    "scan_interval_sec": 30,
+    "min_edge_pct": 1.5,
+    "max_retries": 3,
+    "timeout_seconds": 15.0,
+    "max_trade_usdc": 500,
+    "max_positions": 5,
+    "daily_loss_limit": 200,
+    "dry_run": true,
+    "min_volume_24h": 10000,
+    "positions_path": "data/polymarket_positions.json",
+    "monitor_interval_sec": 60,
+    "take_profit_pct": 15.0,
+    "stop_loss_pct": 10.0,
+    "max_hold_hours": 72,
+    "unhedged_grace_minutes": 5,
+    "log_dir": "logs",
+    "signal_interval_sec": 300,
+    "signal_params_path": "polymarket/signal_params.json",
+    "tuning_interval_hours": 168
+  },
+  "worker": {
+    "symbols": ["SPY", "QQQ", "NVDA", "TSLA", "AMD", "AAPL", "META", "AMZN", "MSFT", "GOOGL"],
+    "timeframe": "1d",
+    "strategy": "moving_average_crossover",
+    "poll_seconds": 60,
+    "max_candidates": 10,
+    "dry_run": true,
+    "enable_trading": false
+  }
+}
