@@ -283,3 +283,61 @@ class LogEventModel(Base):
     event: Mapped[str] = mapped_column(String(255), nullable=False)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+
+# ---------------------------------------------------------------------------
+# Phase 7 — AI analyst tables
+# ---------------------------------------------------------------------------
+
+class SignalParamsModel(Base):
+    """Versioned signal scoring parameters (replaces polymarket/signal_params.json)."""
+
+    __tablename__ = "signal_params"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    params: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    performance: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now
+    )
+    updated_by: Mapped[str] = mapped_column(String(50), nullable=False, default="manual")
+
+
+class AIProposalModel(Base):
+    """AI-generated parameter change proposals with approval workflow."""
+
+    __tablename__ = "ai_proposals"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    proposal_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    current_params: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    proposed_params: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    reasoning: Mapped[str | None] = mapped_column(Text, nullable=True)
+    trade_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    win_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
+    avg_pnl_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    key_findings: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    warnings: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    applied_by: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    rejected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    auto_apply_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class AIAnalysisLogModel(Base):
+    """Audit trail for every AI analysis run."""
+
+    __tablename__ = "ai_analysis_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    analysis_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    input_summary: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    output_summary: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    tokens_used: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    model: Mapped[str | None] = mapped_column(String(50), nullable=True)

@@ -345,3 +345,193 @@ def post_tuner_reject(
     from src.polymarket.tuner import reject_proposal
     reject_proposal(_tuner_proposal_path)
     return _ok_response("Tuning proposal rejected \u2014 keeping current params")
+
+
+# ---------------------------------------------------------------------------
+# Phase 7 — AI analyst endpoints
+# ---------------------------------------------------------------------------
+
+def _get_ai_repo():
+    """Lazy-initialise AIRepository using DATABASE_URL."""
+    import os
+    from trauto.ai.db import AIRepository
+    from src.persistence.store import DatabaseStore
+    db_url = os.getenv("DATABASE_URL", "")
+    if not db_url:
+        raise HTTPException(status_code=503, detail="DATABASE_URL not configured")
+    return AIRepository(store=DatabaseStore(database_url=db_url))
+
+
+@router.get("/api/ai/status")
+def get_ai_status() -> JSONResponse:
+    """AI analyst status: last run, next run, pending proposals."""
+    try:
+        import os
+        from datetime import datetime, timezone, timedelta
+        repo = _get_ai_repo()
+        last_at = repo.get_last_analysis_at()
+        interval_h = float(os.getenv("AI_ANALYSIS_INTERVAL_HOURS", "24"))
+        auto_apply_h = float(os.getenv("POLY_AI_AUTO_APPLY_HOURS", "4"))
+        budget = int(os.getenv("AI_MONTHLY_TOKEN_BUDGET", "100000"))
+        monthly_tokens = repo.get_monthly_token_usage()
+
+        next_at = None
+        if last_at:
+            next_at = (last_at + timedelta(hours=interval_h)).isoformat()
+
+        proposals = repo.list_proposals(limit=1)
+        pending = [p for p in proposals if p["status"] == "pending"]
+        pending_proposal = pending[0] if pending else None
+
+        auto_apply_countdown = None
+        if pending_proposal and pending_proposal.get("auto_apply_after"):
+            diff = (
+                datetime.fromisoformat(pending_proposal["auto_apply_after"])
+                - datetime.now(tz=timezone.utc)
+            ).total_seconds()
+            auto_apply_countdown = max(0, int(diff))
+
+        return JSONResponse({
+            "last_analysis_at": last_at.isoformat() if last_at else None,
+            "next_analysis_at": next_at,
+            "pending_proposals": len(pending),
+            "auto_apply_countdown_sec": auto_apply_countdown,
+            "auto_apply_hours": auto_apply_h,
+            "monthly_tokens_used": monthly_tokens,
+            "monthly_token_budget": budget,
+            "interval_hours": interval_h,
+        })
+    except HTTPException:
+        raise
+    except Exception as exc:
+        LOGGER.error("api_ai_status_error error=%s", exc)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/api/ai/proposals")
+def get_ai_proposals() -> JSONResponse:
+    """List last 10 AI proposals (newest first)."""
+    try:
+        repo = _get_ai_repo()
+        return JSONResponse({"proposals": repo.list_proposals(limit=10)})
+    except HTTPException:
+        raise
+    except Exception as exc:
+        LOGGER.error("api_ai_proposals_error error=%s", exc)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/api/ai/proposals/{proposal_id}")
+def get_ai_proposal(proposal_id: int) -> JSONResponse:
+    """Single proposal with full reasoning."""
+    try:
+        repo = _get_ai_repo()
+        proposal = repo.get_proposal(proposal_id)
+        if proposal is None:
+            raise HTTPException(status_code=404, detail=f"Proposal {proposal_id} not found")
+        return JSONResponse(proposal)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        LOGGER.error("api_ai_proposal_error id=%d error=%s", proposal_id, exc)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/api/ai/proposals/{proposal_id}/apply")
+def post_ai_proposal_apply(
+    proposal_id: int,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+) -> Any:
+    """Manually apply a pending proposal."""
+    _require_dashboard_token(authorization)
+    try:
+        repo = _get_ai_repo()
+        ok = repo.apply_proposal(proposal_id, applied_by="operator_manual")
+        if not ok:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Proposal {proposal_id} not found or not in pending state",
+            )
+        LOGGER.info("api_ai_proposal_applied id=%d by=operator_manual", proposal_id)
+        return _ok_response(f"Proposal {proposal_id} applied successfully")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        LOGGER.error("api_ai_proposal_apply_error id=%d error=%s", proposal_id, exc)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/api/ai/proposals/{proposal_id}/reject")
+def post_ai_proposal_reject(
+    proposal_id: int,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+) -> Any:
+    """Reject a pending proposal."""
+    _require_dashboard_token(authorization)
+    try:
+        repo = _get_ai_repo()
+        ok = repo.reject_proposal(proposal_id)
+        if not ok:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Proposal {proposal_id} not found or not in pending state",
+            )
+        LOGGER.info("api_ai_proposal_rejected id=%d by=operator", proposal_id)
+        return _ok_response(f"Proposal {proposal_id} rejected")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        LOGGER.error("api_ai_proposal_reject_error id=%d error=%s", proposal_id, exc)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/api/ai/run")
+def post_ai_run(
+    authorization: str | None = Header(default=None, alias="Authorization"),
+) -> Any:
+    """Trigger an immediate AI analysis run (bypasses schedule)."""
+    _require_dashboard_token(authorization)
+    import os
+    db_url = os.getenv("DATABASE_URL", "")
+    if not db_url:
+        raise HTTPException(status_code=503, detail="DATABASE_URL not configured")
+    try:
+        from trauto.ai.loop import trigger_immediate_analysis
+        result = trigger_immediate_analysis(db_url)
+        LOGGER.info("api_ai_run_triggered outcome=%s", result.get("outcome", "unknown"))
+        return _ok_response(
+            f"Analysis complete — outcome: {result.get('outcome', 'unknown')}",
+            result=result,
+        )
+    except Exception as exc:
+        LOGGER.error("api_ai_run_error error=%s", exc)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/api/ai/log")
+def get_ai_log() -> JSONResponse:
+    """Last 20 AI analysis log entries."""
+    try:
+        repo = _get_ai_repo()
+        return JSONResponse({"log": repo.list_analysis_logs(limit=20)})
+    except HTTPException:
+        raise
+    except Exception as exc:
+        LOGGER.error("api_ai_log_error error=%s", exc)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/api/ai/commentary")
+def get_ai_commentary() -> JSONResponse:
+    """Latest daily AI commentary."""
+    try:
+        repo = _get_ai_repo()
+        val = repo.get_kv("daily_commentary")
+        if val is None:
+            return JSONResponse({"commentary": None})
+        return JSONResponse({"commentary": val})
+    except HTTPException:
+        raise
+    except Exception as exc:
+        LOGGER.error("api_ai_commentary_error error=%s", exc)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc

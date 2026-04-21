@@ -27,6 +27,7 @@ LOGGER = logging.getLogger("theta.polymarket.main")
 _TUNING_INTERVAL_HOURS = float(os.getenv("POLY_TUNING_INTERVAL_HOURS", "168"))
 _SIGNAL_PARAMS_PATH = os.getenv("POLY_SIGNAL_PARAMS_PATH", "polymarket/signal_params.json")
 _TUNER_PROPOSAL_PATH = "polymarket/signal_params_proposed.json"
+_AI_ANALYSIS_INTERVAL_HOURS = float(os.getenv("AI_ANALYSIS_INTERVAL_HOURS", "24"))
 
 
 def _run_tuning_cycle(config: PolymarketConfig) -> None:
@@ -51,6 +52,20 @@ def _run_tuning_cycle(config: PolymarketConfig) -> None:
     )
 
 
+def _run_ai_analysis_cycle() -> None:
+    """Run the Phase 7 AI analysis (schedule-aware, idempotent)."""
+    db_url = os.getenv("DATABASE_URL", "")
+    if not db_url:
+        LOGGER.info("polymarket_ai_analysis_skipped reason=DATABASE_URL_not_set")
+        return
+    from trauto.ai.loop import _run_scheduled_analysis
+    result = _run_scheduled_analysis(db_url)
+    LOGGER.info(
+        "polymarket_ai_analysis_complete outcome=%s",
+        result.get("outcome", result.get("reason", "unknown")),
+    )
+
+
 def main() -> None:
     configure_logging()
     config = PolymarketConfig.from_env()
@@ -69,6 +84,7 @@ def main() -> None:
     ledger = make_ledger(config.positions_path)
     last_monitor_time = 0.0
     last_tuning_time = 0.0
+    last_ai_time = 0.0
 
     while True:
         if is_poly_paused():
@@ -94,6 +110,14 @@ def main() -> None:
             except Exception as exc:
                 LOGGER.error("polymarket_tuning_error error=%s", exc)
             last_tuning_time = time.monotonic()
+
+        now = time.monotonic()
+        if now - last_ai_time >= _AI_ANALYSIS_INTERVAL_HOURS * 3600:
+            try:
+                _run_ai_analysis_cycle()
+            except Exception as exc:
+                LOGGER.error("polymarket_ai_analysis_error error=%s", exc)
+            last_ai_time = time.monotonic()
 
         LOGGER.info("polymarket_scan_sleeping seconds=%d", config.scan_interval_sec)
         time.sleep(config.scan_interval_sec)

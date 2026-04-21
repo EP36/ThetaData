@@ -121,6 +121,27 @@ except Exception as _poly_init_exc:
     )
     app.state.poly_aggregator = None
 
+@app.on_event("startup")
+async def _start_ai_background_loop() -> None:
+    """Launch the Phase 7 AI analyst background loop as an asyncio task."""
+    import asyncio
+    db_url = deployment_settings.database_url
+    if not db_url:
+        _APP_LOGGER.warning("ai_loop_skipped reason=DATABASE_URL_not_set")
+        return
+    try:
+        from trauto.ai.db import AIRepository
+        from src.persistence.store import DatabaseStore
+        repo = AIRepository(store=DatabaseStore(database_url=db_url))
+        repo.ensure_schema()
+        repo.seed_signal_params_if_needed()
+        from trauto.ai.loop import background_loop
+        asyncio.create_task(background_loop(db_url))
+        _APP_LOGGER.info("ai_loop_started db_url_set=%s", bool(db_url))
+    except Exception as exc:
+        _APP_LOGGER.warning("ai_loop_start_failed error=%s — AI features disabled", exc)
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=list(deployment_settings.cors_allowed_origins),
