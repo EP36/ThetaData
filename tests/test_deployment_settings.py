@@ -287,6 +287,99 @@ def test_from_env_supports_legacy_alpaca_secret_alias(
     assert settings.alpaca_api_secret == "legacy-secret"
 
 
+def _set_live_polymarket_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TRADING_VENUE", "polymarket")
+    monkeypatch.setenv("TRADING_MODE", "live")
+    monkeypatch.setenv("LIVE_TRADING", "true")
+    monkeypatch.setenv("WORKER_ENABLE_TRADING", "true")
+    monkeypatch.setenv("WORKER_DRY_RUN", "false")
+    monkeypatch.setenv("PAPER_TRADING", "false")
+    monkeypatch.setenv("POLY_DRY_RUN", "false")
+    monkeypatch.setenv("DATA_PROVIDER", "synthetic")
+    monkeypatch.setenv("POLY_API_KEY", "poly-key")
+    monkeypatch.setenv("POLY_API_SECRET", "poly-secret")
+    monkeypatch.setenv("POLY_PASSPHRASE", "poly-passphrase")
+    monkeypatch.setenv("POLY_PRIVATE_KEY", "poly-private-key")
+
+
+def test_from_env_allows_live_polymarket_without_alpaca_vars(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    empty_env = tmp_path / "empty.env"
+    empty_env.write_text("")
+    _set_live_polymarket_env(monkeypatch)
+    for env_name in (
+        "ALPACA_API_KEY",
+        "ALPACA_API_SECRET",
+        "ALPACA_SECRET_KEY",
+        "ALPACA_BASE_URL",
+    ):
+        monkeypatch.delenv(env_name, raising=False)
+
+    settings = DeploymentSettings.from_env(env_path=empty_env)
+
+    assert settings.trading_venue == "polymarket"
+    assert settings.trading_mode == "live"
+    assert settings.live_trading_enabled is True
+    assert settings.execution_adapter == "polymarket_clob"
+    assert settings.alpaca_api_key == ""
+    assert settings.alpaca_api_secret == ""
+
+
+def test_from_env_rejects_live_polymarket_missing_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    empty_env = tmp_path / "empty.env"
+    empty_env.write_text("")
+    _set_live_polymarket_env(monkeypatch)
+    monkeypatch.delenv("POLY_PRIVATE_KEY", raising=False)
+
+    with pytest.raises(ValueError, match="POLY_PRIVATE_KEY"):
+        DeploymentSettings.from_env(env_path=empty_env)
+
+
+def test_from_env_rejects_ambiguous_polymarket_alpaca_provider(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    empty_env = tmp_path / "empty.env"
+    empty_env.write_text("")
+    _set_live_polymarket_env(monkeypatch)
+    monkeypatch.setenv("DATA_PROVIDER", "alpaca")
+
+    with pytest.raises(ValueError, match="DATA_PROVIDER=alpaca is ambiguous"):
+        DeploymentSettings.from_env(env_path=empty_env)
+
+
+def test_from_env_rejects_polymarket_with_equities_paper_flag(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    empty_env = tmp_path / "empty.env"
+    empty_env.write_text("")
+    _set_live_polymarket_env(monkeypatch)
+    monkeypatch.setenv("PAPER_TRADING", "true")
+
+    with pytest.raises(ValueError, match="PAPER_TRADING must remain false"):
+        DeploymentSettings.from_env(env_path=empty_env)
+
+
+def test_from_env_rejects_live_equities_mode(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    empty_env = tmp_path / "empty.env"
+    empty_env.write_text("")
+    monkeypatch.setenv("TRADING_VENUE", "equities")
+    monkeypatch.setenv("TRADING_MODE", "live")
+    monkeypatch.setenv("LIVE_TRADING", "true")
+
+    with pytest.raises(ValueError, match="live trading is supported only"):
+        DeploymentSettings.from_env(env_path=empty_env)
+
+
 def test_production_rejects_short_auth_secrets() -> None:
     with pytest.raises(ValueError, match="auth_session_secret"):
         DeploymentSettings(

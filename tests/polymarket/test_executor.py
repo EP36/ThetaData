@@ -39,6 +39,10 @@ def _make_config(**overrides: Any) -> PolymarketConfig:
         "positions_path": "data/polymarket_positions.json",
     }
     defaults.update(overrides)
+    if defaults.get("dry_run") is False:
+        defaults.setdefault("trading_mode", "live")
+        defaults.setdefault("trading_venue", "polymarket")
+        defaults.setdefault("live_trading_enabled", True)
     return PolymarketConfig(**defaults)  # type: ignore[arg-type]
 
 

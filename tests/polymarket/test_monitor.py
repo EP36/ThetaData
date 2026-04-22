@@ -51,6 +51,10 @@ def _config(**overrides) -> PolymarketConfig:
         dry_run=True,
     )
     base.update(overrides)
+    if base.get("dry_run") is False:
+        base.setdefault("trading_mode", "live")
+        base.setdefault("trading_venue", "polymarket")
+        base.setdefault("live_trading_enabled", True)
     return PolymarketConfig(**base)
 
 

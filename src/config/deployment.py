@@ -28,6 +28,22 @@ SUPPORTED_EXECUTION_PROFILES = (
     "balanced",
     "active_day_trader",
 )
+SUPPORTED_TRADING_MODES = (
+    "disabled",
+    "dry_run",
+    "paper",
+    "live",
+)
+SUPPORTED_TRADING_VENUES = (
+    "equities",
+    "polymarket",
+)
+POLYMARKET_CREDENTIAL_ENV_VARS = (
+    "POLY_API_KEY",
+    "POLY_API_SECRET",
+    "POLY_PASSPHRASE",
+    "POLY_PRIVATE_KEY",
+)
 
 STRICT_REQUIRED_ENV_VARS = (
     "APP_ENV",
@@ -114,6 +130,14 @@ class DeploymentSettings:
     auth_bootstrap_admin_on_startup: bool = False
     auth_bootstrap_admin_email: str = ""
     auth_bootstrap_admin_password: str = ""
+
+    trading_mode: str = "dry_run"
+    trading_venue: str = "equities"
+    live_trading_enabled: bool = False
+    data_provider: str = "synthetic"
+    polymarket_dry_run: bool = True
+    polymarket_credentials_configured: bool = False
+    missing_polymarket_credentials: tuple[str, ...] = ()
 
     paper_trading_enabled: bool = False
     worker_enable_trading: bool = False
@@ -315,15 +339,84 @@ class DeploymentSettings:
                     "auth_bootstrap_admin_password is required when bootstrap on startup is enabled"
                 )
 
-        # Safety gate: active worker trading requires explicit paper mode unless dry-run is on.
-        if self.worker_enable_trading and not self.paper_trading_enabled and not self.worker_dry_run:
+        self.trading_mode = self.trading_mode.strip().lower()
+        self.trading_venue = self.trading_venue.strip().lower()
+        self.data_provider = self.data_provider.strip().lower()
+        if self.trading_mode not in SUPPORTED_TRADING_MODES:
+            raise ValueError(
+                "trading_mode must be one of "
+                f"{list(SUPPORTED_TRADING_MODES)}"
+            )
+        if self.trading_venue not in SUPPORTED_TRADING_VENUES:
+            raise ValueError(
+                "trading_venue must be one of "
+                f"{list(SUPPORTED_TRADING_VENUES)}"
+            )
+
+        if self.trading_venue == "polymarket":
+            if self.paper_trading_enabled:
+                raise ValueError(
+                    "PAPER_TRADING must remain false when TRADING_VENUE=polymarket"
+                )
+            if self.data_provider == "alpaca":
+                raise ValueError(
+                    "DATA_PROVIDER=alpaca is ambiguous when TRADING_VENUE=polymarket"
+                )
+            if self.trading_mode == "paper":
+                raise ValueError(
+                    "TRADING_MODE=paper is only supported for TRADING_VENUE=equities"
+                )
+            if not self.polymarket_dry_run and self.trading_mode != "live":
+                raise ValueError(
+                    "POLY_DRY_RUN=false requires TRADING_MODE=live when TRADING_VENUE=polymarket"
+                )
+
+        if self.trading_mode == "live":
+            if self.trading_venue != "polymarket":
+                raise ValueError(
+                    "live trading is supported only for TRADING_VENUE=polymarket"
+                )
+            if not self.live_trading_enabled:
+                raise ValueError(
+                    "TRADING_MODE=live requires LIVE_TRADING=true"
+                )
+            if not self.worker_enable_trading:
+                raise ValueError(
+                    "TRADING_MODE=live requires WORKER_ENABLE_TRADING=true"
+                )
+            if self.worker_dry_run:
+                raise ValueError(
+                    "TRADING_MODE=live requires WORKER_DRY_RUN=false"
+                )
+            if self.polymarket_dry_run:
+                raise ValueError(
+                    "TRADING_MODE=live requires POLY_DRY_RUN=false"
+                )
+            if not self.polymarket_credentials_configured:
+                missing = (
+                    self.missing_polymarket_credentials
+                    or POLYMARKET_CREDENTIAL_ENV_VARS
+                )
+                raise ValueError(
+                    "TRADING_MODE=live with TRADING_VENUE=polymarket requires "
+                    "Polymarket credentials: "
+                    + ", ".join(missing)
+                )
+        elif self.live_trading_enabled:
+            raise ValueError(
+                "LIVE_TRADING=true requires TRADING_MODE=live and TRADING_VENUE=polymarket"
+            )
+
+        # Safety gate: equities worker trading requires explicit paper mode unless dry-run is on.
+        if (
+            self.trading_venue == "equities"
+            and self.worker_enable_trading
+            and not self.paper_trading_enabled
+            and not self.worker_dry_run
+        ):
             raise ValueError(
                 "worker_enable_trading requires paper_trading_enabled=true unless WORKER_DRY_RUN=true"
             )
-
-        # Hard guard against accidental live trading flags.
-        if _read_bool("LIVE_TRADING", default=False):
-            raise ValueError("LIVE_TRADING must remain disabled for this repository")
 
         if self.app_env in {"production", "staging"} and self.auth_enabled:
             if len(self.auth_session_secret.strip()) < 32:
@@ -348,6 +441,13 @@ class DeploymentSettings:
 
         if self.strict_env_validation or self.app_env == "production":
             self._validate_strict_requirements()
+
+    @property
+    def execution_adapter(self) -> str:
+        """Return the execution adapter selected by venue/mode."""
+        if self.trading_venue == "polymarket":
+            return "polymarket_clob"
+        return "paper_trading_executor"
 
     def _validate_strict_requirements(self) -> None:
         """Validate environment values required for unattended deployment."""
@@ -425,6 +525,30 @@ class DeploymentSettings:
             default_symbol_cooldown = "900"
             default_strategy_cooldown = "300"
 
+        paper_trading_enabled = _read_bool("PAPER_TRADING", default=False)
+        worker_enable_trading = _read_bool("WORKER_ENABLE_TRADING", default=False)
+        worker_dry_run = _read_bool("WORKER_DRY_RUN", default=True)
+        live_trading_enabled = _read_bool("LIVE_TRADING", default=False)
+        polymarket_dry_run = _read_bool("POLY_DRY_RUN", default=True)
+        trading_venue = os.getenv("TRADING_VENUE", "equities").strip().lower()
+        requested_trading_mode = os.getenv("TRADING_MODE", "").strip().lower()
+        if requested_trading_mode:
+            trading_mode = requested_trading_mode
+        elif live_trading_enabled:
+            trading_mode = "live"
+        elif worker_dry_run:
+            trading_mode = "dry_run"
+        elif paper_trading_enabled:
+            trading_mode = "paper"
+        else:
+            trading_mode = "disabled"
+        data_provider = os.getenv("DATA_PROVIDER", "synthetic").strip().lower() or "synthetic"
+        missing_polymarket_credentials = tuple(
+            name
+            for name in POLYMARKET_CREDENTIAL_ENV_VARS
+            if not os.getenv(name, "").strip()
+        )
+
         database_url = _normalize_database_url(
             os.getenv("DATABASE_URL", "sqlite+pysqlite:///data/trauto.db")
         )
@@ -468,8 +592,15 @@ class DeploymentSettings:
             ),
             auth_bootstrap_admin_email=os.getenv("AUTH_BOOTSTRAP_ADMIN_EMAIL", "").strip(),
             auth_bootstrap_admin_password=os.getenv("AUTH_BOOTSTRAP_ADMIN_PASSWORD", ""),
-            paper_trading_enabled=_read_bool("PAPER_TRADING", default=False),
-            worker_enable_trading=_read_bool("WORKER_ENABLE_TRADING", default=False),
+            trading_mode=trading_mode,
+            trading_venue=trading_venue,
+            live_trading_enabled=live_trading_enabled,
+            data_provider=data_provider,
+            polymarket_dry_run=polymarket_dry_run,
+            polymarket_credentials_configured=not missing_polymarket_credentials,
+            missing_polymarket_credentials=missing_polymarket_credentials,
+            paper_trading_enabled=paper_trading_enabled,
+            worker_enable_trading=worker_enable_trading,
             worker_name=os.getenv("WORKER_NAME", "default-worker").strip(),
             worker_poll_seconds=int(os.getenv("WORKER_POLL_SECONDS", default_worker_poll_seconds)),
             worker_symbol=(worker_symbols[0] if worker_symbols else "SPY"),
@@ -479,7 +610,7 @@ class DeploymentSettings:
             worker_strategy_params=strategy_params,
             worker_order_quantity=float(os.getenv("WORKER_ORDER_QUANTITY", "1.0")),
             worker_force_refresh=_read_bool("WORKER_FORCE_REFRESH", default=False),
-            worker_dry_run=_read_bool("WORKER_DRY_RUN", default=True),
+            worker_dry_run=worker_dry_run,
             execution_profile=execution_profile,
             worker_allow_multi_strategy_per_symbol=_read_bool(
                 "WORKER_ALLOW_MULTI_STRATEGY_PER_SYMBOL",

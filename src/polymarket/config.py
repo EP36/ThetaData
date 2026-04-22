@@ -28,6 +28,9 @@ class PolymarketConfig:
     max_positions: int = 5             # max concurrent open positions
     daily_loss_limit: float = 200.0    # stop trading if daily P&L < -limit
     dry_run: bool = True               # True = log intent only, never place orders
+    trading_mode: str = "dry_run"      # deployment-level mode: dry_run | live
+    trading_venue: str = "polymarket"  # must be polymarket for live execution
+    live_trading_enabled: bool = False # explicit global live opt-in
     min_volume_24h: float = 10_000.0   # minimum 24h USDC volume to trade a market
     positions_path: str = "data/polymarket_positions.json"
     # --- Phase 3: position monitoring ---
@@ -71,6 +74,15 @@ class PolymarketConfig:
             raise ValueError("max_hold_hours must be positive")
         if self.unhedged_grace_minutes < 0:
             raise ValueError("unhedged_grace_minutes must be non-negative")
+        self.trading_mode = self.trading_mode.strip().lower()
+        self.trading_venue = self.trading_venue.strip().lower()
+        if not self.dry_run:
+            if self.trading_mode != "live":
+                raise ValueError("POLY_DRY_RUN=false requires TRADING_MODE=live")
+            if self.trading_venue != "polymarket":
+                raise ValueError("POLY_DRY_RUN=false requires TRADING_VENUE=polymarket")
+            if not self.live_trading_enabled:
+                raise ValueError("POLY_DRY_RUN=false requires LIVE_TRADING=true")
 
     @classmethod
     def from_env(cls, env_path: str | Path | None = None) -> "PolymarketConfig":
@@ -103,6 +115,9 @@ class PolymarketConfig:
             max_positions=int(os.getenv("POLY_MAX_POSITIONS", "5")),
             daily_loss_limit=float(os.getenv("POLY_DAILY_LOSS_LIMIT", "200.0")),
             dry_run=_bool("POLY_DRY_RUN", default=True),
+            trading_mode=os.getenv("TRADING_MODE", "dry_run"),
+            trading_venue=os.getenv("TRADING_VENUE", "polymarket"),
+            live_trading_enabled=_bool("LIVE_TRADING", default=False),
             min_volume_24h=float(os.getenv("POLY_MIN_VOLUME_24H", "10000.0")),
             positions_path=os.getenv(
                 "POLY_POSITIONS_PATH", "data/polymarket_positions.json"

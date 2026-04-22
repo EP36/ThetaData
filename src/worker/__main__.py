@@ -1,22 +1,8 @@
-"""Run the background trading worker process.
-
-Starts two concurrent loops:
-  1. Alpaca multi-strategy worker  (main thread, blocking)
-  2. Polymarket scanner + monitor + AI analyst  (daemon thread)
-
-Active strategies (seeded at startup):
-  - moving_average_crossover  enabled  short_window=20 long_window=50  (META, QQQ, 1d)
-  - breakout_momentum         enabled  (default params, all universe symbols)
-
-If Polymarket fails to start or crashes at any point the error is logged
-and the Alpaca worker continues unaffected.
-"""
+"""Run the background trading worker process for one explicit venue."""
 
 from __future__ import annotations
 
 import logging
-import os
-import threading
 
 from src.config.deployment import DeploymentSettings
 from src.observability.logging import configure_logging
@@ -24,28 +10,6 @@ from src.persistence import DatabaseStore, PersistenceRepository
 from src.worker.service import TradingWorker
 
 LOGGER = logging.getLogger("theta.worker.main")
-
-
-def _check_poly_credentials() -> bool:
-    """Return True if all required Polymarket credentials are present in env."""
-    required = ("POLY_API_KEY", "POLY_API_SECRET", "POLY_PASSPHRASE", "POLY_PRIVATE_KEY")
-    present = all(os.getenv(k, "").strip() for k in required)
-    if present:
-        LOGGER.info("poly_credentials=configured dry_run=%s", os.getenv("POLY_DRY_RUN", "true"))
-    else:
-        missing = [k for k in required if not os.getenv(k, "").strip()]
-        LOGGER.warning("poly_credentials=MISSING missing_keys=%s — Polymarket loop will not start", missing)
-    return present
-
-
-def _run_polymarket_loop() -> None:
-    """Target for the Polymarket daemon thread. Never propagates exceptions."""
-    try:
-        from src.polymarket.__main__ import main as poly_main
-        LOGGER.info("polymarket_thread_starting")
-        poly_main()
-    except Exception as exc:
-        LOGGER.error("polymarket_thread_crashed error=%s — Alpaca worker continues", exc)
 
 
 _MAC_STRATEGY = "moving_average_crossover"
@@ -77,25 +41,45 @@ def _seed_strategy_configs(repository: PersistenceRepository) -> None:
         )
 
 
-def main() -> None:
-    configure_logging()
+def _log_runtime_mode(settings: DeploymentSettings) -> None:
+    """Emit the startup mode/venue/adapter selection for auditability."""
+    LOGGER.info(
+        "worker_runtime_mode active_trading_mode=%s active_venue=%s "
+        "execution_adapter=%s paper_trading=%s worker_dry_run=%s "
+        "live_trading=%s worker_enable_trading=%s poly_dry_run=%s",
+        settings.trading_mode,
+        settings.trading_venue,
+        settings.execution_adapter,
+        settings.paper_trading_enabled,
+        settings.worker_dry_run,
+        settings.live_trading_enabled,
+        settings.worker_enable_trading,
+        settings.polymarket_dry_run,
+    )
 
-    LOGGER.info("worker_entrypoint_starting")
 
-    # --- Polymarket daemon thread (optional, credential-gated) ---
-    if _check_poly_credentials():
-        poly_thread = threading.Thread(
-            target=_run_polymarket_loop,
-            name="polymarket-loop",
-            daemon=True,   # dies automatically when main thread exits
+def _run_polymarket_worker(settings: DeploymentSettings) -> None:
+    """Run the Polymarket scanner/monitor loop as the only active worker."""
+    if not settings.worker_enable_trading:
+        LOGGER.info(
+            "polymarket_worker_skipped reason=worker_enable_trading_false"
         )
-        poly_thread.start()
-        LOGGER.info("polymarket_thread_started thread_id=%d", poly_thread.ident or 0)
-    else:
-        LOGGER.info("polymarket_thread_skipped reason=missing_credentials")
+        return
+    if not settings.polymarket_credentials_configured:
+        LOGGER.warning(
+            "polymarket_worker_skipped reason=missing_credentials missing_keys=%s",
+            list(settings.missing_polymarket_credentials),
+        )
+        return
 
-    # --- Alpaca worker (main thread, blocks until process exits) ---
-    settings = DeploymentSettings.from_env()
+    from src.polymarket.__main__ import main as polymarket_main
+
+    LOGGER.info("polymarket_worker_starting")
+    polymarket_main()
+
+
+def _run_equities_worker(settings: DeploymentSettings) -> None:
+    """Run the existing equities-oriented worker as the only active worker."""
     repository = PersistenceRepository(
         store=DatabaseStore(database_url=settings.database_url)
     )
@@ -107,6 +91,23 @@ def main() -> None:
 
     worker = TradingWorker(settings=settings, repository=repository)
     worker.run_forever()
+
+
+def _run_worker_for_settings(settings: DeploymentSettings) -> None:
+    """Dispatch to exactly one venue-specific worker."""
+    _log_runtime_mode(settings)
+    if settings.trading_venue == "polymarket":
+        _run_polymarket_worker(settings)
+        return
+    _run_equities_worker(settings)
+
+
+def main() -> None:
+    configure_logging()
+
+    LOGGER.info("worker_entrypoint_starting")
+    settings = DeploymentSettings.from_env()
+    _run_worker_for_settings(settings)
 
 
 if __name__ == "__main__":

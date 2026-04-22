@@ -69,6 +69,15 @@ def _run_ai_analysis_cycle() -> None:
 def main() -> None:
     configure_logging()
     config = PolymarketConfig.from_env()
+    LOGGER.info(
+        "polymarket_runtime_mode active_trading_mode=%s active_venue=%s "
+        "execution_adapter=polymarket_clob paper_trading=%s dry_run=%s live_trading=%s",
+        config.trading_mode,
+        config.trading_venue,
+        False,
+        config.dry_run,
+        config.live_trading_enabled,
+    )
 
     LOGGER.info(
         "polymarket_scanner_starting interval_sec=%d monitor_interval_sec=%d "

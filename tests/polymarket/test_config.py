@@ -95,3 +95,33 @@ def test_config_raises_non_positive_edge_pct(monkeypatch: pytest.MonkeyPatch) ->
 
     with pytest.raises(ValueError, match="min_edge_pct"):
         PolymarketConfig.from_env()
+
+
+def test_live_config_requires_explicit_live_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_required(monkeypatch)
+    monkeypatch.setenv("POLY_DRY_RUN", "false")
+    monkeypatch.setenv("TRADING_VENUE", "polymarket")
+    monkeypatch.setenv("TRADING_MODE", "dry_run")
+    monkeypatch.setenv("LIVE_TRADING", "false")
+
+    with pytest.raises(ValueError, match="TRADING_MODE=live"):
+        PolymarketConfig.from_env()
+
+
+def test_live_config_loads_with_explicit_live_polymarket_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_required(monkeypatch)
+    monkeypatch.setenv("POLY_DRY_RUN", "false")
+    monkeypatch.setenv("TRADING_VENUE", "polymarket")
+    monkeypatch.setenv("TRADING_MODE", "live")
+    monkeypatch.setenv("LIVE_TRADING", "true")
+
+    cfg = PolymarketConfig.from_env()
+
+    assert cfg.dry_run is False
+    assert cfg.trading_mode == "live"
+    assert cfg.trading_venue == "polymarket"
+    assert cfg.live_trading_enabled is True
