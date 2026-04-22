@@ -5,10 +5,10 @@ export default function HomePage() {
     <section className="space-y-4">
       <article className="glass-panel panel-animate rounded-[1.9rem] p-5 sm:p-6">
         <span className="ui-pill text-[var(--accent-strong)]">Research Workspace</span>
-        <h2 className="page-title mt-4 font-semibold">Research + Paper Trading Console</h2>
+        <h2 className="page-title mt-4 font-semibold">Research + Trading Console</h2>
         <p className="mt-3 max-w-2xl text-sm leading-6 text-[var(--muted)]">
-          This UI remains backend-driven and paper-only. The mobile-first layout keeps
-          core operating data easy to scan without changing any trading behavior.
+          This UI remains backend-driven. The mobile-first layout keeps core operating
+          data easy to scan without changing any trading behavior.
         </p>
         <div className="mt-6 flex flex-col gap-3 sm:flex-row">
           <Link href="/dashboard" className="ui-button ui-button-primary w-full sm:w-auto">

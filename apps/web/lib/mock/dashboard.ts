@@ -6,7 +6,20 @@ export const dashboardSummary: DashboardSummary = {
   totalPnl: 2_480.12,
   openPositions: 2,
   systemStatus: "paper_only_ready",
-  riskAlerts: ["max_daily_loss_buffer_78pct"]
+  riskAlerts: ["max_daily_loss_buffer_78pct"],
+  tradingStatus: {
+    signalProvider: "synthetic",
+    tradingVenue: "alpaca",
+    tradingMode: "paper",
+    polyTradingMode: "disabled",
+    alpacaTradingMode: "paper",
+    polyDryRun: true,
+    workerEnableTrading: true,
+    workerDryRun: false,
+    paperTradingEnabled: true,
+    liveTradingEnabled: false,
+    executionAdapter: "paper_trading_executor"
+  }
 };
 
 export const equityCurve: TimeSeriesPoint[] = [

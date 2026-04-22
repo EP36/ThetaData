@@ -10,6 +10,21 @@ export type DashboardSummary = {
   openPositions: number;
   systemStatus: string;
   riskAlerts: string[];
+  tradingStatus: TradingStatus;
+};
+
+export type TradingStatus = {
+  signalProvider: string;
+  tradingVenue: string;
+  tradingMode: string;
+  polyTradingMode: string;
+  alpacaTradingMode: string;
+  polyDryRun: boolean;
+  workerEnableTrading: boolean;
+  workerDryRun: boolean;
+  paperTradingEnabled: boolean;
+  liveTradingEnabled: boolean;
+  executionAdapter: string;
 };
 
 export type TradeRow = {

@@ -93,6 +93,10 @@ class ClobClient:
             params["next_cursor"] = next_cursor
         return self._get("/markets", params=params)
 
+    def fetch_market_by_token(self, token_id: str) -> dict[str, Any]:
+        """Resolve a token ID to its parent CLOB market."""
+        return self._get(f"/markets-by-token/{token_id}")
+
     def fetch_orderbook(self, token_id: str) -> dict[str, Any]:
         """Fetch the L2 orderbook for a single token (YES or NO outcome)."""
         return self._get("/book", params={"token_id": token_id})

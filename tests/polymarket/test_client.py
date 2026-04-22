@@ -122,6 +122,27 @@ def test_fetch_orderbook_passes_token_id() -> None:
     assert result == payload
 
 
+def test_fetch_market_by_token_uses_token_path() -> None:
+    config = _make_config()
+    client = ClobClient(config=config)
+    payload = {
+        "condition_id": "0x1",
+        "primary_token_id": "token-abc",
+        "secondary_token_id": "token-def",
+    }
+
+    with patch("httpx.Client") as mock_cls:
+        mock_http = MagicMock()
+        mock_cls.return_value.__enter__.return_value = mock_http
+        mock_http.get.return_value = _mock_http_success(payload)
+
+        result = client.fetch_market_by_token("token-abc")
+
+    call_kwargs = mock_http.get.call_args
+    assert call_kwargs.args[0] == "https://clob.polymarket.com/markets-by-token/token-abc"
+    assert result == payload
+
+
 def test_retry_on_server_error_then_success() -> None:
     config = _make_config(max_retries=2)
     client = ClobClient(config=config)

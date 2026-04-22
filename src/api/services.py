@@ -36,6 +36,7 @@ from src.api.schemas import (
     SymbolExposureResponse,
     TradeRecord,
     TradesResponse,
+    TradingStatusResponse,
     WorkerExecutionStatusResponse,
     WorkerSymbolDecisionResponse,
 )
@@ -306,6 +307,48 @@ class TradingApiService:
         if self.deployment_settings is not None:
             return self.deployment_settings.log_dir
         return "logs"
+
+    def _trading_status(self) -> TradingStatusResponse:
+        """Return split signal/execution trading status for UI display."""
+        settings = self.deployment_settings
+        if settings is None:
+            return TradingStatusResponse()
+        return TradingStatusResponse(
+            signal_provider=settings.signal_provider,
+            trading_venue=settings.trading_venue,
+            trading_mode=settings.trading_mode,
+            poly_trading_mode=settings.poly_trading_mode,
+            alpaca_trading_mode=settings.alpaca_trading_mode,
+            poly_dry_run=settings.polymarket_dry_run,
+            worker_enable_trading=settings.worker_enable_trading,
+            worker_dry_run=settings.worker_dry_run,
+            paper_trading_enabled=settings.paper_trading_enabled,
+            live_trading_enabled=settings.live_trading_enabled,
+            execution_adapter=settings.execution_adapter,
+        )
+
+    def _dashboard_system_status(self, open_positions: int) -> str:
+        """Derive a concise status badge without conflating venue and mode."""
+        if self.kill_switch_enabled:
+            return "kill_switch_enabled"
+
+        status = self._trading_status()
+        if status.trading_venue == "polymarket":
+            if status.poly_trading_mode == "live":
+                return "polymarket_live"
+            if status.poly_trading_mode == "dry_run":
+                return "polymarket_dry_run"
+            return "trading_disabled"
+
+        if status.alpaca_trading_mode == "live":
+            return "alpaca_live"
+        if status.alpaca_trading_mode == "paper" or status.paper_trading_enabled:
+            return "paper_only_ready" if open_positions > 0 else "paper_only_idle"
+        if status.trading_mode == "dry_run" or (
+            status.worker_enable_trading and status.worker_dry_run
+        ):
+            return "dry_run"
+        return "trading_disabled"
 
     def _performance_snapshot(
         self,
@@ -785,13 +828,10 @@ class TradingApiService:
                 daily_pnl=daily_pnl,
                 total_pnl=total_pnl,
                 open_positions=int(open_positions),
-                system_status=(
-                    "kill_switch_enabled"
-                    if self.kill_switch_enabled
-                    else ("paper_only_ready" if open_positions > 0 else "paper_only_idle")
-                ),
+                system_status=self._dashboard_system_status(open_positions),
                 risk_alerts=alerts,
                 last_run_id=last_run_id,
+                trading_status=self._trading_status(),
             )
 
         if self.last_backtest is None or self.last_backtest.equity_curve.empty:
@@ -801,9 +841,10 @@ class TradingApiService:
                 daily_pnl=0.0,
                 total_pnl=0.0,
                 open_positions=0,
-                system_status="kill_switch_enabled" if self.kill_switch_enabled else "paper_only_idle",
+                system_status=self._dashboard_system_status(0),
                 risk_alerts=alerts,
                 last_run_id=self.last_run_id,
+                trading_status=self._trading_status(),
             )
 
         equity_curve = self.last_backtest.equity_curve
@@ -822,9 +863,10 @@ class TradingApiService:
             daily_pnl=float(daily_pnl),
             total_pnl=float(total_pnl),
             open_positions=open_positions,
-            system_status="kill_switch_enabled" if self.kill_switch_enabled else "paper_only_ready",
+            system_status=self._dashboard_system_status(open_positions),
             risk_alerts=alerts,
             last_run_id=self.last_run_id,
+            trading_status=self._trading_status(),
         )
 
     def risk_status(self) -> RiskStatusResponse:
@@ -1383,6 +1425,7 @@ class TradingApiService:
                 if self.deployment_settings is not None
                 else False
             ),
+            trading_status=self._trading_status(),
             worker_heartbeat=worker_heartbeat,
             recent_runs=recent_runs,
             timestamp=pd.Timestamp.utcnow().to_pydatetime(),

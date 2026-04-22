@@ -210,8 +210,13 @@ def test_run_backtest_endpoint_and_dashboard_summary(
     assert summary_payload["system_status"] in {
         "paper_only_idle",
         "paper_only_ready",
+        "trading_disabled",
+        "polymarket_live",
+        "polymarket_dry_run",
         "kill_switch_enabled",
     }
+    assert "trading_status" in summary_payload
+    assert "trading_venue" in summary_payload["trading_status"]
 
     trades_response = client.get("/api/trades", headers=admin_headers)
     assert trades_response.status_code == 200

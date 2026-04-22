@@ -57,6 +57,21 @@ type ApiDashboardSummary = {
   system_status: string;
   risk_alerts: string[];
   last_run_id: string | null;
+  trading_status?: ApiTradingStatus;
+};
+
+type ApiTradingStatus = {
+  signal_provider: string;
+  trading_venue: string;
+  trading_mode: string;
+  poly_trading_mode: string;
+  alpaca_trading_mode: string;
+  poly_dry_run: boolean;
+  worker_enable_trading: boolean;
+  worker_dry_run: boolean;
+  paper_trading_enabled: boolean;
+  live_trading_enabled: boolean;
+  execution_adapter: string;
 };
 
 type ApiRiskStatus = {
@@ -407,13 +422,27 @@ function mapTradeRow(trade: ApiTrade): TradeRow {
 
 export async function getDashboardSummary(): Promise<DashboardSummary> {
   const payload = await fetchJson<ApiDashboardSummary>("/api/dashboard/summary");
+  const tradingStatus = payload.trading_status;
   return {
     equity: payload.equity,
     dailyPnl: payload.daily_pnl,
     totalPnl: payload.total_pnl,
     openPositions: payload.open_positions,
     systemStatus: payload.system_status,
-    riskAlerts: payload.risk_alerts
+    riskAlerts: payload.risk_alerts,
+    tradingStatus: {
+      signalProvider: tradingStatus?.signal_provider ?? "synthetic",
+      tradingVenue: tradingStatus?.trading_venue ?? "alpaca",
+      tradingMode: tradingStatus?.trading_mode ?? "disabled",
+      polyTradingMode: tradingStatus?.poly_trading_mode ?? "disabled",
+      alpacaTradingMode: tradingStatus?.alpaca_trading_mode ?? "disabled",
+      polyDryRun: tradingStatus?.poly_dry_run ?? true,
+      workerEnableTrading: tradingStatus?.worker_enable_trading ?? false,
+      workerDryRun: tradingStatus?.worker_dry_run ?? true,
+      paperTradingEnabled: tradingStatus?.paper_trading_enabled ?? false,
+      liveTradingEnabled: tradingStatus?.live_trading_enabled ?? false,
+      executionAdapter: tradingStatus?.execution_adapter ?? "alpaca_execution_disabled"
+    }
   };
 }
 

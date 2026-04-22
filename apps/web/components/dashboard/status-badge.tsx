@@ -3,15 +3,21 @@ type StatusBadgeProps = {
 };
 
 const STATUS_LABELS: Record<string, string> = {
-  paper_only_ready: "Paper Ready",
-  paper_only_idle: "Paper Idle",
+  polymarket_live: "Polymarket Live",
+  polymarket_dry_run: "Polymarket Dry Run",
+  alpaca_live: "Alpaca Live",
+  paper_only_ready: "Alpaca Paper Ready",
+  paper_only_idle: "Alpaca Paper Idle",
+  dry_run: "Dry Run",
+  trading_disabled: "Trading Disabled",
   kill_switch_enabled: "Kill Switch",
   backend_unavailable: "Backend Offline"
 };
 
 export function StatusBadge({ status }: StatusBadgeProps) {
-  const isDanger = status === "kill_switch_enabled";
-  const isWarning = status === "backend_unavailable";
+  const isLive = status === "polymarket_live" || status === "alpaca_live";
+  const isDanger = status === "kill_switch_enabled" || isLive;
+  const isWarning = status === "backend_unavailable" || status === "trading_disabled";
   const dotClass = isDanger
     ? "bg-[var(--danger)]"
     : isWarning

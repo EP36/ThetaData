@@ -376,6 +376,24 @@ class WorkerExecutionStatusResponse(BaseModel):
     symbols: list[WorkerSymbolDecisionResponse]
 
 
+class TradingStatusResponse(BaseModel):
+    """Runtime trading-mode status split by signal source and execution venue."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    signal_provider: str = "synthetic"
+    trading_venue: str = "alpaca"
+    trading_mode: str = "disabled"
+    poly_trading_mode: str = "disabled"
+    alpaca_trading_mode: str = "disabled"
+    poly_dry_run: bool = True
+    worker_enable_trading: bool = False
+    worker_dry_run: bool = True
+    paper_trading_enabled: bool = False
+    live_trading_enabled: bool = False
+    execution_adapter: str = "alpaca_execution_disabled"
+
+
 class DashboardSummaryResponse(BaseModel):
     """Top-level dashboard summary data."""
 
@@ -388,6 +406,7 @@ class DashboardSummaryResponse(BaseModel):
     system_status: str
     risk_alerts: list[str]
     last_run_id: Optional[str]
+    trading_status: TradingStatusResponse = Field(default_factory=TradingStatusResponse)
 
 
 class RiskStatusResponse(BaseModel):
@@ -454,6 +473,7 @@ class ServiceStatusResponse(BaseModel):
     kill_switch_enabled: bool
     paper_trading_enabled: bool
     worker_enable_trading: bool
+    trading_status: TradingStatusResponse = Field(default_factory=TradingStatusResponse)
     worker_heartbeat: Optional[dict[str, Any]]
     recent_runs: list[dict[str, Any]]
     timestamp: datetime

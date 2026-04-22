@@ -1,0 +1,21 @@
+{
+  "run_id": "b52d983f",
+  "strategy_name": "alpaca.momentum",
+  "start_date": "2024-01-01",
+  "end_date": "2024-01-31",
+  "initial_capital": 100000.0,
+  "final_capital": 100000.0,
+  "total_return_pct": 0.0,
+  "win_rate": 0.0,
+  "max_drawdown_pct": 0.0,
+  "sharpe_ratio": 0.0,
+  "total_trades": 0,
+  "avg_hold_bars": 0.0,
+  "best_trade_pnl": 0.0,
+  "worst_trade_pnl": 0.0,
+  "avg_pnl_per_trade": 0.0,
+  "equity_curve": [],
+  "trades": [],
+  "per_strategy": {},
+  "generated_at": "2026-04-21T20:15:26.619218+00:00"
+}

@@ -21,6 +21,14 @@ function formatUsd(value: number): string {
   }).format(value);
 }
 
+function formatStatusValue(value: string): string {
+  return value
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
 export default function DashboardPage() {
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [equity, setEquity] = useState<TimeSeriesPoint[]>([]);
@@ -69,6 +77,33 @@ export default function DashboardPage() {
         description="Key PnL, position exposure, and system readiness are prioritized for quick review."
         meta={<StatusBadge status={summary.systemStatus} />}
       />
+
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <SummaryCard
+          label="Signal Provider"
+          value={formatStatusValue(summary.tradingStatus.signalProvider)}
+          meta="Signals"
+        />
+        <SummaryCard
+          label="Execution Venue"
+          value={formatStatusValue(summary.tradingStatus.tradingVenue)}
+          meta={formatStatusValue(summary.tradingStatus.executionAdapter)}
+        />
+        <SummaryCard
+          label="Polymarket Mode"
+          value={formatStatusValue(summary.tradingStatus.polyTradingMode)}
+          meta={summary.tradingStatus.polyDryRun ? "Dry run on" : "Dry run off"}
+        />
+        <SummaryCard
+          label="Alpaca Mode"
+          value={formatStatusValue(summary.tradingStatus.alpacaTradingMode)}
+          meta={
+            summary.tradingStatus.paperTradingEnabled
+              ? "Paper trading on"
+              : "Paper trading off"
+          }
+        />
+      </div>
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <SummaryCard

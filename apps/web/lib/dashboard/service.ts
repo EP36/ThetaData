@@ -21,7 +21,20 @@ const EMPTY_DASHBOARD_SUMMARY: DashboardSummary = {
   totalPnl: 0,
   openPositions: 0,
   systemStatus: "paper_only_idle",
-  riskAlerts: []
+  riskAlerts: [],
+  tradingStatus: {
+    signalProvider: "synthetic",
+    tradingVenue: "alpaca",
+    tradingMode: "disabled",
+    polyTradingMode: "disabled",
+    alpacaTradingMode: "disabled",
+    polyDryRun: true,
+    workerEnableTrading: false,
+    workerDryRun: true,
+    paperTradingEnabled: false,
+    liveTradingEnabled: false,
+    executionAdapter: "alpaca_execution_disabled"
+  }
 };
 
 const BACKEND_UNAVAILABLE_SUMMARY: DashboardSummary = {
