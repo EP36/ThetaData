@@ -4,7 +4,7 @@ export type TimeSeriesPoint = {
 };
 
 export type DashboardSummary = {
-  equity: number;
+  equity: number | null;
   dailyPnl: number;
   totalPnl: number;
   openPositions: number;
@@ -25,6 +25,7 @@ export type TradingStatus = {
   paperTradingEnabled: boolean;
   liveTradingEnabled: boolean;
   executionAdapter: string;
+  polyWalletAddress?: string;
 };
 
 export type TradeRow = {

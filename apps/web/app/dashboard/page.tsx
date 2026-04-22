@@ -66,6 +66,7 @@ export default function DashboardPage() {
     );
   }
 
+  const isPolymarket = summary.tradingStatus.tradingVenue === "polymarket";
   const dailyTone = summary.dailyPnl >= 0 ? "positive" : "negative";
   const totalTone = summary.totalPnl >= 0 ? "positive" : "negative";
 
@@ -123,7 +124,11 @@ export default function DashboardPage() {
           value={String(summary.openPositions)}
           meta="Open now"
         />
-        <SummaryCard label="Equity" value={formatUsd(summary.equity)} meta="Net value" />
+        <SummaryCard
+          label={isPolymarket ? "USDC Balance" : "Equity"}
+          value={summary.equity !== null ? formatUsd(summary.equity) : "Unavailable"}
+          meta={isPolymarket ? "Polygon wallet" : "Net value"}
+        />
       </div>
 
       <CollapsibleSection
@@ -147,7 +152,7 @@ export default function DashboardPage() {
 
       <CollapsibleSection
         title="Risk Alerts"
-        description="Warnings that may require attention before paper trading resumes."
+        description={`Warnings that may require attention before ${isPolymarket ? "live trading resumes" : "paper trading resumes"}.`}
         meta={
           <span className="rounded-full border border-[var(--line-soft)] px-3 py-1 text-xs font-medium text-[var(--muted)]">
             {summary.riskAlerts.length}

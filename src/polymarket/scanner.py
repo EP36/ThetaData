@@ -14,6 +14,19 @@ LOGGER = logging.getLogger("theta.polymarket.scanner")
 _BTC_RE = re.compile(r"\b(bitcoin|btc|crypto)\b", re.IGNORECASE)
 _CURSOR_END = "LTE="  # Polymarket's sentinel for the last page
 
+# Maps internal skip-reason strings to summary stat keys.
+_SKIP_TO_STAT: dict[str, str] = {
+    "inactive_market": "skipped_closed",
+    "closed_market": "skipped_closed",
+    "archived_market": "skipped_archived",
+    "not_accepting_orders": "skipped_no_orderbook",
+    "orderbook_disabled": "skipped_no_orderbook",
+    "missing_yes_or_no_token": "skipped_no_tokens",
+    "invalid_yes_token_id": "skipped_no_tokens",
+    "invalid_no_token_id": "skipped_no_tokens",
+    "missing_condition_id": "skipped_no_tokens",
+}
+
 
 @dataclass(frozen=True, slots=True)
 class MarketToken:
@@ -106,30 +119,6 @@ def _tradability_skip_reason(raw: dict[str, Any]) -> str:
     return ""
 
 
-def _log_market_skip(
-    *,
-    raw: dict[str, Any],
-    reason: str,
-    token_id: str = "",
-    token_side: str = "",
-    token_source_key: str = "",
-    token_source_keys: tuple[str, ...] = (),
-) -> None:
-    LOGGER.info(
-        "polymarket_market_skip condition_id=%s market_id=%s token_id=%s "
-        "token_side=%s token_source_key=%s source_keys=%s token_source_keys=%s "
-        "reason=%s",
-        _as_str(raw.get("condition_id")),
-        _market_id(raw),
-        token_id,
-        token_side,
-        token_source_key,
-        _source_keys(raw),
-        token_source_keys,
-        reason,
-    )
-
-
 def _log_orderbook_skip(
     *,
     market: Market,
@@ -184,21 +173,29 @@ def _extract_token(
     return None
 
 
-def _parse_market(raw: dict[str, Any]) -> Market | None:
-    """Parse one raw API market dict into a Market, or None if invalid."""
+def _parse_market(raw: dict[str, Any]) -> tuple[Market | None, str]:
+    """Parse one raw API market dict into a Market, or None with a skip reason.
+
+    Returns ("", "") on non-BTC markets (caller ignores them for stats).
+    Logs WARNING only for active markets that pass tradability checks but fail
+    token extraction — these indicate unexpected API payload shapes.
+    """
     question = _as_str(raw.get("question"))
     if not _BTC_RE.search(question):
-        return None
+        return None, "not_btc"
 
     condition_id = _as_str(raw.get("condition_id"))
     if not condition_id:
-        _log_market_skip(raw=raw, reason="missing_condition_id")
-        return None
+        LOGGER.warning(
+            "polymarket_market_malformed reason=missing_condition_id source_keys=%s",
+            _source_keys(raw),
+        )
+        return None, "missing_condition_id"
 
     skip_reason = _tradability_skip_reason(raw)
     if skip_reason:
-        _log_market_skip(raw=raw, reason=skip_reason)
-        return None
+        # Routine closed/archived/no-orderbook markets — counted in summary only.
+        return None, skip_reason
 
     raw_tokens = raw.get("tokens", [])
     tokens: list[dict[str, Any]] = raw_tokens if isinstance(raw_tokens, list) else []
@@ -212,37 +209,42 @@ def _parse_market(raw: dict[str, Any]) -> Market | None:
     )
 
     if not yes_raw or not no_raw:
-        _log_market_skip(raw=raw, reason="missing_yes_or_no_token")
-        return None
+        # Active market missing expected token fields — log for investigation.
+        LOGGER.warning(
+            "polymarket_active_market_no_tokens condition_id=%s source_keys=%s",
+            condition_id,
+            _source_keys(raw),
+        )
+        return None, "missing_yes_or_no_token"
 
     market_id = _market_id(raw)
     yes_token = _extract_token(yes_raw, "Yes", condition_id, market_id)
     no_token = _extract_token(no_raw, "No", condition_id, market_id)
 
     if yes_token is None:
-        _log_market_skip(
-            raw=raw,
-            reason="invalid_yes_token_id",
-            token_id=_as_str(
-                yes_raw.get("token_id") or yes_raw.get("asset_id") or yes_raw.get("t")
-            ),
-            token_side="Yes",
-            token_source_key=_token_source_key(yes_raw),
-            token_source_keys=_source_keys(yes_raw),
+        # Malformed token payload — log for investigation.
+        LOGGER.warning(
+            "polymarket_invalid_token_id condition_id=%s side=Yes "
+            "token_id=%s token_source_key=%s token_source_keys=%s source_keys=%s",
+            condition_id,
+            _as_str(yes_raw.get("token_id") or yes_raw.get("asset_id") or yes_raw.get("t")),
+            _token_source_key(yes_raw),
+            _source_keys(yes_raw),
+            _source_keys(raw),
         )
-        return None
+        return None, "invalid_yes_token_id"
+
     if no_token is None:
-        _log_market_skip(
-            raw=raw,
-            reason="invalid_no_token_id",
-            token_id=_as_str(
-                no_raw.get("token_id") or no_raw.get("asset_id") or no_raw.get("t")
-            ),
-            token_side="No",
-            token_source_key=_token_source_key(no_raw),
-            token_source_keys=_source_keys(no_raw),
+        LOGGER.warning(
+            "polymarket_invalid_token_id condition_id=%s side=No "
+            "token_id=%s token_source_key=%s token_source_keys=%s source_keys=%s",
+            condition_id,
+            _as_str(no_raw.get("token_id") or no_raw.get("asset_id") or no_raw.get("t")),
+            _token_source_key(no_raw),
+            _source_keys(no_raw),
+            _source_keys(raw),
         )
-        return None
+        return None, "invalid_no_token_id"
 
     return Market(
         condition_id=condition_id,
@@ -252,26 +254,49 @@ def _parse_market(raw: dict[str, Any]) -> Market | None:
         volume_24h=float(raw.get("volume_24hr", 0.0) or 0.0),
         market_id=market_id,
         source_keys=_source_keys(raw),
-    )
+    ), ""
 
 
 def fetch_btc_markets(client: ClobClient) -> list[Market]:
     """Fetch all active BTC/crypto markets, handling pagination."""
     markets: list[Market] = []
+    stats: dict[str, int] = {
+        "total": 0,
+        "skipped_closed": 0,
+        "skipped_archived": 0,
+        "skipped_no_orderbook": 0,
+        "skipped_no_tokens": 0,
+        "candidates_retained": 0,
+    }
     cursor = ""
 
     while True:
         response = client.fetch_markets(next_cursor=cursor)
         for raw in response.get("data", []):
-            market = _parse_market(raw)
-            if market:
+            stats["total"] += 1
+            market, reason = _parse_market(raw)
+            if market is not None:
                 markets.append(market)
+                stats["candidates_retained"] += 1
+            elif reason and reason != "not_btc":
+                stat_key = _SKIP_TO_STAT.get(reason)
+                if stat_key:
+                    stats[stat_key] += 1
 
         cursor = response.get("next_cursor", "")
         if not cursor or cursor == _CURSOR_END:
             break
 
-    LOGGER.info("polymarket_btc_markets_fetched count=%d", len(markets))
+    LOGGER.info(
+        "polymarket_scan_summary total=%d skipped_closed=%d skipped_archived=%d "
+        "skipped_no_orderbook=%d skipped_no_tokens=%d candidates_retained=%d",
+        stats["total"],
+        stats["skipped_closed"],
+        stats["skipped_archived"],
+        stats["skipped_no_orderbook"],
+        stats["skipped_no_tokens"],
+        stats["candidates_retained"],
+    )
     return markets
 
 

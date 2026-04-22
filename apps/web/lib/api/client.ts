@@ -50,7 +50,7 @@ type ApiBacktestResponse = {
 };
 
 type ApiDashboardSummary = {
-  equity: number;
+  equity: number | null;
   daily_pnl: number;
   total_pnl: number;
   open_positions: number;
@@ -72,6 +72,7 @@ type ApiTradingStatus = {
   paper_trading_enabled: boolean;
   live_trading_enabled: boolean;
   execution_adapter: string;
+  poly_wallet_address?: string;
 };
 
 type ApiRiskStatus = {
@@ -441,7 +442,8 @@ export async function getDashboardSummary(): Promise<DashboardSummary> {
       workerDryRun: tradingStatus?.worker_dry_run ?? true,
       paperTradingEnabled: tradingStatus?.paper_trading_enabled ?? false,
       liveTradingEnabled: tradingStatus?.live_trading_enabled ?? false,
-      executionAdapter: tradingStatus?.execution_adapter ?? "alpaca_execution_disabled"
+      executionAdapter: tradingStatus?.execution_adapter ?? "alpaca_execution_disabled",
+      polyWalletAddress: tradingStatus?.poly_wallet_address ?? ""
     }
   };
 }

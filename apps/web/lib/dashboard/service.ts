@@ -16,11 +16,11 @@ export type DashboardData = {
 };
 
 const EMPTY_DASHBOARD_SUMMARY: DashboardSummary = {
-  equity: 0,
+  equity: null,
   dailyPnl: 0,
   totalPnl: 0,
   openPositions: 0,
-  systemStatus: "paper_only_idle",
+  systemStatus: "trading_disabled",
   riskAlerts: [],
   tradingStatus: {
     signalProvider: "synthetic",

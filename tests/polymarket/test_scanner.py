@@ -171,17 +171,17 @@ def test_condition_id_is_never_used_as_token_id() -> None:
 
 
 @pytest.mark.parametrize(
-    ("overrides", "reason"),
+    ("overrides", "expected_summary_fragment"),
     [
-        ({"active": False}, "inactive_market"),
-        ({"closed": True}, "closed_market"),
-        ({"accepting_orders": False}, "not_accepting_orders"),
-        ({"enable_order_book": False}, "orderbook_disabled"),
+        ({"active": False}, "skipped_closed=1"),
+        ({"closed": True}, "skipped_closed=1"),
+        ({"accepting_orders": False}, "skipped_no_orderbook=1"),
+        ({"enable_order_book": False}, "skipped_no_orderbook=1"),
     ],
 )
 def test_closed_or_non_book_markets_are_filtered_before_orderbook(
     overrides: dict[str, Any],
-    reason: str,
+    expected_summary_fragment: str,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     caplog.set_level(logging.INFO, logger="theta.polymarket.scanner")
@@ -196,4 +196,57 @@ def test_closed_or_non_book_markets_are_filtered_before_orderbook(
     assert markets == []
     assert orderbooks == []
     assert client.book_tokens == []
-    assert f"reason={reason}" in caplog.text
+    assert expected_summary_fragment in caplog.text
+
+
+def test_archived_market_skipped_early(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.INFO, logger="theta.polymarket.scanner")
+    client = FakeClobClient(
+        pages=[_page(_market_payload(archived=True))],
+        parent_by_token={},
+    )
+
+    markets = fetch_btc_markets(client)  # type: ignore[arg-type]
+
+    assert markets == []
+    assert "skipped_archived=1" in caplog.text
+
+
+def test_open_market_with_orderbook_disabled_skipped(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.INFO, logger="theta.polymarket.scanner")
+    client = FakeClobClient(
+        pages=[_page(_market_payload(enable_order_book=False))],
+        parent_by_token={},
+    )
+
+    markets = fetch_btc_markets(client)  # type: ignore[arg-type]
+
+    assert markets == []
+    assert "skipped_no_orderbook=1" in caplog.text
+
+
+def test_open_market_with_empty_tokens_skipped(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.WARNING, logger="theta.polymarket.scanner")
+    client = FakeClobClient(
+        pages=[_page(_market_payload(tokens=[]))],
+        parent_by_token={},
+    )
+
+    markets = fetch_btc_markets(client)  # type: ignore[arg-type]
+
+    assert markets == []
+    assert "polymarket_active_market_no_tokens" in caplog.text
+
+
+def test_open_tradable_market_retained(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.INFO, logger="theta.polymarket.scanner")
+    client = FakeClobClient(
+        pages=[_page(_market_payload())],
+        parent_by_token={"yes-token": _parent()},
+    )
+
+    markets = fetch_btc_markets(client)  # type: ignore[arg-type]
+
+    assert len(markets) == 1
+    assert markets[0].condition_id == "cond-1"
+    assert "candidates_retained=1" in caplog.text

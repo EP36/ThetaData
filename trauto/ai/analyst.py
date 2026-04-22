@@ -16,7 +16,8 @@ LOGGER = logging.getLogger("trauto.ai.analyst")
 
 _MODEL = "claude-sonnet-4-20250514"
 _MAX_TOKENS_ANALYSIS = 1000
-_MAX_TOKENS_COMMENTARY = 300
+_MAX_TOKENS_COMMENTARY = 150
+_MAX_FILLS = 30
 
 _MULTIPLIER_PARAMS: set[str] = {
     "direction_bullish_up_multiplier",
@@ -38,28 +39,19 @@ _BONUS_PARAMS: set[str] = {
     "proximity_far_bonus",
 }
 
-_SYSTEM_PROMPT = """\
-You are a quantitative trading analyst for Trauto, an algorithmic trading bot. \
-You analyze prediction market trade history and propose improvements to signal scoring parameters.
-
-You must respond ONLY with valid JSON matching this exact schema:
-{
-  "proposed_params": { "<param_name>": <float_value> },
-  "reasoning": "<plain english explanation of changes>",
-  "confidence": <0.0-1.0>,
-  "key_findings": ["<finding 1>", "<finding 2>"],
-  "warnings": ["<warning 1>"],
-  "win_rate": <0.0-1.0>,
-  "avg_pnl_pct": <float>
-}
-
-Parameter bounds you must respect:
-- Multipliers (direction_*, rsi_*, volume_low_multiplier, proximity_close_multiplier, volatility_high_multiplier, atr_high_multiplier): min 0.50, max 1.50
-- Bonuses (macd_crossover_bonus, streak_bonus, volume_spike_bonus, proximity_far_bonus): min 0.00, max 0.15
-- Never change more than 3 parameters in one proposal
-- Never adjust a parameter by more than 20% from its current value
-- Only propose changes for parameters with 10 or more supporting trades
-- If there is insufficient data to make recommendations, return the current_params unchanged and set confidence below 0.60"""
+# Kept short to stay under 200 tokens. Cached across calls with ephemeral cache_control.
+_SYSTEM_PROMPT = (
+    "Quantitative trading analyst for Trauto. Analyze prediction market trade history "
+    "and propose signal scoring parameter improvements. "
+    "Respond ONLY with valid JSON: "
+    '{"proposed_params":{<param>:<float>},"reasoning":"<str>","confidence":<0-1>,'
+    '"key_findings":["<str>"],"warnings":["<str>"],"win_rate":<0-1>,"avg_pnl_pct":<float>}. '
+    "Multipliers (direction_*,rsi_*,volume_low_multiplier,proximity_close_multiplier,"
+    "volatility_high_multiplier,atr_high_multiplier): range [0.50,1.50]. "
+    "Bonuses (macd_crossover_bonus,streak_bonus,volume_spike_bonus,proximity_far_bonus): "
+    "range [0.00,0.15]. Max 3 param changes, max 20% shift each, "
+    "min 10 supporting trades. If insufficient data, return current_params unchanged, confidence<0.60."
+)
 
 
 @dataclass
@@ -97,16 +89,13 @@ def analyze(
         LOGGER.error("ai_analyst_skipped reason=anthropic_package_not_installed")
         return None
 
-    # Build trade summary
-    trade_summary = _summarize_fills(fills)
+    recent_fills = _slim_fills(fills[-_MAX_FILLS:])
+    trade_summary = _summarize_fills(recent_fills)
     if trade_summary["total_fills"] == 0:
         LOGGER.info("ai_analyst_skipped reason=no_fills_in_window")
         return None
 
-    # Build BTC context
     btc_context = _format_btc_context(btc_signals)
-
-    # Build user prompt
     user_prompt = _build_user_prompt(trade_summary, current_params, btc_context)
 
     start_ms = int(time.monotonic() * 1000)
@@ -115,21 +104,25 @@ def analyze(
         response = client.messages.create(
             model=_MODEL,
             max_tokens=_MAX_TOKENS_ANALYSIS,
-            system=_SYSTEM_PROMPT,
+            system=[{
+                "type": "text",
+                "text": _SYSTEM_PROMPT,
+                "cache_control": {"type": "ephemeral"},
+            }],
             messages=[{"role": "user", "content": user_prompt}],
+            extra_headers={"anthropic-beta": "prompt-caching-2024-07-31"},
         )
         duration_ms = int(time.monotonic() * 1000) - start_ms
-        tokens_used = (
-            response.usage.input_tokens + response.usage.output_tokens
-            if hasattr(response, "usage")
-            else 0
-        )
+        usage = getattr(response, "usage", None)
+        input_tokens = getattr(usage, "input_tokens", 0)
+        output_tokens = getattr(usage, "output_tokens", 0)
+        tokens_used = input_tokens + output_tokens
+        LOGGER.info("ai_call input_tokens=%d output_tokens=%d", input_tokens, output_tokens)
         raw_text = response.content[0].text if response.content else ""
     except Exception as exc:
         LOGGER.error("ai_analyst_api_error error=%s", exc)
         return None
 
-    # Parse and validate JSON response
     analysis = _parse_response(raw_text, current_params, trade_summary, tokens_used, duration_ms)
     if analysis is None:
         LOGGER.error("ai_analyst_parse_failed raw_length=%d", len(raw_text))
@@ -173,11 +166,22 @@ def generate_commentary(
         response = client.messages.create(
             model=_MODEL,
             max_tokens=_MAX_TOKENS_COMMENTARY,
-            system=(
-                "You are a trading analyst. Provide brief, factual commentary on prediction "
-                "market trading performance. No jargon, no fluff."
-            ),
+            system=[{
+                "type": "text",
+                "text": (
+                    "You are a trading analyst. Provide brief, factual commentary on prediction "
+                    "market trading performance. No jargon, no fluff."
+                ),
+                "cache_control": {"type": "ephemeral"},
+            }],
             messages=[{"role": "user", "content": prompt}],
+            extra_headers={"anthropic-beta": "prompt-caching-2024-07-31"},
+        )
+        usage = getattr(response, "usage", None)
+        LOGGER.info(
+            "ai_call input_tokens=%d output_tokens=%d",
+            getattr(usage, "input_tokens", 0),
+            getattr(usage, "output_tokens", 0),
         )
         return response.content[0].text.strip() if response.content else ""
     except Exception as exc:
@@ -188,6 +192,14 @@ def generate_commentary(
 # ---------------------------------------------------------------------------
 # Internals
 # ---------------------------------------------------------------------------
+
+_SLIM_FIELDS = ("strategy", "direction", "edge_pct", "pnl_pct", "win", "side", "notional", "symbol")
+
+
+def _slim_fills(fills: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return fills with only the fields needed for analysis."""
+    return [{k: f[k] for k in _SLIM_FIELDS if k in f} for f in fills]
+
 
 def _summarize_fills(fills: list[dict[str, Any]]) -> dict[str, Any]:
     """Build trade summary statistics from raw fill records."""
@@ -297,13 +309,11 @@ def _parse_response(
         LOGGER.error("ai_response_json_parse_failed error=%s raw_preview=%.200s", exc, raw)
         return None
 
-    # Extract and coerce proposed_params
     proposed_raw = data.get("proposed_params", {})
     if not isinstance(proposed_raw, dict):
         LOGGER.error("ai_response_proposed_params_not_dict type=%s", type(proposed_raw))
         return None
 
-    # Build proposed params: start from current, apply AI changes for known keys only
     proposed: dict[str, float] = dict(current_params)
     known_params = _MULTIPLIER_PARAMS | _BONUS_PARAMS
     for k, v in proposed_raw.items():
