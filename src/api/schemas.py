@@ -392,6 +392,7 @@ class TradingStatusResponse(BaseModel):
     paper_trading_enabled: bool = False
     live_trading_enabled: bool = False
     execution_adapter: str = "alpaca_execution_disabled"
+    poly_wallet_address: str = ""
 
 
 class DashboardSummaryResponse(BaseModel):
@@ -399,7 +400,7 @@ class DashboardSummaryResponse(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    equity: float
+    equity: Optional[float]
     daily_pnl: float
     total_pnl: float
     open_positions: int

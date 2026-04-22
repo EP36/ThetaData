@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import MISSING, dataclass, field
+import json
 import logging
 import os
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Optional
+import urllib.error
+import urllib.request
 from uuid import uuid4
 
 import numpy as np
@@ -55,6 +58,39 @@ from src.strategies import get_strategy_class, list_strategies
 
 LOGGER = logging.getLogger("theta.api.services")
 RISK_PER_TRADE_PCT = 0.01
+
+# USDC on Polygon (native USDC, 6 decimals)
+_POLYGON_RPC_URL = "https://polygon-rpc.com"
+_POLYGON_USDC_CONTRACT = "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359"
+_BALANCE_OF_SELECTOR = "0x70a08231"  # keccak256("balanceOf(address)")[:4]
+
+
+def _fetch_polygon_usdc_balance(wallet_address: str) -> Optional[float]:
+    """Return USDC balance (6 decimals) for *wallet_address* on Polygon, or None on failure."""
+    if not wallet_address:
+        return None
+    padded = wallet_address.lower().removeprefix("0x").zfill(64)
+    call_data = _BALANCE_OF_SELECTOR + padded
+    payload = json.dumps({
+        "jsonrpc": "2.0",
+        "method": "eth_call",
+        "params": [{"to": _POLYGON_USDC_CONTRACT, "data": call_data}, "latest"],
+        "id": 1,
+    }).encode()
+    try:
+        req = urllib.request.Request(
+            _POLYGON_RPC_URL,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            body = json.loads(resp.read())
+        result = body.get("result", "0x0")
+        raw = int(result, 16)
+        return raw / 1_000_000  # USDC has 6 decimals
+    except Exception:
+        LOGGER.warning("polygon_usdc_balance_fetch_failed wallet=%s", wallet_address[:10] + "...")
+        return None
 MAX_POSITION_SIZE_CAP_PCT = 0.25
 MAX_OPEN_POSITIONS_CAP = 3
 AnalyticsSource = Literal["execution", "paper", "backtest"]
@@ -325,6 +361,7 @@ class TradingApiService:
             paper_trading_enabled=settings.paper_trading_enabled,
             live_trading_enabled=settings.live_trading_enabled,
             execution_adapter=settings.execution_adapter,
+            poly_wallet_address=settings.poly_wallet_address,
         )
 
     def _dashboard_system_status(self, open_positions: int) -> str:
@@ -799,6 +836,29 @@ class TradingApiService:
         """Return current dashboard summary from persisted paper state when available."""
         if self.repository is not None:
             self.kill_switch_enabled = self.repository.get_global_kill_switch()
+            alerts = ["kill_switch_enabled"] if self.kill_switch_enabled else []
+
+            trading_status = self._trading_status()
+            last_run_id = self.last_run_id
+            if last_run_id is None:
+                recent_runs = self.repository.recent_runs(limit=1)
+                if recent_runs:
+                    last_run_id = str(recent_runs[0].get("run_id") or "")
+                    if not last_run_id:
+                        last_run_id = None
+
+            if trading_status.trading_venue == "polymarket":
+                equity = _fetch_polygon_usdc_balance(trading_status.poly_wallet_address)
+                return DashboardSummaryResponse(
+                    equity=equity,
+                    daily_pnl=0.0,
+                    total_pnl=0.0,
+                    open_positions=0,
+                    system_status=self._dashboard_system_status(0),
+                    risk_alerts=alerts,
+                    last_run_id=last_run_id,
+                    trading_status=trading_status,
+                )
 
             snapshot = self.repository.load_portfolio_snapshot(
                 default_cash=self._initial_capital_for_bootstrap()
@@ -813,15 +873,6 @@ class TradingApiService:
             equity = float(snapshot.cash + position_value)
             daily_pnl = float(equity - snapshot.day_start_equity)
             total_pnl = float(equity - self._initial_capital_for_bootstrap())
-            alerts = ["kill_switch_enabled"] if self.kill_switch_enabled else []
-
-            last_run_id = self.last_run_id
-            if last_run_id is None:
-                recent_runs = self.repository.recent_runs(limit=1)
-                if recent_runs:
-                    last_run_id = str(recent_runs[0].get("run_id") or "")
-                    if not last_run_id:
-                        last_run_id = None
 
             return DashboardSummaryResponse(
                 equity=equity,
@@ -831,7 +882,7 @@ class TradingApiService:
                 system_status=self._dashboard_system_status(open_positions),
                 risk_alerts=alerts,
                 last_run_id=last_run_id,
-                trading_status=self._trading_status(),
+                trading_status=trading_status,
             )
 
         if self.last_backtest is None or self.last_backtest.equity_curve.empty:

@@ -4,9 +4,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import json
+import logging
 import os
 from pathlib import Path
+import re
 from typing import Any
+
+LOGGER = logging.getLogger(__name__)
+
+_EVM_ADDRESS_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
 
 from dotenv import load_dotenv
 
@@ -243,6 +249,7 @@ class DeploymentSettings:
     alpaca_api_key: str = ""
     alpaca_api_secret: str = ""
     alpaca_base_url: str = "https://paper-api.alpaca.markets"
+    poly_wallet_address: str = ""
 
     def __post_init__(self) -> None:
         """Validate deployment-level constraints and safety gates."""
@@ -543,6 +550,25 @@ class DeploymentSettings:
                 raise ValueError(
                     "auth secrets must not use development placeholder values in production/staging"
                 )
+
+        self.poly_wallet_address = self.poly_wallet_address.strip()
+        if self.poly_wallet_address and not _EVM_ADDRESS_RE.match(self.poly_wallet_address):
+            raise ValueError(
+                "POLY_WALLET_ADDRESS must be a valid EVM address (0x followed by 40 hex chars)"
+            )
+
+        LOGGER.info(
+            "deployment_settings_loaded "
+            "venue=%s alpaca_mode=%s poly_mode=%s signal=%s "
+            "poly_wallet_configured=%s trading_enabled=%s dry_run=%s",
+            self.trading_venue,
+            self.alpaca_trading_mode,
+            self.poly_trading_mode,
+            self.signal_provider,
+            bool(self.poly_wallet_address),
+            self.worker_enable_trading,
+            self.worker_dry_run,
+        )
 
         if self.strict_env_validation or self.app_env == "production":
             self._validate_strict_requirements()
@@ -863,4 +889,5 @@ class DeploymentSettings:
             alpaca_api_key=read_alpaca_api_key(),
             alpaca_api_secret=read_alpaca_api_secret(),
             alpaca_base_url=read_alpaca_execution_base_url(),
+            poly_wallet_address=os.getenv("POLY_WALLET_ADDRESS", "").strip(),
         )
