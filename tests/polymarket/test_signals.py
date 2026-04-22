@@ -489,14 +489,16 @@ class TestAtrRatio:
 # ---------------------------------------------------------------------------
 
 class TestFetchBtcSignals:
-    def test_missing_credentials_returns_unavailable(self):
+    def test_missing_credentials_returns_unavailable(self, monkeypatch):
+        monkeypatch.setenv("SIGNAL_PROVIDER", "alpaca")
         with patch("src.polymarket.alpaca_signals.read_alpaca_api_key", return_value=""), \
              patch("src.polymarket.alpaca_signals.read_alpaca_api_secret", return_value=""):
             result = fetch_btc_signals()
         assert result.data_available is False
 
-    def test_http_error_returns_unavailable(self):
+    def test_http_error_returns_unavailable(self, monkeypatch):
         import httpx
+        monkeypatch.setenv("SIGNAL_PROVIDER", "alpaca")
         with patch("src.polymarket.alpaca_signals.read_alpaca_api_key", return_value="key"), \
              patch("src.polymarket.alpaca_signals.read_alpaca_api_secret", return_value="sec"), \
              patch("httpx.Client") as mock_client:
@@ -504,7 +506,8 @@ class TestFetchBtcSignals:
             result = fetch_btc_signals()
         assert result.data_available is False
 
-    def test_empty_bars_returns_unavailable(self):
+    def test_empty_bars_returns_unavailable(self, monkeypatch):
+        monkeypatch.setenv("SIGNAL_PROVIDER", "alpaca")
         with patch("src.polymarket.alpaca_signals.read_alpaca_api_key", return_value="key"), \
              patch("src.polymarket.alpaca_signals.read_alpaca_api_secret", return_value="sec"), \
              patch("httpx.Client") as mock_client:
@@ -514,7 +517,8 @@ class TestFetchBtcSignals:
             result = fetch_btc_signals()
         assert result.data_available is False
 
-    def test_valid_response_returns_signals(self):
+    def test_valid_response_returns_signals(self, monkeypatch):
+        monkeypatch.setenv("SIGNAL_PROVIDER", "alpaca")
         bars = [
             {"t": f"2024-01-01T{h:02d}:00:00Z", "c": 95000.0 + h * 10, "h": 95100.0 + h * 10,
              "l": 94900.0 + h * 10, "v": 100.0 + h}
@@ -531,6 +535,32 @@ class TestFetchBtcSignals:
         assert result.price_usd > 0
         assert isinstance(result.rsi_14, float)
         assert result.macd_crossover in ("bullish", "bearish", "none")
+
+    def test_data_provider_synthetic_does_not_disable_alpaca_signals(self, monkeypatch):
+        monkeypatch.setenv("DATA_PROVIDER", "synthetic")
+        monkeypatch.setenv("SIGNAL_PROVIDER", "alpaca")
+        bars = [
+            {"t": f"2024-01-01T{h:02d}:00:00Z", "c": 95000.0 + h * 10, "h": 95100.0 + h * 10,
+             "l": 94900.0 + h * 10, "v": 100.0 + h}
+            for h in range(50)
+        ]
+        with patch("src.polymarket.alpaca_signals.read_alpaca_api_key", return_value="key"), \
+             patch("src.polymarket.alpaca_signals.read_alpaca_api_secret", return_value="sec"), \
+             patch("httpx.Client") as mock_client:
+            resp = MagicMock()
+            resp.json.return_value = {"bars": {"BTC/USD": bars}}
+            mock_client.return_value.__enter__.return_value.get.return_value = resp
+            result = fetch_btc_signals()
+
+        assert result.data_available is True
+
+    def test_signal_provider_synthetic_bypasses_alpaca_fetch(self, monkeypatch):
+        monkeypatch.setenv("SIGNAL_PROVIDER", "synthetic")
+        with patch("httpx.Client") as mock_client:
+            result = fetch_btc_signals()
+
+        assert result.data_available is False
+        mock_client.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

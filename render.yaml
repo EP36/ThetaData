@@ -36,6 +36,14 @@ services:
         value: "false"
       - key: LIVE_TRADING
         value: "false"
+      - key: SIGNAL_PROVIDER
+        value: synthetic
+      - key: TRADING_VENUE
+        value: alpaca
+      - key: ALPACA_TRADING_MODE
+        value: disabled
+      - key: POLY_TRADING_MODE
+        value: disabled
       - key: CORS_ALLOWED_ORIGINS
         value: "https://trauto.onrender.com"
       - key: AUTH_SESSION_SECRET
@@ -77,6 +85,14 @@ services:
         value: "false"
       - key: LIVE_TRADING
         value: "false"
+      - key: SIGNAL_PROVIDER
+        value: synthetic
+      - key: TRADING_VENUE
+        value: alpaca
+      - key: ALPACA_TRADING_MODE
+        value: disabled
+      - key: POLY_TRADING_MODE
+        value: disabled
       - key: CORS_ALLOWED_ORIGINS
         value: "https://trauto.onrender.com"
       - key: AUTH_SESSION_SECRET

@@ -8,6 +8,26 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from src.config.alpaca import read_alpaca_api_key, read_alpaca_api_secret
+
+SUPPORTED_SIGNAL_PROVIDERS = ("alpaca", "synthetic")
+SUPPORTED_POLY_TRADING_MODES = ("disabled", "dry_run", "live")
+SUPPORTED_ALPACA_TRADING_MODES = ("disabled", "paper", "live")
+
+
+def _normalize_signal_provider(value: str) -> str:
+    normalized = value.strip().lower()
+    if normalized in {"", "none"}:
+        return "synthetic"
+    return normalized
+
+
+def _normalize_trading_venue(value: str) -> str:
+    normalized = value.strip().lower()
+    if normalized == "equities":
+        return "alpaca"
+    return normalized
+
 
 @dataclass(slots=True)
 class PolymarketConfig:
@@ -31,6 +51,9 @@ class PolymarketConfig:
     trading_mode: str = "dry_run"      # deployment-level mode: dry_run | live
     trading_venue: str = "polymarket"  # must be polymarket for live execution
     live_trading_enabled: bool = False # explicit global live opt-in
+    signal_provider: str = "synthetic" # BTC signal source; independent of venue
+    alpaca_trading_mode: str = "disabled"
+    poly_trading_mode: str = "dry_run"
     min_volume_24h: float = 10_000.0   # minimum 24h USDC volume to trade a market
     positions_path: str = "data/polymarket_positions.json"
     # --- Phase 3: position monitoring ---
@@ -75,14 +98,50 @@ class PolymarketConfig:
         if self.unhedged_grace_minutes < 0:
             raise ValueError("unhedged_grace_minutes must be non-negative")
         self.trading_mode = self.trading_mode.strip().lower()
-        self.trading_venue = self.trading_venue.strip().lower()
-        if not self.dry_run:
+        self.trading_venue = _normalize_trading_venue(self.trading_venue)
+        self.signal_provider = _normalize_signal_provider(self.signal_provider)
+        self.alpaca_trading_mode = self.alpaca_trading_mode.strip().lower()
+        self.poly_trading_mode = self.poly_trading_mode.strip().lower()
+        if self.signal_provider not in SUPPORTED_SIGNAL_PROVIDERS:
+            raise ValueError(
+                "signal_provider must be one of "
+                f"{list(SUPPORTED_SIGNAL_PROVIDERS)}"
+            )
+        if self.alpaca_trading_mode not in SUPPORTED_ALPACA_TRADING_MODES:
+            raise ValueError(
+                "alpaca_trading_mode must be one of "
+                f"{list(SUPPORTED_ALPACA_TRADING_MODES)}"
+            )
+        if self.poly_trading_mode not in SUPPORTED_POLY_TRADING_MODES:
+            raise ValueError(
+                "poly_trading_mode must be one of "
+                f"{list(SUPPORTED_POLY_TRADING_MODES)}"
+            )
+        if self.trading_venue != "polymarket" and self.poly_trading_mode != "disabled":
+            raise ValueError("POLY_TRADING_MODE requires TRADING_VENUE=polymarket")
+        if self.alpaca_trading_mode != "disabled":
+            raise ValueError(
+                "ALPACA_TRADING_MODE must be disabled for Polymarket execution"
+            )
+        if not self.dry_run and self.poly_trading_mode != "live":
+            raise ValueError("POLY_DRY_RUN=false requires POLY_TRADING_MODE=live")
+        if self.poly_trading_mode == "live":
             if self.trading_mode != "live":
-                raise ValueError("POLY_DRY_RUN=false requires TRADING_MODE=live")
+                raise ValueError("POLY_TRADING_MODE=live requires TRADING_MODE=live")
             if self.trading_venue != "polymarket":
-                raise ValueError("POLY_DRY_RUN=false requires TRADING_VENUE=polymarket")
+                raise ValueError("POLY_TRADING_MODE=live requires TRADING_VENUE=polymarket")
             if not self.live_trading_enabled:
-                raise ValueError("POLY_DRY_RUN=false requires LIVE_TRADING=true")
+                raise ValueError("POLY_TRADING_MODE=live requires LIVE_TRADING=true")
+            if self.dry_run:
+                raise ValueError("POLY_TRADING_MODE=live requires POLY_DRY_RUN=false")
+            if (
+                self.signal_provider == "alpaca"
+                and (not read_alpaca_api_key() or not read_alpaca_api_secret())
+            ):
+                raise ValueError(
+                    "SIGNAL_PROVIDER=alpaca requires ALPACA_API_KEY and "
+                    "ALPACA_API_SECRET for live Polymarket trading"
+                )
 
     @classmethod
     def from_env(cls, env_path: str | Path | None = None) -> "PolymarketConfig":
@@ -97,6 +156,18 @@ class PolymarketConfig:
             if raw is None:
                 return default
             return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+        dry_run = _bool("POLY_DRY_RUN", default=True)
+        poly_trading_mode = os.getenv("POLY_TRADING_MODE", "").strip().lower()
+        if not poly_trading_mode:
+            poly_trading_mode = "dry_run" if dry_run else "live"
+        trading_mode = os.getenv("TRADING_MODE", "").strip().lower()
+        if not trading_mode:
+            trading_mode = "live" if poly_trading_mode == "live" else poly_trading_mode
+        live_trading_enabled = _bool(
+            "LIVE_TRADING",
+            default=poly_trading_mode == "live",
+        )
 
         return cls(
             api_key=os.getenv("POLY_API_KEY", ""),
@@ -114,10 +185,13 @@ class PolymarketConfig:
             max_trade_usdc=float(os.getenv("POLY_MAX_TRADE_USDC", "500.0")),
             max_positions=int(os.getenv("POLY_MAX_POSITIONS", "5")),
             daily_loss_limit=float(os.getenv("POLY_DAILY_LOSS_LIMIT", "200.0")),
-            dry_run=_bool("POLY_DRY_RUN", default=True),
-            trading_mode=os.getenv("TRADING_MODE", "dry_run"),
+            dry_run=dry_run,
+            trading_mode=trading_mode,
             trading_venue=os.getenv("TRADING_VENUE", "polymarket"),
-            live_trading_enabled=_bool("LIVE_TRADING", default=False),
+            live_trading_enabled=live_trading_enabled,
+            signal_provider=os.getenv("SIGNAL_PROVIDER", "synthetic"),
+            alpaca_trading_mode=os.getenv("ALPACA_TRADING_MODE", "disabled"),
+            poly_trading_mode=poly_trading_mode,
             min_volume_24h=float(os.getenv("POLY_MIN_VOLUME_24H", "10000.0")),
             positions_path=os.getenv(
                 "POLY_POSITIONS_PATH", "data/polymarket_positions.json"

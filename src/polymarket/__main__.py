@@ -71,12 +71,17 @@ def main() -> None:
     config = PolymarketConfig.from_env()
     LOGGER.info(
         "polymarket_runtime_mode active_trading_mode=%s active_venue=%s "
-        "execution_adapter=polymarket_clob paper_trading=%s dry_run=%s live_trading=%s",
+        "execution_adapter=polymarket_clob paper_trading=%s dry_run=%s "
+        "live_trading=%s signal_provider=%s alpaca_trading_mode=%s "
+        "poly_trading_mode=%s",
         config.trading_mode,
         config.trading_venue,
         False,
         config.dry_run,
         config.live_trading_enabled,
+        config.signal_provider,
+        config.alpaca_trading_mode,
+        config.poly_trading_mode,
     )
 
     LOGGER.info(

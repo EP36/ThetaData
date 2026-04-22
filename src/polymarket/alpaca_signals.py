@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 import time
 from dataclasses import dataclass, field
 
@@ -28,6 +29,11 @@ _CRYPTO_PATH = "/v1beta3/crypto/us/bars"
 _SYMBOL = "BTC/USD"
 _TIMEFRAME = "1H"
 _BAR_LIMIT = 120   # ~5 days of hourly bars; enough for all indicators
+
+
+def _read_signal_provider() -> str:
+    """Return the configured BTC signal provider."""
+    return os.getenv("SIGNAL_PROVIDER", "synthetic").strip().lower() or "synthetic"
 
 # ---------------------------------------------------------------------------
 # BtcSignals dataclass
@@ -185,6 +191,14 @@ def fetch_btc_signals(
     Returns a BtcSignals with data_available=False when credentials are
     absent or the Alpaca request fails.
     """
+    signal_provider = _read_signal_provider()
+    if signal_provider != "alpaca":
+        LOGGER.info(
+            "btc_signals_unavailable reason=signal_provider_disabled signal_provider=%s",
+            signal_provider,
+        )
+        return BtcSignals(data_available=False, fetched_at=time.monotonic())
+
     api_key = read_alpaca_api_key()
     api_secret = read_alpaca_api_secret()
     if not api_key or not api_secret:

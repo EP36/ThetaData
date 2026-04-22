@@ -35,8 +35,22 @@ SUPPORTED_TRADING_MODES = (
     "live",
 )
 SUPPORTED_TRADING_VENUES = (
-    "equities",
+    "alpaca",
     "polymarket",
+)
+SUPPORTED_SIGNAL_PROVIDERS = (
+    "alpaca",
+    "synthetic",
+)
+SUPPORTED_ALPACA_TRADING_MODES = (
+    "disabled",
+    "paper",
+    "live",
+)
+SUPPORTED_POLY_TRADING_MODES = (
+    "disabled",
+    "dry_run",
+    "live",
 )
 POLYMARKET_CREDENTIAL_ENV_VARS = (
     "POLY_API_KEY",
@@ -105,6 +119,22 @@ def _normalize_symbols(symbols: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(normalized)
 
 
+def _normalize_trading_venue(value: str) -> str:
+    """Normalize venue names, including legacy equities wording."""
+    normalized = value.strip().lower()
+    if normalized == "equities":
+        return "alpaca"
+    return normalized
+
+
+def _normalize_signal_provider(value: str) -> str:
+    """Normalize signal provider names."""
+    normalized = value.strip().lower()
+    if normalized in {"", "none"}:
+        return "synthetic"
+    return normalized
+
+
 @dataclass(slots=True)
 class DeploymentSettings:
     """Settings for web/worker deployment, including safety toggles."""
@@ -131,10 +161,13 @@ class DeploymentSettings:
     auth_bootstrap_admin_email: str = ""
     auth_bootstrap_admin_password: str = ""
 
-    trading_mode: str = "dry_run"
-    trading_venue: str = "equities"
+    trading_mode: str = "disabled"
+    trading_venue: str = "alpaca"
     live_trading_enabled: bool = False
     data_provider: str = "synthetic"
+    signal_provider: str = "synthetic"
+    alpaca_trading_mode: str = "disabled"
+    poly_trading_mode: str = "disabled"
     polymarket_dry_run: bool = True
     polymarket_credentials_configured: bool = False
     missing_polymarket_credentials: tuple[str, ...] = ()
@@ -340,8 +373,22 @@ class DeploymentSettings:
                 )
 
         self.trading_mode = self.trading_mode.strip().lower()
-        self.trading_venue = self.trading_venue.strip().lower()
+        self.trading_venue = _normalize_trading_venue(self.trading_venue)
         self.data_provider = self.data_provider.strip().lower()
+        self.signal_provider = _normalize_signal_provider(self.signal_provider)
+        self.alpaca_trading_mode = self.alpaca_trading_mode.strip().lower()
+        self.poly_trading_mode = self.poly_trading_mode.strip().lower()
+        if (
+            self.trading_venue == "alpaca"
+            and self.alpaca_trading_mode == "disabled"
+            and self.paper_trading_enabled
+        ):
+            self.alpaca_trading_mode = "paper"
+        if self.trading_venue == "polymarket" and self.poly_trading_mode == "disabled":
+            if not self.polymarket_dry_run:
+                self.poly_trading_mode = "live"
+            elif self.worker_enable_trading:
+                self.poly_trading_mode = "dry_run"
         if self.trading_mode not in SUPPORTED_TRADING_MODES:
             raise ValueError(
                 "trading_mode must be one of "
@@ -352,45 +399,91 @@ class DeploymentSettings:
                 "trading_venue must be one of "
                 f"{list(SUPPORTED_TRADING_VENUES)}"
             )
+        if self.signal_provider not in SUPPORTED_SIGNAL_PROVIDERS:
+            raise ValueError(
+                "signal_provider must be one of "
+                f"{list(SUPPORTED_SIGNAL_PROVIDERS)}"
+            )
+        if self.alpaca_trading_mode not in SUPPORTED_ALPACA_TRADING_MODES:
+            raise ValueError(
+                "alpaca_trading_mode must be one of "
+                f"{list(SUPPORTED_ALPACA_TRADING_MODES)}"
+            )
+        if self.poly_trading_mode not in SUPPORTED_POLY_TRADING_MODES:
+            raise ValueError(
+                "poly_trading_mode must be one of "
+                f"{list(SUPPORTED_POLY_TRADING_MODES)}"
+            )
 
         if self.trading_venue == "polymarket":
+            if self.alpaca_trading_mode != "disabled":
+                raise ValueError(
+                    "ALPACA_TRADING_MODE must be disabled when TRADING_VENUE=polymarket"
+                )
             if self.paper_trading_enabled:
                 raise ValueError(
                     "PAPER_TRADING must remain false when TRADING_VENUE=polymarket"
                 )
-            if self.data_provider == "alpaca":
-                raise ValueError(
-                    "DATA_PROVIDER=alpaca is ambiguous when TRADING_VENUE=polymarket"
-                )
             if self.trading_mode == "paper":
                 raise ValueError(
-                    "TRADING_MODE=paper is only supported for TRADING_VENUE=equities"
+                    "TRADING_MODE=paper is only supported for TRADING_VENUE=alpaca"
                 )
-            if not self.polymarket_dry_run and self.trading_mode != "live":
+            if self.poly_trading_mode == "live" and self.trading_mode not in {"live", "disabled"}:
                 raise ValueError(
-                    "POLY_DRY_RUN=false requires TRADING_MODE=live when TRADING_VENUE=polymarket"
+                    "POLY_TRADING_MODE=live requires TRADING_MODE=live when TRADING_MODE is set"
+                )
+            if self.poly_trading_mode == "dry_run" and not self.polymarket_dry_run:
+                raise ValueError(
+                    "POLY_TRADING_MODE=dry_run requires POLY_DRY_RUN=true"
+                )
+            if self.poly_trading_mode == "disabled" and not self.polymarket_dry_run:
+                raise ValueError(
+                    "POLY_DRY_RUN=false requires POLY_TRADING_MODE=live"
+                )
+            if not self.polymarket_dry_run and self.poly_trading_mode != "live":
+                raise ValueError(
+                    "POLY_DRY_RUN=false requires POLY_TRADING_MODE=live when TRADING_VENUE=polymarket"
+                )
+        else:
+            if self.poly_trading_mode != "disabled":
+                raise ValueError(
+                    "POLY_TRADING_MODE must be disabled when TRADING_VENUE=alpaca"
+                )
+            if not self.polymarket_dry_run:
+                raise ValueError(
+                    "POLY_DRY_RUN=false requires TRADING_VENUE=polymarket"
+                )
+            if self.alpaca_trading_mode == "live":
+                raise ValueError(
+                    "ALPACA_TRADING_MODE=live is not supported by this codebase"
                 )
 
-        if self.trading_mode == "live":
+        if self.alpaca_trading_mode != "disabled" and self.poly_trading_mode != "disabled":
+            raise ValueError(
+                "Only one venue trading mode may be active; disable either "
+                "ALPACA_TRADING_MODE or POLY_TRADING_MODE"
+            )
+
+        if self.poly_trading_mode == "live":
             if self.trading_venue != "polymarket":
                 raise ValueError(
-                    "live trading is supported only for TRADING_VENUE=polymarket"
+                    "POLY_TRADING_MODE=live requires TRADING_VENUE=polymarket"
                 )
             if not self.live_trading_enabled:
                 raise ValueError(
-                    "TRADING_MODE=live requires LIVE_TRADING=true"
+                    "POLY_TRADING_MODE=live requires LIVE_TRADING=true"
                 )
             if not self.worker_enable_trading:
                 raise ValueError(
-                    "TRADING_MODE=live requires WORKER_ENABLE_TRADING=true"
+                    "POLY_TRADING_MODE=live requires WORKER_ENABLE_TRADING=true"
                 )
             if self.worker_dry_run:
                 raise ValueError(
-                    "TRADING_MODE=live requires WORKER_DRY_RUN=false"
+                    "POLY_TRADING_MODE=live requires WORKER_DRY_RUN=false"
                 )
             if self.polymarket_dry_run:
                 raise ValueError(
-                    "TRADING_MODE=live requires POLY_DRY_RUN=false"
+                    "POLY_TRADING_MODE=live requires POLY_DRY_RUN=false"
                 )
             if not self.polymarket_credentials_configured:
                 missing = (
@@ -398,24 +491,36 @@ class DeploymentSettings:
                     or POLYMARKET_CREDENTIAL_ENV_VARS
                 )
                 raise ValueError(
-                    "TRADING_MODE=live with TRADING_VENUE=polymarket requires "
+                    "POLY_TRADING_MODE=live with TRADING_VENUE=polymarket requires "
                     "Polymarket credentials: "
                     + ", ".join(missing)
                 )
+            if (
+                self.signal_provider == "alpaca"
+                and (not self.alpaca_api_key or not self.alpaca_api_secret)
+            ):
+                raise ValueError(
+                    "SIGNAL_PROVIDER=alpaca requires ALPACA_API_KEY and "
+                    "ALPACA_API_SECRET for live Polymarket trading"
+                )
         elif self.live_trading_enabled:
             raise ValueError(
-                "LIVE_TRADING=true requires TRADING_MODE=live and TRADING_VENUE=polymarket"
+                "LIVE_TRADING=true requires POLY_TRADING_MODE=live and TRADING_VENUE=polymarket"
             )
 
-        # Safety gate: equities worker trading requires explicit paper mode unless dry-run is on.
+        # Safety gate: Alpaca worker trading requires explicit paper mode unless dry-run is on.
         if (
-            self.trading_venue == "equities"
+            self.trading_venue == "alpaca"
             and self.worker_enable_trading
-            and not self.paper_trading_enabled
             and not self.worker_dry_run
+            and (
+                self.alpaca_trading_mode != "paper"
+                or not self.paper_trading_enabled
+            )
         ):
             raise ValueError(
-                "worker_enable_trading requires paper_trading_enabled=true unless WORKER_DRY_RUN=true"
+                "Alpaca worker execution requires ALPACA_TRADING_MODE=paper "
+                "and PAPER_TRADING=true unless WORKER_DRY_RUN=true"
             )
 
         if self.app_env in {"production", "staging"} and self.auth_enabled:
@@ -447,7 +552,9 @@ class DeploymentSettings:
         """Return the execution adapter selected by venue/mode."""
         if self.trading_venue == "polymarket":
             return "polymarket_clob"
-        return "paper_trading_executor"
+        if self.alpaca_trading_mode == "paper":
+            return "paper_trading_executor"
+        return "alpaca_execution_disabled"
 
     def _validate_strict_requirements(self) -> None:
         """Validate environment values required for unattended deployment."""
@@ -528,21 +635,54 @@ class DeploymentSettings:
         paper_trading_enabled = _read_bool("PAPER_TRADING", default=False)
         worker_enable_trading = _read_bool("WORKER_ENABLE_TRADING", default=False)
         worker_dry_run = _read_bool("WORKER_DRY_RUN", default=True)
+        raw_live_trading = os.getenv("LIVE_TRADING")
         live_trading_enabled = _read_bool("LIVE_TRADING", default=False)
         polymarket_dry_run = _read_bool("POLY_DRY_RUN", default=True)
-        trading_venue = os.getenv("TRADING_VENUE", "equities").strip().lower()
+        trading_venue = _normalize_trading_venue(os.getenv("TRADING_VENUE", "alpaca"))
         requested_trading_mode = os.getenv("TRADING_MODE", "").strip().lower()
+        requested_alpaca_trading_mode = os.getenv("ALPACA_TRADING_MODE", "").strip().lower()
+        requested_poly_trading_mode = os.getenv("POLY_TRADING_MODE", "").strip().lower()
+        if requested_alpaca_trading_mode:
+            alpaca_trading_mode = requested_alpaca_trading_mode
+            if (
+                trading_venue == "alpaca"
+                and alpaca_trading_mode == "disabled"
+                and paper_trading_enabled
+            ):
+                raise ValueError(
+                    "ALPACA_TRADING_MODE=disabled requires PAPER_TRADING=false"
+                )
+        elif trading_venue == "alpaca" and paper_trading_enabled:
+            alpaca_trading_mode = "paper"
+        else:
+            alpaca_trading_mode = "disabled"
+
+        if requested_poly_trading_mode:
+            poly_trading_mode = requested_poly_trading_mode
+        elif trading_venue == "polymarket":
+            if not polymarket_dry_run or live_trading_enabled:
+                poly_trading_mode = "live"
+            elif worker_enable_trading:
+                poly_trading_mode = "dry_run"
+            else:
+                poly_trading_mode = "disabled"
+        else:
+            poly_trading_mode = "disabled"
+        if poly_trading_mode == "live" and raw_live_trading is None:
+            live_trading_enabled = True
+
         if requested_trading_mode:
             trading_mode = requested_trading_mode
-        elif live_trading_enabled:
-            trading_mode = "live"
-        elif worker_dry_run:
-            trading_mode = "dry_run"
-        elif paper_trading_enabled:
+        elif trading_venue == "polymarket":
+            trading_mode = "live" if poly_trading_mode == "live" else poly_trading_mode
+        elif alpaca_trading_mode == "paper":
             trading_mode = "paper"
+        elif worker_enable_trading and worker_dry_run:
+            trading_mode = "dry_run"
         else:
             trading_mode = "disabled"
         data_provider = os.getenv("DATA_PROVIDER", "synthetic").strip().lower() or "synthetic"
+        signal_provider = _normalize_signal_provider(os.getenv("SIGNAL_PROVIDER", "synthetic"))
         missing_polymarket_credentials = tuple(
             name
             for name in POLYMARKET_CREDENTIAL_ENV_VARS
@@ -596,6 +736,9 @@ class DeploymentSettings:
             trading_venue=trading_venue,
             live_trading_enabled=live_trading_enabled,
             data_provider=data_provider,
+            signal_provider=signal_provider,
+            alpaca_trading_mode=alpaca_trading_mode,
+            poly_trading_mode=poly_trading_mode,
             polymarket_dry_run=polymarket_dry_run,
             polymarket_credentials_configured=not missing_polymarket_credentials,
             missing_polymarket_credentials=missing_polymarket_credentials,

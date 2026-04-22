@@ -46,7 +46,9 @@ def _log_runtime_mode(settings: DeploymentSettings) -> None:
     LOGGER.info(
         "worker_runtime_mode active_trading_mode=%s active_venue=%s "
         "execution_adapter=%s paper_trading=%s worker_dry_run=%s "
-        "live_trading=%s worker_enable_trading=%s poly_dry_run=%s",
+        "live_trading=%s worker_enable_trading=%s poly_dry_run=%s "
+        "signal_provider=%s data_provider=%s alpaca_trading_mode=%s "
+        "poly_trading_mode=%s",
         settings.trading_mode,
         settings.trading_venue,
         settings.execution_adapter,
@@ -55,6 +57,10 @@ def _log_runtime_mode(settings: DeploymentSettings) -> None:
         settings.live_trading_enabled,
         settings.worker_enable_trading,
         settings.polymarket_dry_run,
+        settings.signal_provider,
+        settings.data_provider,
+        settings.alpaca_trading_mode,
+        settings.poly_trading_mode,
     )
 
 
@@ -64,6 +70,9 @@ def _run_polymarket_worker(settings: DeploymentSettings) -> None:
         LOGGER.info(
             "polymarket_worker_skipped reason=worker_enable_trading_false"
         )
+        return
+    if settings.poly_trading_mode == "disabled":
+        LOGGER.info("polymarket_worker_skipped reason=poly_trading_mode_disabled")
         return
     if not settings.polymarket_credentials_configured:
         LOGGER.warning(

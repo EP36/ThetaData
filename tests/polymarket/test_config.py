@@ -102,6 +102,7 @@ def test_live_config_requires_explicit_live_mode(
 ) -> None:
     _set_required(monkeypatch)
     monkeypatch.setenv("POLY_DRY_RUN", "false")
+    monkeypatch.setenv("POLY_TRADING_MODE", "live")
     monkeypatch.setenv("TRADING_VENUE", "polymarket")
     monkeypatch.setenv("TRADING_MODE", "dry_run")
     monkeypatch.setenv("LIVE_TRADING", "false")
@@ -115,9 +116,13 @@ def test_live_config_loads_with_explicit_live_polymarket_mode(
 ) -> None:
     _set_required(monkeypatch)
     monkeypatch.setenv("POLY_DRY_RUN", "false")
+    monkeypatch.setenv("POLY_TRADING_MODE", "live")
     monkeypatch.setenv("TRADING_VENUE", "polymarket")
     monkeypatch.setenv("TRADING_MODE", "live")
     monkeypatch.setenv("LIVE_TRADING", "true")
+    monkeypatch.setenv("SIGNAL_PROVIDER", "alpaca")
+    monkeypatch.setenv("ALPACA_API_KEY", "alpaca-key")
+    monkeypatch.setenv("ALPACA_API_SECRET", "alpaca-secret")
 
     cfg = PolymarketConfig.from_env()
 
@@ -125,3 +130,59 @@ def test_live_config_loads_with_explicit_live_polymarket_mode(
     assert cfg.trading_mode == "live"
     assert cfg.trading_venue == "polymarket"
     assert cfg.live_trading_enabled is True
+    assert cfg.signal_provider == "alpaca"
+    assert cfg.alpaca_trading_mode == "disabled"
+    assert cfg.poly_trading_mode == "live"
+
+
+def test_live_config_rejects_missing_alpaca_signal_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_required(monkeypatch)
+    monkeypatch.setenv("POLY_DRY_RUN", "false")
+    monkeypatch.setenv("POLY_TRADING_MODE", "live")
+    monkeypatch.setenv("TRADING_VENUE", "polymarket")
+    monkeypatch.setenv("TRADING_MODE", "live")
+    monkeypatch.setenv("LIVE_TRADING", "true")
+    monkeypatch.setenv("SIGNAL_PROVIDER", "alpaca")
+    monkeypatch.delenv("ALPACA_API_KEY", raising=False)
+    monkeypatch.delenv("ALPACA_API_SECRET", raising=False)
+    monkeypatch.delenv("ALPACA_SECRET_KEY", raising=False)
+
+    with pytest.raises(ValueError, match="SIGNAL_PROVIDER=alpaca"):
+        PolymarketConfig.from_env()
+
+
+def test_live_config_allows_signal_provider_synthetic_without_alpaca_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_required(monkeypatch)
+    monkeypatch.setenv("POLY_DRY_RUN", "false")
+    monkeypatch.setenv("POLY_TRADING_MODE", "live")
+    monkeypatch.setenv("TRADING_VENUE", "polymarket")
+    monkeypatch.setenv("TRADING_MODE", "live")
+    monkeypatch.setenv("LIVE_TRADING", "true")
+    monkeypatch.setenv("SIGNAL_PROVIDER", "synthetic")
+    monkeypatch.delenv("ALPACA_API_KEY", raising=False)
+    monkeypatch.delenv("ALPACA_API_SECRET", raising=False)
+    monkeypatch.delenv("ALPACA_SECRET_KEY", raising=False)
+
+    cfg = PolymarketConfig.from_env()
+
+    assert cfg.signal_provider == "synthetic"
+
+
+def test_live_config_rejects_enabled_alpaca_trading_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_required(monkeypatch)
+    monkeypatch.setenv("POLY_DRY_RUN", "false")
+    monkeypatch.setenv("POLY_TRADING_MODE", "live")
+    monkeypatch.setenv("TRADING_VENUE", "polymarket")
+    monkeypatch.setenv("TRADING_MODE", "live")
+    monkeypatch.setenv("LIVE_TRADING", "true")
+    monkeypatch.setenv("SIGNAL_PROVIDER", "synthetic")
+    monkeypatch.setenv("ALPACA_TRADING_MODE", "paper")
+
+    with pytest.raises(ValueError, match="ALPACA_TRADING_MODE must be disabled"):
+        PolymarketConfig.from_env()

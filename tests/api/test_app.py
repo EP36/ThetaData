@@ -438,7 +438,7 @@ def test_worker_status_and_selection_ignore_mismatched_timeframe_runs(
     repository.start_run(
         run_id=current_run_id,
         service=worker_service,
-        cycle_key=f"SPY:{expected_timeframe}:2026-01-01T10:00:00Z",
+        cycle_key=f"SPY:{expected_timeframe}:{current_run_id}",
         symbol="SPY",
         timeframe=expected_timeframe,
         strategy="strategy_selector",
@@ -460,7 +460,7 @@ def test_worker_status_and_selection_ignore_mismatched_timeframe_runs(
     repository.start_run(
         run_id=mismatch_run_id,
         service=worker_service,
-        cycle_key="QQQ:15m:2026-01-01T10:15:00Z",
+        cycle_key=f"QQQ:15m:{mismatch_run_id}",
         symbol="QQQ",
         timeframe="15m",
         strategy="strategy_selector",

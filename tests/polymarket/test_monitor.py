@@ -55,6 +55,9 @@ def _config(**overrides) -> PolymarketConfig:
         base.setdefault("trading_mode", "live")
         base.setdefault("trading_venue", "polymarket")
         base.setdefault("live_trading_enabled", True)
+        base.setdefault("signal_provider", "synthetic")
+        base.setdefault("poly_trading_mode", "live")
+        base.setdefault("alpaca_trading_mode", "disabled")
     return PolymarketConfig(**base)
 
 
