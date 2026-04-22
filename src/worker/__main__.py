@@ -1,8 +1,12 @@
 """Run the background trading worker process.
 
 Starts two concurrent loops:
-  1. Alpaca Breakout Momentum worker  (main thread, blocking)
+  1. Alpaca multi-strategy worker  (main thread, blocking)
   2. Polymarket scanner + monitor + AI analyst  (daemon thread)
+
+Active strategies (seeded at startup):
+  - moving_average_crossover  enabled  short_window=20 long_window=50  (META, QQQ, 1d)
+  - breakout_momentum         enabled  (default params, all universe symbols)
 
 If Polymarket fails to start or crashes at any point the error is logged
 and the Alpaca worker continues unaffected.
@@ -44,6 +48,35 @@ def _run_polymarket_loop() -> None:
         LOGGER.error("polymarket_thread_crashed error=%s — Alpaca worker continues", exc)
 
 
+_MAC_STRATEGY = "moving_average_crossover"
+_MAC_PARAMS: dict[str, object] = {"short_window": 20, "long_window": 50}
+
+# Strategies that must be enabled on every worker restart regardless of DB state.
+# Breakout momentum is enabled by default (no DB override needed) so it is not listed here.
+_REQUIRED_ENABLED_STRATEGIES: tuple[tuple[str, dict[str, object]], ...] = (
+    (_MAC_STRATEGY, _MAC_PARAMS),
+)
+
+
+def _seed_strategy_configs(repository: PersistenceRepository) -> None:
+    """Ensure required strategies are active before the worker loop starts.
+
+    Only strategies listed in _REQUIRED_ENABLED_STRATEGIES are touched.
+    All other strategy configs are left exactly as the DB has them.
+    """
+    for strategy_name, params in _REQUIRED_ENABLED_STRATEGIES:
+        repository.upsert_strategy_config(
+            name=strategy_name,
+            status="enabled",
+            parameters=params,
+        )
+        LOGGER.info(
+            "strategy_seeded name=%s status=enabled params=%s",
+            strategy_name,
+            params,
+        )
+
+
 def main() -> None:
     configure_logging()
 
@@ -66,6 +99,12 @@ def main() -> None:
     repository = PersistenceRepository(
         store=DatabaseStore(database_url=settings.database_url)
     )
+
+    # Seed strategy configs before the loop so the correct state is in the DB
+    # from the very first cycle. moving_average_crossover targets META and QQQ
+    # on a 1d timeframe in paper trading mode (PAPER_TRADING=true).
+    _seed_strategy_configs(repository)
+
     worker = TradingWorker(settings=settings, repository=repository)
     worker.run_forever()
 
