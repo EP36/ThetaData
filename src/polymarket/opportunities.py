@@ -26,6 +26,39 @@ _USD_THRESHOLD_RE = re.compile(
     r"\$([0-9][0-9,]*(?:\.[0-9]+)?)\s*([kKmM]?)\b"
 )
 
+# Matches range ("between $X and $Y") questions — excluded from dominance analysis
+_BETWEEN_RE = re.compile(r"\bbetween\b", re.IGNORECASE)
+
+# Matches genuine "above/over/exceed/reach/hit/cross" absolute-threshold questions
+_ABOVE_RE = re.compile(
+    r"\b(above|over|exceed|reach|hit|cross|surpass|break|past)\b", re.IGNORECASE
+)
+
+# Requires "bitcoin" or "btc" specifically — filters out crypto-hack and other
+# non-BTC markets that passed the broader scanner filter via "crypto"
+_BTC_STRICT_RE = re.compile(r"\b(bitcoin|btc)\b", re.IGNORECASE)
+
+# Date extraction from question text.
+# Tries month+day+year → month+day → month+year → year-only, in that order.
+_MONTHS = (
+    "january|february|march|april|may|june|july|august|"
+    "september|october|november|december|"
+    "jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec"
+)
+_DATE_MDY_RE = re.compile(
+    rf"\b({_MONTHS})[\s,]+(\d{{1,2}})(?:st|nd|rd|th)?[\s,]+(202\d)\b",
+    re.IGNORECASE,
+)
+_DATE_MD_RE = re.compile(
+    rf"\b({_MONTHS})[\s,]+(\d{{1,2}})(?:st|nd|rd|th)?\b",
+    re.IGNORECASE,
+)
+_DATE_MY_RE = re.compile(
+    rf"\b({_MONTHS})[\s,]+(202\d)\b",
+    re.IGNORECASE,
+)
+_DATE_Y_RE = re.compile(r"\b(202\d)\b")
+
 
 @dataclass(frozen=True, slots=True)
 class Opportunity:
@@ -39,12 +72,15 @@ class Opportunity:
     confidence: str  # "high" | "medium" | "low"
     notes: str
     # --- Phase 2: execution fields (optional, defaults allow Phase 1 callers to omit) ---
-    condition_id: str = ""       # primary market condition_id
-    yes_token_id: str = ""       # YES outcome token_id
-    no_token_id: str = ""        # NO outcome token_id
-    entry_price_yes: float = 0.0 # YES best_ask at scan time
-    entry_price_no: float = 0.0  # NO best_ask at scan time
-    volume_24h: float = 0.0      # 24-hour USDC volume at scan time
+    condition_id: str = ""        # primary market condition_id
+    yes_token_id: str = ""        # YES outcome token_id (BUY leg for correlated_markets)
+    no_token_id: str = ""         # NO outcome token_id
+    entry_price_yes: float = 0.0  # YES best_ask at scan time (buy price for correlated_markets)
+    entry_price_no: float = 0.0   # NO best_ask at scan time (sell price for correlated_markets)
+    volume_24h: float = 0.0       # 24-hour USDC volume at scan time
+    # --- correlated_markets second-leg fields ---
+    condition_id_2: str = ""      # sell-leg market condition_id (higher-threshold market)
+    yes_token_id_2: str = ""      # sell-leg YES token_id (higher-threshold market)
     # --- Phase 5: signal engine fields (optional, defaults allow Phases 1-4 to omit) ---
     direction: str = ""                # "bullish" | "bearish" | "neutral" (set by signal engine)
     signal_notes: tuple[str, ...] = () # per-rule annotations from score_opportunity()
@@ -108,7 +144,16 @@ def detect_orderbook_spread(
 def _fetch_kalshi_btc_markets(
     kalshi_base_url: str, timeout: float = 15.0
 ) -> list[dict[str, Any]]:
-    """Fetch open BTC-related markets from the Kalshi public API."""
+    """Fetch open BTC-related markets from the Kalshi public API.
+
+    Returns an empty list immediately if KALSHI_API_KEY is not configured,
+    avoiding a guaranteed 401 on every scan cycle.
+    """
+    import os
+
+    if not os.getenv("KALSHI_API_KEY", "").strip():
+        return []
+
     _btc_re = re.compile(r"\b(bitcoin|btc|crypto)\b", re.IGNORECASE)
     try:
         with httpx.Client(timeout=timeout) as http:
@@ -207,6 +252,28 @@ def detect_cross_market(
 # Strategy 3: correlated markets (dominance violation)
 # ---------------------------------------------------------------------------
 
+def _extract_question_date(question: str) -> str | None:
+    """Return a normalised date string extracted from a question, or None.
+
+    Tries most-to-least specific: Month DD YYYY → Month DD → Month YYYY → YYYY.
+    The returned string is lowercase so "December 31 2026" == "december 31 2026".
+    Only matches 2020-2029 years to avoid false matches on dollar amounts.
+    """
+    m = _DATE_MDY_RE.search(question)
+    if m:
+        return f"{m.group(1).lower()} {m.group(2)} {m.group(3)}"
+    m = _DATE_MD_RE.search(question)
+    if m:
+        return f"{m.group(1).lower()} {m.group(2)}"
+    m = _DATE_MY_RE.search(question)
+    if m:
+        return f"{m.group(1).lower()} {m.group(2)}"
+    m = _DATE_Y_RE.search(question)
+    if m:
+        return m.group(1)
+    return None
+
+
 def _extract_usd_threshold(question: str) -> float | None:
     """Return the numeric USD threshold embedded in a BTC price question, or None."""
     match = _USD_THRESHOLD_RE.search(question)
@@ -226,53 +293,86 @@ def detect_correlated_markets(
     orderbooks: list[MarketOrderbook],
     min_edge_pct: float = 1.5,
 ) -> list[Opportunity]:
-    """Flag dominance violations among BTC price-threshold markets.
+    """Flag genuine dominance violations among same-date BTC absolute-threshold markets.
 
-    By definition P(BTC > $X) >= P(BTC > $Y) whenever X < Y.
-    A violation means one or both prices are wrong.
-    Edge = (higher_threshold_prob - lower_threshold_prob) * 100.
+    Three guards against false positives, applied at candidate selection:
+    1. BTC-only: both questions must contain "bitcoin" or "btc" (not just "crypto").
+       Eliminates crypto-hack markets that passed the broader scanner filter.
+    2. Absolute-threshold format: no "between $X and $Y" range markets; question
+       must contain an "above/hit/reach/exceed" keyword.
+    3. Same question-date: date is extracted from the question text itself (not from
+       Gamma's endDateIso, which is a max-expiry ceiling shared across unrelated
+       markets). Pairs where either question has no extractable date are skipped.
     """
-    tagged: list[tuple[float, MarketOrderbook]] = []
+    from collections import defaultdict
+
+    # --- Candidate selection: all three guards applied per market ---
+    candidates: list[tuple[float, str, MarketOrderbook]] = []
     for ob in orderbooks:
-        threshold = _extract_usd_threshold(ob.market.question)
-        if threshold is not None:
-            tagged.append((threshold, ob))
+        q = ob.market.question
+        if not _BTC_STRICT_RE.search(q):
+            continue  # non-BTC market (crypto-hack etc.) — skip
+        if _BETWEEN_RE.search(q):
+            continue  # range market — dominance rule doesn't apply
+        if not _ABOVE_RE.search(q):
+            continue  # no absolute-threshold keyword — skip ambiguous phrasing
+        threshold = _extract_usd_threshold(q)
+        if threshold is None:
+            continue
+        date_key = _extract_question_date(q)
+        if date_key is None:
+            continue  # no date in question — can't verify same-date
+        candidates.append((threshold, date_key, ob))
 
-    if len(tagged) < 2:
-        return []
+    # --- Group by question-extracted date: only same-date pairs are comparable ---
+    by_date: dict[str, list[tuple[float, MarketOrderbook]]] = defaultdict(list)
+    for thresh, date_key, ob in candidates:
+        by_date[date_key].append((thresh, ob))
 
-    tagged.sort(key=lambda x: x[0])
     opps: list[Opportunity] = []
 
-    for i in range(len(tagged) - 1):
-        lower_thresh, lower_ob = tagged[i]
-        higher_thresh, higher_ob = tagged[i + 1]
+    for date_key, group in by_date.items():
+        if len(group) < 2:
+            continue
+        group.sort(key=lambda x: x[0])
 
-        lower_yes_mid = (lower_ob.yes.best_bid + lower_ob.yes.best_ask) / 2.0
-        higher_yes_mid = (higher_ob.yes.best_bid + higher_ob.yes.best_ask) / 2.0
+        for i in range(len(group) - 1):
+            lower_thresh, lower_ob = group[i]
+            higher_thresh, higher_ob = group[i + 1]
 
-        if higher_yes_mid > lower_yes_mid:
-            edge = (higher_yes_mid - lower_yes_mid) * 100.0
-            if edge >= min_edge_pct:
-                opps.append(
-                    Opportunity(
-                        strategy="correlated_markets",
-                        market_question=(
-                            f"{lower_ob.market.question} vs {higher_ob.market.question}"
-                        ),
-                        edge_pct=round(edge, 4),
-                        action=(
-                            f"sell YES on higher market @ {higher_ob.yes.best_bid:.4f}, "
-                            f"buy YES on lower market @ {lower_ob.yes.best_ask:.4f}"
-                        ),
-                        confidence="high",
-                        notes=(
-                            f"lower_thresh=${lower_thresh:,.0f} p={lower_yes_mid:.4f} "
-                            f"higher_thresh=${higher_thresh:,.0f} p={higher_yes_mid:.4f} "
-                            "dominance_violated=true"
-                        ),
+            lower_yes_mid = (lower_ob.yes.best_bid + lower_ob.yes.best_ask) / 2.0
+            higher_yes_mid = (higher_ob.yes.best_bid + higher_ob.yes.best_ask) / 2.0
+
+            if higher_yes_mid > lower_yes_mid:
+                edge = (higher_yes_mid - lower_yes_mid) * 100.0
+                if edge >= min_edge_pct:
+                    opps.append(
+                        Opportunity(
+                            strategy="correlated_markets",
+                            market_question=(
+                                f"{lower_ob.market.question} vs {higher_ob.market.question}"
+                            ),
+                            edge_pct=round(edge, 4),
+                            action=(
+                                f"sell YES on higher market @ {higher_ob.yes.best_bid:.4f}, "
+                                f"buy YES on lower market @ {lower_ob.yes.best_ask:.4f}"
+                            ),
+                            confidence="high",
+                            notes=(
+                                f"date={date_key} "
+                                f"lower_thresh=${lower_thresh:,.0f} p={lower_yes_mid:.4f} "
+                                f"higher_thresh=${higher_thresh:,.0f} p={higher_yes_mid:.4f} "
+                                "dominance_violated=true"
+                            ),
+                            # Execution fields
+                            condition_id=lower_ob.market.condition_id,
+                            yes_token_id=lower_ob.market.yes_token.token_id,
+                            entry_price_yes=lower_ob.yes.best_ask,   # BUY at ask
+                            condition_id_2=higher_ob.market.condition_id,
+                            yes_token_id_2=higher_ob.market.yes_token.token_id,
+                            entry_price_no=higher_ob.yes.best_bid,   # SELL at bid
+                        )
                     )
-                )
 
     return opps
 

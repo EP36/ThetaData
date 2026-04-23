@@ -61,6 +61,7 @@ class Market:
     no_token: MarketToken
     volume_24h: float = 0.0  # 24-hour USDC volume reported by the CLOB API
     market_id: str = ""
+    end_date: str = ""        # ISO date "YYYY-MM-DD" from Gamma endDateIso; "" if unknown
     source_keys: tuple[str, ...] = ()
 
 
@@ -423,6 +424,7 @@ def _parse_gamma_market(raw: dict[str, Any]) -> tuple[Market | None, str]:
         no_token=no_token,
         volume_24h=float(raw.get("volume24hr") or 0.0),
         market_id=_as_str(raw.get("id")),
+        end_date=_as_str(raw.get("endDateIso")),  # "YYYY-MM-DD"
         source_keys=_source_keys(raw),
     ), ""
 
