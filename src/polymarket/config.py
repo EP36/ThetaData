@@ -174,7 +174,7 @@ class PolymarketConfig:
             api_secret=os.getenv("POLY_API_SECRET", ""),
             passphrase=os.getenv("POLY_PASSPHRASE", ""),
             private_key=os.getenv("POLY_PRIVATE_KEY", ""),
-            scan_interval_sec=int(os.getenv("POLY_SCAN_INTERVAL_SEC", "30")),
+            scan_interval_sec=int(os.getenv("POLY_SCAN_INTERVAL_SEC", "15")),
             min_edge_pct=float(os.getenv("POLY_MIN_EDGE_PCT", "1.5")),
             clob_base_url=os.getenv("POLY_CLOB_BASE_URL", "https://clob.polymarket.com"),
             kalshi_base_url=os.getenv(

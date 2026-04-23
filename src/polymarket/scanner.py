@@ -21,6 +21,15 @@ _CURSOR_END = "LTE="  # Polymarket's sentinel for the last page
 _GAMMA_BASE_URL = "https://gamma-api.polymarket.com"
 _GAMMA_PAGE_SIZE = 1000  # server max; ~280ms/page, ~51 pages for 50k markets
 
+# Pre-filter for threshold markets: only keep "Will X reach/hit/exceed $Y" format.
+# These are the only markets that can participate in dominance-pair detection.
+# Defined here (not imported from opportunities) to avoid circular imports.
+_THRESHOLD_USD_RE = re.compile(r"\$[0-9]")
+_THRESHOLD_ABOVE_RE = re.compile(
+    r"\b(above|over|exceed|reach|hit|cross|surpass|break|past)\b", re.IGNORECASE
+)
+_THRESHOLD_BETWEEN_RE = re.compile(r"\bbetween\b", re.IGNORECASE)
+
 _BOOK_CONCURRENCY = 20   # max simultaneous /book requests
 _BOOK_TIMEOUT_SEC = 3.0  # per-request timeout; timed-out markets are skipped
 
@@ -351,8 +360,15 @@ def _parse_gamma_market(raw: dict[str, Any]) -> tuple[Market | None, str]:
       volume24hr    (not volume_24hr)
     """
     question = _as_str(raw.get("question"))
-    if not _BTC_RE.search(question):
-        return None, "not_btc"
+    # Keep only markets with an absolute USD threshold ("Will X reach/hit/exceed $Y").
+    # Range ("between $X and $Y") and non-threshold markets can never form dominance
+    # pairs and are skipped to keep the orderbook fetch count manageable.
+    if (
+        not _THRESHOLD_USD_RE.search(question)
+        or not _THRESHOLD_ABOVE_RE.search(question)
+        or _THRESHOLD_BETWEEN_RE.search(question)
+    ):
+        return None, "not_threshold_market"
 
     condition_id = _as_str(raw.get("conditionId"))
     if not condition_id:
@@ -429,18 +445,21 @@ def _parse_gamma_market(raw: dict[str, Any]) -> tuple[Market | None, str]:
     ), ""
 
 
-def fetch_btc_markets_gamma(timeout_seconds: float = 15.0) -> list[Market]:
-    """Fetch active BTC/crypto markets from the Gamma API.
+def fetch_markets_gamma(timeout_seconds: float = 15.0) -> list[Market]:
+    """Fetch all active threshold markets from the Gamma API.
 
-    The Gamma API supports server-side active/closed filters and returns only
-    open markets, completing in <1s vs the 5-minute CLOB full-catalog scan.
-    Uses offset-based pagination; stops when a page returns fewer than the
-    page size.
+    Retains only markets with an absolute USD threshold in an "above/hit/reach"
+    format — the only ones that can form dominance pairs for correlated_markets
+    detection.  Expands scope beyond BTC to cover any category (crypto, commodities,
+    economic indicators) as long as the question has a dollar amount threshold.
+
+    The Gamma API supports server-side active/closed filters and completes in
+    ~15s vs the 5-minute CLOB full-catalog scan.
     """
     markets: list[Market] = []
     stats: dict[str, int] = {
         "total_fetched": 0,
-        "skipped_not_btc": 0,
+        "skipped_not_threshold": 0,
         "skipped_closed": 0,
         "skipped_archived": 0,
         "skipped_no_orderbook": 0,
@@ -491,8 +510,8 @@ def fetch_btc_markets_gamma(timeout_seconds: float = 15.0) -> list[Market]:
             if market is not None:
                 markets.append(market)
                 stats["candidates_retained"] += 1
-            elif reason == "not_btc":
-                stats["skipped_not_btc"] += 1
+            elif reason == "not_threshold_market":
+                stats["skipped_not_threshold"] += 1
             elif reason in ("inactive_market", "closed_market"):
                 stats["skipped_closed"] += 1
             elif reason == "archived_market":
@@ -515,18 +534,18 @@ def fetch_btc_markets_gamma(timeout_seconds: float = 15.0) -> list[Market]:
     LOGGER.info(
         "polymarket_gamma_scan_summary "
         "total_fetched=%d elapsed_ms=%d "
-        "skipped_closed=%d skipped_archived=%d skipped_no_orderbook=%d "
-        "skipped_missing_tokens=%d skipped_wrong_token_format=%d skipped_malformed=%d "
-        "skipped_not_btc=%d candidates_retained=%d",
+        "skipped_not_threshold=%d skipped_closed=%d skipped_archived=%d "
+        "skipped_no_orderbook=%d skipped_missing_tokens=%d "
+        "skipped_wrong_token_format=%d skipped_malformed=%d candidates_retained=%d",
         stats["total_fetched"],
         elapsed_ms,
+        stats["skipped_not_threshold"],
         stats["skipped_closed"],
         stats["skipped_archived"],
         stats["skipped_no_orderbook"],
         stats["skipped_missing_tokens"],
         stats["skipped_wrong_token_format"],
         stats["skipped_malformed"],
-        stats["skipped_not_btc"],
         stats["candidates_retained"],
     )
     return markets
