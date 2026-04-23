@@ -192,7 +192,7 @@ class PolymarketConfig:
             signal_provider=os.getenv("SIGNAL_PROVIDER", "synthetic"),
             alpaca_trading_mode=os.getenv("ALPACA_TRADING_MODE", "disabled"),
             poly_trading_mode=poly_trading_mode,
-            min_volume_24h=float(os.getenv("POLY_MIN_VOLUME_24H", "10000.0")),
+            min_volume_24h=float(os.getenv("POLY_MIN_VOLUME_24H", "5000.0")),
             positions_path=os.getenv(
                 "POLY_POSITIONS_PATH", "data/polymarket_positions.json"
             ),
