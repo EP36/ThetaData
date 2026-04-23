@@ -13,7 +13,7 @@ from src.polymarket.executor import ExecutionResult, execute
 from src.polymarket.opportunities import Opportunity, run_all_scanners
 from src.polymarket.positions import PositionsLedger, make_ledger
 from src.polymarket.risk import RiskGuard
-from src.polymarket.scanner import fetch_btc_markets, fetch_market_orderbooks
+from src.polymarket.scanner import fetch_btc_markets_gamma, fetch_market_orderbooks
 from src.polymarket.signals import score_opportunity
 
 LOGGER = logging.getLogger("theta.polymarket.runner")
@@ -30,13 +30,13 @@ def scan(config: PolymarketConfig) -> list[Opportunity]:
     client = ClobClient(config=config)
 
     LOGGER.info("polymarket_scan_start")
-    markets = fetch_btc_markets(client)
+    markets = fetch_btc_markets_gamma(timeout_seconds=config.timeout_seconds)
 
     if not markets:
         LOGGER.info("polymarket_scan_no_markets")
         return []
 
-    orderbooks = fetch_market_orderbooks(client, markets)
+    orderbooks = fetch_market_orderbooks(client, markets, validate_tokens=False)
     opps = run_all_scanners(
         orderbooks,
         kalshi_base_url=config.kalshi_base_url,

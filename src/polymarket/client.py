@@ -87,7 +87,12 @@ class ClobClient:
         )
 
     def fetch_markets(self, next_cursor: str = "") -> dict[str, Any]:
-        """Fetch one page of active markets from the CLOB API."""
+        """Fetch one page of markets from the CLOB API.
+
+        NOTE: The CLOB /markets endpoint ignores all filter params (active,
+        closed, accepting_orders) — every combination returns the same result.
+        Filtering must be done client-side in _tradability_skip_reason().
+        """
         params: dict[str, Any] = {"active": "true"}
         if next_cursor:
             params["next_cursor"] = next_cursor

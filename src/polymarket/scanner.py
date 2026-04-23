@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import re
+import time
+import urllib.request
 from dataclasses import dataclass
 from typing import Any
 
@@ -14,6 +17,9 @@ LOGGER = logging.getLogger("theta.polymarket.scanner")
 _BTC_RE = re.compile(r"\b(bitcoin|btc|crypto)\b", re.IGNORECASE)
 _CURSOR_END = "LTE="  # Polymarket's sentinel for the last page
 
+_GAMMA_BASE_URL = "https://gamma-api.polymarket.com"
+_GAMMA_PAGE_SIZE = 1000  # server max; ~280ms/page, ~51 pages for 50k markets
+
 # Maps internal skip-reason strings to summary stat keys.
 _SKIP_TO_STAT: dict[str, str] = {
     "inactive_market": "skipped_closed",
@@ -21,11 +27,18 @@ _SKIP_TO_STAT: dict[str, str] = {
     "archived_market": "skipped_archived",
     "not_accepting_orders": "skipped_no_orderbook",
     "orderbook_disabled": "skipped_no_orderbook",
-    "missing_yes_or_no_token": "skipped_no_tokens",
-    "invalid_yes_token_id": "skipped_no_tokens",
-    "invalid_no_token_id": "skipped_no_tokens",
-    "missing_condition_id": "skipped_no_tokens",
+    "missing_yes_or_no_token": "skipped_missing_tokens",
+    "wrong_token_format": "skipped_wrong_token_format",
+    "invalid_yes_token_id": "skipped_wrong_token_format",
+    "invalid_no_token_id": "skipped_wrong_token_format",
+    "missing_condition_id": "skipped_malformed",
 }
+
+# Candidate outcome label sets for flexible YES/NO matching.
+_YES_LABELS = {"yes", "true", "1"}
+_NO_LABELS = {"no", "false", "0"}
+# Token dict keys tried in order when looking for an outcome label.
+_OUTCOME_KEYS = ("outcome", "name", "title", "side")
 
 
 @dataclass(frozen=True, slots=True)
@@ -173,6 +186,59 @@ def _extract_token(
     return None
 
 
+def _outcome_label(token: dict[str, Any]) -> str:
+    """Return the first non-empty outcome-like label found in a token dict."""
+    for key in _OUTCOME_KEYS:
+        val = _as_str(token.get(key))
+        if val:
+            return val.lower()
+    return ""
+
+
+def _match_yes_no_tokens(
+    tokens: list[dict[str, Any]],
+    condition_id: str,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Return (yes_token, no_token) from a list of raw token dicts.
+
+    Tries exact label matching first (yes/no/true/false/1/0), then falls back
+    to positional assignment: the first two tokens with distinct string values
+    are treated as YES and NO respectively.
+    """
+    yes_raw: dict[str, Any] | None = None
+    no_raw: dict[str, Any] | None = None
+
+    for t in tokens:
+        label = _outcome_label(t)
+        if label in _YES_LABELS and yes_raw is None:
+            yes_raw = t
+        elif label in _NO_LABELS and no_raw is None:
+            no_raw = t
+        if yes_raw and no_raw:
+            return yes_raw, no_raw
+
+    if yes_raw and no_raw:
+        return yes_raw, no_raw
+
+    # Fallback: positional — first two tokens with distinct non-empty labels
+    seen: list[tuple[str, dict[str, Any]]] = []
+    for t in tokens:
+        label = _outcome_label(t) or repr(t)[:40]
+        if not any(label == s for s, _ in seen):
+            seen.append((label, t))
+        if len(seen) == 2:
+            LOGGER.debug(
+                "polymarket_token_positional_fallback condition_id=%s "
+                "assigned yes=%r no=%r",
+                condition_id,
+                seen[0][0],
+                seen[1][0],
+            )
+            return seen[0][1], seen[1][1]
+
+    return yes_raw, no_raw
+
+
 def _parse_market(raw: dict[str, Any]) -> tuple[Market | None, str]:
     """Parse one raw API market dict into a Market, or None with a skip reason.
 
@@ -199,23 +265,35 @@ def _parse_market(raw: dict[str, Any]) -> tuple[Market | None, str]:
 
     raw_tokens = raw.get("tokens", [])
     tokens: list[dict[str, Any]] = raw_tokens if isinstance(raw_tokens, list) else []
-    yes_raw = next(
-        (t for t in tokens if _as_str(t.get("outcome")).lower() == "yes"),
-        None,
-    )
-    no_raw = next(
-        (t for t in tokens if _as_str(t.get("outcome")).lower() == "no"),
-        None,
-    )
 
-    if not yes_raw or not no_raw:
-        # Active market missing expected token fields — log for investigation.
+    if not tokens:
         LOGGER.warning(
-            "polymarket_active_market_no_tokens condition_id=%s source_keys=%s",
+            "polymarket_active_market_no_tokens condition_id=%s "
+            "tokens_field_present=%s source_keys=%s",
             condition_id,
+            "tokens" in raw,
             _source_keys(raw),
         )
         return None, "missing_yes_or_no_token"
+
+    yes_raw, no_raw = _match_yes_no_tokens(tokens, condition_id)
+
+    if not yes_raw or not no_raw:
+        # tokens present but outcome labels don't match expected patterns —
+        # log raw structure for the first few occurrences so we can diagnose.
+        LOGGER.warning(
+            "polymarket_active_market_no_tokens condition_id=%s "
+            "tokens_field_present=True token_count=%d source_keys=%s",
+            condition_id,
+            len(tokens),
+            _source_keys(raw),
+        )
+        LOGGER.debug(
+            "polymarket_token_structure_sample condition_id=%s tokens=%s",
+            condition_id,
+            repr(raw_tokens)[:500],
+        )
+        return None, "wrong_token_format"
 
     market_id = _market_id(raw)
     yes_token = _extract_token(yes_raw, "Yes", condition_id, market_id)
@@ -257,6 +335,197 @@ def _parse_market(raw: dict[str, Any]) -> tuple[Market | None, str]:
     ), ""
 
 
+def _parse_gamma_market(raw: dict[str, Any]) -> tuple[Market | None, str]:
+    """Convert one Gamma API market dict to a Market, or None with a skip reason.
+
+    Gamma field differences from CLOB:
+      conditionId   (camelCase, not condition_id)
+      clobTokenIds  JSON-serialised array of two token ID strings [yes, no]
+      outcomes      JSON-serialised array ["Yes", "No"] — same order as clobTokenIds
+      acceptingOrders / enableOrderBook  (camelCase — handled by _tradability_skip_reason)
+      volume24hr    (not volume_24hr)
+    """
+    question = _as_str(raw.get("question"))
+    if not _BTC_RE.search(question):
+        return None, "not_btc"
+
+    condition_id = _as_str(raw.get("conditionId"))
+    if not condition_id:
+        LOGGER.warning(
+            "polymarket_gamma_market_malformed reason=missing_condition_id "
+            "source_keys=%s",
+            _source_keys(raw),
+        )
+        return None, "missing_condition_id"
+
+    skip_reason = _tradability_skip_reason(raw)
+    if skip_reason:
+        return None, skip_reason
+
+    # clobTokenIds is a JSON-serialised string: '["yes_id", "no_id"]'
+    try:
+        token_ids: list[str] = json.loads(raw.get("clobTokenIds") or "[]")
+    except (json.JSONDecodeError, TypeError):
+        token_ids = []
+
+    try:
+        outcome_labels: list[str] = json.loads(raw.get("outcomes") or '["Yes","No"]')
+    except (json.JSONDecodeError, TypeError):
+        outcome_labels = ["Yes", "No"]
+
+    if len(token_ids) < 2:
+        LOGGER.warning(
+            "polymarket_gamma_no_tokens condition_id=%s token_count=%d",
+            condition_id,
+            len(token_ids),
+        )
+        return None, "missing_yes_or_no_token"
+
+    # Map outcome labels to YES/NO indices
+    yes_idx: int | None = None
+    no_idx: int | None = None
+    for i, label in enumerate(outcome_labels):
+        lo = str(label).strip().lower()
+        if lo in _YES_LABELS and yes_idx is None:
+            yes_idx = i
+        elif lo in _NO_LABELS and no_idx is None:
+            no_idx = i
+
+    # Positional fallback: first token = YES, second = NO
+    if yes_idx is None:
+        yes_idx = 0
+    if no_idx is None:
+        no_idx = 1 if len(token_ids) > 1 else 0
+
+    yes_tid = _as_str(token_ids[yes_idx]) if yes_idx < len(token_ids) else ""
+    no_tid = _as_str(token_ids[no_idx]) if no_idx < len(token_ids) else ""
+
+    if not yes_tid or not no_tid:
+        LOGGER.warning(
+            "polymarket_gamma_empty_token_id condition_id=%s yes_idx=%s no_idx=%s",
+            condition_id,
+            yes_idx,
+            no_idx,
+        )
+        return None, "invalid_yes_token_id"
+
+    yes_token = MarketToken(token_id=yes_tid, outcome="Yes", source_key="clobTokenIds")
+    no_token = MarketToken(token_id=no_tid, outcome="No", source_key="clobTokenIds")
+
+    return Market(
+        condition_id=condition_id,
+        question=question,
+        yes_token=yes_token,
+        no_token=no_token,
+        volume_24h=float(raw.get("volume24hr") or 0.0),
+        market_id=_as_str(raw.get("id")),
+        source_keys=_source_keys(raw),
+    ), ""
+
+
+def fetch_btc_markets_gamma(timeout_seconds: float = 15.0) -> list[Market]:
+    """Fetch active BTC/crypto markets from the Gamma API.
+
+    The Gamma API supports server-side active/closed filters and returns only
+    open markets, completing in <1s vs the 5-minute CLOB full-catalog scan.
+    Uses offset-based pagination; stops when a page returns fewer than the
+    page size.
+    """
+    markets: list[Market] = []
+    stats: dict[str, int] = {
+        "total_fetched": 0,
+        "skipped_not_btc": 0,
+        "skipped_closed": 0,
+        "skipped_archived": 0,
+        "skipped_no_orderbook": 0,
+        "skipped_missing_tokens": 0,
+        "skipped_wrong_token_format": 0,
+        "skipped_malformed": 0,
+        "candidates_retained": 0,
+    }
+    t0 = time.monotonic()
+    offset = 0
+    sample_logged = False
+
+    while True:
+        from urllib.parse import urlencode
+        params = {
+            "active": "true",
+            "closed": "false",
+            "limit": _GAMMA_PAGE_SIZE,
+            "offset": offset,
+        }
+        url = f"{_GAMMA_BASE_URL}/markets?{urlencode(params)}"
+        req = urllib.request.Request(
+            url,
+            headers={"Accept": "application/json", "User-Agent": "Trauto/1.0"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:
+                page: list[dict[str, Any]] = json.loads(resp.read())
+        except Exception as exc:
+            LOGGER.error("polymarket_gamma_fetch_failed offset=%d error=%s", offset, exc)
+            break
+
+        if not isinstance(page, list) or not page:
+            break
+
+        stats["total_fetched"] += len(page)
+
+        if not sample_logged and page:
+            LOGGER.debug(
+                "polymarket_gamma_sample offset=%d raw=%s",
+                offset,
+                repr(page[0])[:500],
+            )
+            sample_logged = True
+
+        for raw in page:
+            market, reason = _parse_gamma_market(raw)
+            if market is not None:
+                markets.append(market)
+                stats["candidates_retained"] += 1
+            elif reason == "not_btc":
+                stats["skipped_not_btc"] += 1
+            elif reason in ("inactive_market", "closed_market"):
+                stats["skipped_closed"] += 1
+            elif reason == "archived_market":
+                stats["skipped_archived"] += 1
+            elif reason in ("not_accepting_orders", "orderbook_disabled"):
+                stats["skipped_no_orderbook"] += 1
+            elif reason in ("missing_yes_or_no_token",):
+                stats["skipped_missing_tokens"] += 1
+            elif reason in ("wrong_token_format", "invalid_yes_token_id", "invalid_no_token_id"):
+                stats["skipped_wrong_token_format"] += 1
+            elif reason in ("missing_condition_id",):
+                stats["skipped_malformed"] += 1
+
+        if len(page) < _GAMMA_PAGE_SIZE:
+            break
+
+        offset += _GAMMA_PAGE_SIZE
+
+    elapsed_ms = int((time.monotonic() - t0) * 1000)
+    LOGGER.info(
+        "polymarket_gamma_scan_summary "
+        "total_fetched=%d elapsed_ms=%d "
+        "skipped_closed=%d skipped_archived=%d skipped_no_orderbook=%d "
+        "skipped_missing_tokens=%d skipped_wrong_token_format=%d skipped_malformed=%d "
+        "skipped_not_btc=%d candidates_retained=%d",
+        stats["total_fetched"],
+        elapsed_ms,
+        stats["skipped_closed"],
+        stats["skipped_archived"],
+        stats["skipped_no_orderbook"],
+        stats["skipped_missing_tokens"],
+        stats["skipped_wrong_token_format"],
+        stats["skipped_malformed"],
+        stats["skipped_not_btc"],
+        stats["candidates_retained"],
+    )
+    return markets
+
+
 def fetch_btc_markets(client: ClobClient) -> list[Market]:
     """Fetch all active BTC/crypto markets, handling pagination."""
     markets: list[Market] = []
@@ -265,7 +534,9 @@ def fetch_btc_markets(client: ClobClient) -> list[Market]:
         "skipped_closed": 0,
         "skipped_archived": 0,
         "skipped_no_orderbook": 0,
-        "skipped_no_tokens": 0,
+        "skipped_missing_tokens": 0,
+        "skipped_wrong_token_format": 0,
+        "skipped_malformed": 0,
         "candidates_retained": 0,
     }
     cursor = ""
@@ -288,13 +559,17 @@ def fetch_btc_markets(client: ClobClient) -> list[Market]:
             break
 
     LOGGER.info(
-        "polymarket_scan_summary total=%d skipped_closed=%d skipped_archived=%d "
-        "skipped_no_orderbook=%d skipped_no_tokens=%d candidates_retained=%d",
+        "polymarket_scan_summary total=%d "
+        "skipped_closed=%d skipped_archived=%d skipped_no_orderbook=%d "
+        "skipped_missing_tokens=%d skipped_wrong_token_format=%d skipped_malformed=%d "
+        "candidates_retained=%d",
         stats["total"],
         stats["skipped_closed"],
         stats["skipped_archived"],
         stats["skipped_no_orderbook"],
-        stats["skipped_no_tokens"],
+        stats["skipped_missing_tokens"],
+        stats["skipped_wrong_token_format"],
+        stats["skipped_malformed"],
         stats["candidates_retained"],
     )
     return markets
@@ -359,13 +634,19 @@ def _validate_market_tokens(client: ClobClient, market: Market) -> bool:
 
 
 def fetch_market_orderbooks(
-    client: ClobClient, markets: list[Market]
+    client: ClobClient,
+    markets: list[Market],
+    validate_tokens: bool = True,
 ) -> list[MarketOrderbook]:
-    """Fetch YES and NO orderbooks for each market, skipping on error."""
+    """Fetch YES and NO orderbooks for each market, skipping on error.
+
+    Pass validate_tokens=False for Gamma-sourced markets whose token IDs are
+    already trusted — bypasses the CLOB token-lookup step that rejects them.
+    """
     result: list[MarketOrderbook] = []
 
     for market in markets:
-        if not _validate_market_tokens(client, market):
+        if validate_tokens and not _validate_market_tokens(client, market):
             continue
 
         try:
