@@ -45,13 +45,21 @@ class ClobClient:
             "POLY-PASSPHRASE": self.config.passphrase,
         }
 
-    def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
+    def _get(
+        self,
+        path: str,
+        params: dict[str, Any] | None = None,
+        timeout: float | None = None,
+        max_retries: int | None = None,
+    ) -> Any:
         """GET with exponential-backoff retry (max_retries attempts after first failure)."""
         url = self.config.clob_base_url + path
         headers = self._auth_headers("GET", path)
+        effective_timeout = timeout if timeout is not None else self.config.timeout_seconds
+        effective_retries = max_retries if max_retries is not None else self.config.max_retries
         last_exc: Exception | None = None
 
-        for attempt in range(self.config.max_retries + 1):
+        for attempt in range(effective_retries + 1):
             if attempt > 0:
                 sleep_sec = 2 ** (attempt - 1)
                 LOGGER.warning(
@@ -63,7 +71,7 @@ class ClobClient:
                 time.sleep(sleep_sec)
 
             try:
-                with httpx.Client(timeout=self.config.timeout_seconds) as http:
+                with httpx.Client(timeout=effective_timeout) as http:
                     resp = http.get(url, headers=headers, params=params)
                 resp.raise_for_status()
                 return resp.json()
@@ -82,7 +90,7 @@ class ClobClient:
                 last_exc = exc
 
         raise RuntimeError(
-            f"polymarket request failed after {self.config.max_retries + 1} attempts"
+            f"polymarket request failed after {effective_retries + 1} attempts"
             f" path={path} last_error={last_exc}"
         )
 
@@ -102,9 +110,9 @@ class ClobClient:
         """Resolve a token ID to its parent CLOB market."""
         return self._get(f"/markets-by-token/{token_id}")
 
-    def fetch_orderbook(self, token_id: str) -> dict[str, Any]:
+    def fetch_orderbook(self, token_id: str, timeout: float | None = None) -> dict[str, Any]:
         """Fetch the L2 orderbook for a single token (YES or NO outcome)."""
-        return self._get("/book", params={"token_id": token_id})
+        return self._get("/book", params={"token_id": token_id}, timeout=timeout, max_retries=0)
 
     def fetch_market_detail(self, condition_id: str) -> dict[str, Any]:
         """Fetch full market detail including resolution status and end date."""

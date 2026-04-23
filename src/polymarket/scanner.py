@@ -7,6 +7,7 @@ import logging
 import re
 import time
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Any
 
@@ -19,6 +20,9 @@ _CURSOR_END = "LTE="  # Polymarket's sentinel for the last page
 
 _GAMMA_BASE_URL = "https://gamma-api.polymarket.com"
 _GAMMA_PAGE_SIZE = 1000  # server max; ~280ms/page, ~51 pages for 50k markets
+
+_BOOK_CONCURRENCY = 20   # max simultaneous /book requests
+_BOOK_TIMEOUT_SEC = 3.0  # per-request timeout; timed-out markets are skipped
 
 # Maps internal skip-reason strings to summary stat keys.
 _SKIP_TO_STAT: dict[str, str] = {
@@ -638,46 +642,63 @@ def fetch_market_orderbooks(
     markets: list[Market],
     validate_tokens: bool = True,
 ) -> list[MarketOrderbook]:
-    """Fetch YES and NO orderbooks for each market, skipping on error.
+    """Fetch YES and NO orderbooks for each market in parallel.
 
-    Pass validate_tokens=False for Gamma-sourced markets whose token IDs are
-    already trusted — bypasses the CLOB token-lookup step that rejects them.
+    Uses a thread pool (max _BOOK_CONCURRENCY workers) to fire all /book
+    requests concurrently.  Each request has a hard _BOOK_TIMEOUT_SEC timeout
+    and no retries; markets whose tokens fail or time out are skipped.
+
+    Pass validate_tokens=False for Gamma-sourced markets — bypasses the CLOB
+    token-lookup step that rejects them due to primary/secondary ordering
+    differences.
     """
-    result: list[MarketOrderbook] = []
+    t0 = time.monotonic()
 
+    valid_markets: list[Market] = []
     for market in markets:
         if validate_tokens and not _validate_market_tokens(client, market):
             continue
+        valid_markets.append(market)
 
-        try:
-            yes_raw = client.fetch_orderbook(market.yes_token.token_id)
-        except Exception as exc:
-            _log_orderbook_skip(
-                market=market,
-                token=market.yes_token,
-                reason="book_fetch_failed",
-                error=exc,
-            )
-            continue
+    # Submit YES and NO fetches for every market simultaneously.
+    future_to_info: dict = {}
+    with ThreadPoolExecutor(max_workers=_BOOK_CONCURRENCY) as executor:
+        for market in valid_markets:
+            for side, token in (("yes", market.yes_token), ("no", market.no_token)):
+                fut = executor.submit(client.fetch_orderbook, token.token_id, _BOOK_TIMEOUT_SEC)
+                future_to_info[fut] = (market, side, token)
 
-        try:
-            no_raw = client.fetch_orderbook(market.no_token.token_id)
-        except Exception as exc:
-            _log_orderbook_skip(
-                market=market,
-                token=market.no_token,
-                reason="book_fetch_failed",
-                error=exc,
-            )
-            continue
+        # Collect results as they arrive.
+        books: dict[str, dict] = {}  # condition_id -> {market, yes_raw, no_raw}
+        for fut in as_completed(future_to_info):
+            market, side, token = future_to_info[fut]
+            try:
+                raw = fut.result()
+                entry = books.setdefault(market.condition_id, {"market": market})
+                entry[side] = raw
+            except Exception as exc:
+                _log_orderbook_skip(
+                    market=market,
+                    token=token,
+                    reason="book_fetch_failed",
+                    error=exc,
+                )
 
-        result.append(
-            MarketOrderbook(
-                market=market,
-                yes=_parse_orderbook_side(yes_raw),
-                no=_parse_orderbook_side(no_raw),
-            )
+    # Only emit a MarketOrderbook when both sides are present.
+    result = [
+        MarketOrderbook(
+            market=entry["market"],
+            yes=_parse_orderbook_side(entry["yes"]),
+            no=_parse_orderbook_side(entry["no"]),
         )
+        for entry in books.values()
+        if "yes" in entry and "no" in entry
+    ]
 
-    LOGGER.info("polymarket_orderbooks_fetched count=%d", len(result))
+    elapsed_ms = int((time.monotonic() - t0) * 1000)
+    LOGGER.info(
+        "polymarket_book_fetch_complete markets=%d elapsed_ms=%d",
+        len(result),
+        elapsed_ms,
+    )
     return result

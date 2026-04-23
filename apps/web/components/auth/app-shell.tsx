@@ -122,7 +122,6 @@ export function AppShell({ children }: { children: ReactNode }) {
               Trading Console
             </h1>
           </div>
-          <span className="ui-pill hidden sm:inline-flex">Paper-Only</span>
         </div>
 
         <div className="mt-3 hidden items-center justify-between gap-3 md:flex">
