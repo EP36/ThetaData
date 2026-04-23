@@ -329,9 +329,13 @@ def execute(
 
     # Strategy scope check
     if opportunity.strategy not in _EXECUTABLE_STRATEGIES:
-        LOGGER.info(
-            "polymarket_execute_skip strategy=%s reason=not_executable_in_phase2",
+        LOGGER.warning(
+            "polymarket_execute_skip strategy=%s edge_pct=%.4f "
+            "reason=not_executable_in_phase2 executable_strategies=%s "
+            "— set POLY_TRADING_MODE=live to enable live execution",
             opportunity.strategy,
+            opportunity.edge_pct,
+            sorted(_EXECUTABLE_STRATEGIES),
         )
         return ExecutionResult(
             success=False,
@@ -341,18 +345,22 @@ def execute(
     # Risk checks
     passed, reason = risk_guard.check(opportunity, proposed_size_usdc=proposed_size)
     if not passed:
-        LOGGER.info(
-            "polymarket_execute_blocked strategy=%s reason=%s",
+        LOGGER.warning(
+            "polymarket_execute_risk_blocked strategy=%s edge_pct=%.4f "
+            "size_usdc=%.2f reason=%s",
             opportunity.strategy,
+            opportunity.edge_pct,
+            proposed_size,
             reason,
         )
         return ExecutionResult(success=False, error=f"risk_check_failed: {reason}")
 
     # Dry-run mode: log intent and return without touching the API
     if config.dry_run:
-        LOGGER.info(
-            "polymarket_dry_run strategy=%s edge_pct=%.4f size_usdc=%.2f "
-            "action=%s — DRY RUN would have executed",
+        LOGGER.warning(
+            "polymarket_dry_run_gate strategy=%s edge_pct=%.4f size_usdc=%.2f "
+            "action=%s — BLOCKED by dry_run=True; set POLY_DRY_RUN=false "
+            "POLY_TRADING_MODE=live LIVE_TRADING=true to execute live",
             opportunity.strategy,
             opportunity.edge_pct,
             proposed_size,

@@ -10,8 +10,11 @@ import { SummaryCard } from "@/components/dashboard/summary-card";
 import { CollapsibleSection } from "@/components/ui/collapsible-section";
 import { PageHeader } from "@/components/ui/page-header";
 import { StatePanel } from "@/components/ui/state-panel";
+import { getDashboardSummary } from "@/lib/api/client";
 import { getDashboardData } from "@/lib/dashboard/service";
 import type { DashboardSummary, TimeSeriesPoint, TradeRow } from "@/lib/types";
+
+const BALANCE_POLL_MS = 60_000;
 
 function formatUsd(value: number): string {
   return new Intl.NumberFormat("en-US", {
@@ -55,6 +58,18 @@ export default function DashboardPage() {
     return () => {
       cancelled = true;
     };
+  }, []);
+
+  useEffect(() => {
+    const id = setInterval(async () => {
+      try {
+        const updated = await getDashboardSummary();
+        setSummary((prev) => (prev === null ? prev : { ...prev, equity: updated.equity }));
+      } catch {
+        // leave stale value; next tick will retry
+      }
+    }, BALANCE_POLL_MS);
+    return () => clearInterval(id);
   }, []);
 
   if (loading || summary === null) {

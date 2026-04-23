@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+from collections import Counter
 
 from src.polymarket.alpaca_signals import get_cached_signals, refresh_btc_signals_if_stale
 from src.polymarket.client import ClobClient
@@ -50,12 +51,28 @@ def scan(config: PolymarketConfig) -> list[Opportunity]:
         opps.sort(key=lambda o: o.rank_score, reverse=True)
     # else: order stays by edge_pct (from run_all_scanners)
 
+    # Per-strategy breakdown
+    strategy_counts = Counter(o.strategy for o in opps)
+    executable_count = strategy_counts.get("orderbook_spread", 0)
+    non_executable_count = sum(v for k, v in strategy_counts.items() if k != "orderbook_spread")
+
     LOGGER.info(
-        "polymarket_scan_complete markets=%d opportunities=%d signals_available=%s",
+        "polymarket_scan_complete markets=%d opportunities=%d "
+        "orderbook_spread=%d non_executable=%d "
+        "min_edge_pct=%.2f signals_available=%s",
         len(markets),
         len(opps),
+        executable_count,
+        non_executable_count,
+        config.min_edge_pct,
         signals.data_available,
     )
+
+    if non_executable_count > 0:
+        LOGGER.info(
+            "polymarket_scan_non_executable_breakdown %s",
+            dict(strategy_counts),
+        )
 
     for i, opp in enumerate(opps[:3]):
         LOGGER.info(
@@ -86,11 +103,26 @@ def scan_and_execute(config: PolymarketConfig) -> tuple[list[Opportunity], Execu
     """
     opps = scan(config)
     if not opps:
+        LOGGER.info(
+            "polymarket_no_candidates dry_run=%s min_edge_pct=%.2f "
+            "— no opportunities passed filters this cycle",
+            config.dry_run,
+            config.min_edge_pct,
+        )
         return opps, None
 
     ledger: PositionsLedger = make_ledger(config.positions_path)
     risk_guard = RiskGuard(config=config, ledger=ledger)
     top = opps[0]
+
+    LOGGER.info(
+        "polymarket_attempting_execution strategy=%s edge_pct=%.4f "
+        "confidence=%s dry_run=%s",
+        top.strategy,
+        top.edge_pct,
+        top.confidence,
+        config.dry_run,
+    )
 
     result = execute(top, config=config, risk_guard=risk_guard, ledger=ledger)
     LOGGER.info(

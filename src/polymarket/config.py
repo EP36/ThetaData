@@ -44,7 +44,7 @@ class PolymarketConfig:
     max_retries: int
     timeout_seconds: float
     # --- Phase 2: execution controls ---
-    max_trade_usdc: float = 500.0      # max USDC per trade
+    max_trade_usdc: float = 20.0       # max USDC per trade (override with POLY_MAX_TRADE_USDC)
     max_positions: int = 5             # max concurrent open positions
     daily_loss_limit: float = 200.0    # stop trading if daily P&L < -limit
     dry_run: bool = True               # True = log intent only, never place orders
