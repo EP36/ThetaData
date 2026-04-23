@@ -114,6 +114,16 @@ class ClobClient:
         """Fetch the L2 orderbook for a single token (YES or NO outcome)."""
         return self._get("/book", params={"token_id": token_id}, timeout=timeout, max_retries=0)
 
+    def fetch_orderbook_with_client(
+        self, http: "httpx.Client", token_id: str
+    ) -> dict[str, Any]:
+        """Fetch one orderbook reusing an existing httpx.Client (for concurrent batches)."""
+        url = self.config.clob_base_url + "/book"
+        headers = self._auth_headers("GET", "/book")
+        resp = http.get(url, headers=headers, params={"token_id": token_id})
+        resp.raise_for_status()
+        return resp.json()
+
     def fetch_market_detail(self, condition_id: str) -> dict[str, Any]:
         """Fetch full market detail including resolution status and end date."""
         return self._get(f"/markets/{condition_id}")

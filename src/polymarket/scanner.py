@@ -637,20 +637,47 @@ def _validate_market_tokens(client: ClobClient, market: Market) -> bool:
     return True
 
 
+def _fetch_books_concurrent(
+    token_ids: list[str], client: ClobClient
+) -> dict[str, dict]:
+    """Fetch /book for every token_id in parallel, returning {token_id: raw_book}.
+
+    Uses a single shared httpx.Client so all threads reuse the same connection
+    pool instead of opening a new TCP socket per request.  Tokens that fail or
+    exceed _BOOK_TIMEOUT_SEC are omitted from the result dict (caller skips them).
+    """
+    import httpx as _httpx
+
+    results: dict[str, dict] = {}
+    with _httpx.Client(timeout=_BOOK_TIMEOUT_SEC) as http:
+        with ThreadPoolExecutor(max_workers=_BOOK_CONCURRENCY) as executor:
+            future_to_id = {
+                executor.submit(client.fetch_orderbook_with_client, http, tid): tid
+                for tid in token_ids
+            }
+            for future in as_completed(future_to_id):
+                tid = future_to_id[future]
+                try:
+                    results[tid] = future.result(timeout=_BOOK_TIMEOUT_SEC)
+                except Exception as exc:
+                    LOGGER.debug(
+                        "book_fetch_failed token_id=%s error=%s", tid[:20], exc
+                    )
+    return results
+
+
 def fetch_market_orderbooks(
     client: ClobClient,
     markets: list[Market],
     validate_tokens: bool = True,
 ) -> list[MarketOrderbook]:
-    """Fetch YES and NO orderbooks for each market in parallel.
+    """Fetch YES and NO orderbooks for all markets concurrently.
 
-    Uses a thread pool (max _BOOK_CONCURRENCY workers) to fire all /book
-    requests concurrently.  Each request has a hard _BOOK_TIMEOUT_SEC timeout
-    and no retries; markets whose tokens fail or time out are skipped.
+    Collects all token IDs first, fires them in one parallel batch via
+    _fetch_books_concurrent, then reassembles per-market pairs.
 
     Pass validate_tokens=False for Gamma-sourced markets — bypasses the CLOB
-    token-lookup step that rejects them due to primary/secondary ordering
-    differences.
+    token-lookup step that rejects them due to primary/secondary ordering.
     """
     t0 = time.monotonic()
 
@@ -660,31 +687,32 @@ def fetch_market_orderbooks(
             continue
         valid_markets.append(market)
 
-    # Submit YES and NO fetches for every market simultaneously.
-    future_to_info: dict = {}
-    with ThreadPoolExecutor(max_workers=_BOOK_CONCURRENCY) as executor:
-        for market in valid_markets:
-            for side, token in (("yes", market.yes_token), ("no", market.no_token)):
-                fut = executor.submit(client.fetch_orderbook, token.token_id, _BOOK_TIMEOUT_SEC)
-                future_to_info[fut] = (market, side, token)
+    # Collect every token ID we need, preserving which market+side it belongs to.
+    token_ids: list[str] = []
+    token_meta: dict[str, tuple[Market, str]] = {}  # token_id -> (market, "yes"|"no")
+    for market in valid_markets:
+        for side, token in (("yes", market.yes_token), ("no", market.no_token)):
+            if token.token_id not in token_meta:
+                token_ids.append(token.token_id)
+                token_meta[token.token_id] = (market, side)
 
-        # Collect results as they arrive.
-        books: dict[str, dict] = {}  # condition_id -> {market, yes_raw, no_raw}
-        for fut in as_completed(future_to_info):
-            market, side, token = future_to_info[fut]
-            try:
-                raw = fut.result()
-                entry = books.setdefault(market.condition_id, {"market": market})
-                entry[side] = raw
-            except Exception as exc:
-                _log_orderbook_skip(
-                    market=market,
-                    token=token,
-                    reason="book_fetch_failed",
-                    error=exc,
-                )
+    LOGGER.info(
+        "polymarket_book_fetch_start markets=%d tokens=%d concurrency=%d",
+        len(valid_markets),
+        len(token_ids),
+        _BOOK_CONCURRENCY,
+    )
 
-    # Only emit a MarketOrderbook when both sides are present.
+    # Single concurrent batch — all requests fire immediately.
+    raw_books = _fetch_books_concurrent(token_ids, client)
+
+    # Reassemble per-market: need both YES and NO to emit a MarketOrderbook.
+    books: dict[str, dict] = {}
+    for tid, raw in raw_books.items():
+        market, side = token_meta[tid]
+        entry = books.setdefault(market.condition_id, {"market": market})
+        entry[side] = raw
+
     result = [
         MarketOrderbook(
             market=entry["market"],
