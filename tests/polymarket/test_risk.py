@@ -11,7 +11,7 @@ import pytest
 from src.polymarket.config import PolymarketConfig
 from src.polymarket.opportunities import Opportunity
 from src.polymarket.positions import PositionsLedger, new_position
-from src.polymarket.risk import RiskGuard
+from src.polymarket.risk import RiskGuard, _derive_wallet_address, _fetch_polygon_usdc_balance
 
 
 # ---------------------------------------------------------------------------
@@ -252,11 +252,80 @@ def test_risk_fails_when_volume_zero(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Check 2: USDC wallet balance
+# ---------------------------------------------------------------------------
+
+def test_risk_fails_when_usdc_balance_below_proposed_size(tmp_path: Path) -> None:
+    guard = _guard(tmp_path)
+    with (
+        patch("src.polymarket.risk._derive_wallet_address", return_value="0xABCD"),
+        patch("src.polymarket.risk._fetch_polygon_usdc_balance", return_value=50.0),
+    ):
+        passed, reason = guard.check(_make_opp(), proposed_size_usdc=200.0)
+    assert not passed
+    assert "usdc_balance" in reason
+
+
+def test_risk_passes_when_usdc_balance_sufficient(tmp_path: Path) -> None:
+    guard = _guard(tmp_path)
+    with (
+        patch("src.polymarket.risk._derive_wallet_address", return_value="0xABCD"),
+        patch("src.polymarket.risk._fetch_polygon_usdc_balance", return_value=1000.0),
+    ):
+        passed, _ = guard.check(_make_opp(), proposed_size_usdc=200.0)
+    assert passed
+
+
+def test_risk_passes_when_usdc_balance_fetch_fails(tmp_path: Path) -> None:
+    guard = _guard(tmp_path)
+    with (
+        patch("src.polymarket.risk._derive_wallet_address", return_value="0xABCD"),
+        patch("src.polymarket.risk._fetch_polygon_usdc_balance", return_value=None),
+    ):
+        passed, _ = guard.check(_make_opp(), proposed_size_usdc=200.0)
+    assert passed
+
+
+def test_risk_passes_when_wallet_address_not_derivable(tmp_path: Path) -> None:
+    guard = _guard(tmp_path)
+    with patch("src.polymarket.risk._derive_wallet_address", return_value=None):
+        passed, _ = guard.check(_make_opp(), proposed_size_usdc=200.0)
+    assert passed
+
+
+def test_derive_wallet_address_returns_none_for_invalid_key() -> None:
+    assert _derive_wallet_address("not-a-key") is None
+
+
+def test_fetch_polygon_usdc_balance_returns_none_for_empty_address() -> None:
+    assert _fetch_polygon_usdc_balance("") is None
+
+
+def test_fetch_polygon_usdc_balance_returns_none_on_network_error() -> None:
+    with patch("urllib.request.urlopen", side_effect=OSError("connection refused")):
+        result = _fetch_polygon_usdc_balance("0xdeadbeef00000000000000000000000000000000")
+    assert result is None
+
+
+def test_fetch_polygon_usdc_balance_parses_hex_result() -> None:
+    raw_hex = hex(500 * 1_000_000)  # 500 USDC in 6-decimal units
+    mock_resp = MagicMock()
+    mock_resp.read.return_value = f'{{"result": "{raw_hex}"}}'.encode()
+    mock_resp.__enter__ = lambda s: s
+    mock_resp.__exit__ = MagicMock(return_value=False)
+
+    with patch("urllib.request.urlopen", return_value=mock_resp):
+        result = _fetch_polygon_usdc_balance("0xdeadbeef00000000000000000000000000000000")
+    assert result == pytest.approx(500.0)
+
+
+# ---------------------------------------------------------------------------
 # All checks pass
 # ---------------------------------------------------------------------------
 
 def test_risk_all_checks_pass_returns_true(tmp_path: Path) -> None:
     opp = _make_opp(edge_pct=5.0, confidence="high", volume_24h=50_000.0)
-    passed, reason = _guard(tmp_path).check(opp, proposed_size_usdc=100.0)
+    with patch("src.polymarket.risk._derive_wallet_address", return_value=None):
+        passed, reason = _guard(tmp_path).check(opp, proposed_size_usdc=100.0)
     assert passed
     assert reason == "all_checks_passed"

@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.polymarket.config import PolymarketConfig
-from src.polymarket.executor import ExecutionResult, _place_order, execute
+from src.polymarket.executor import ExecutionResult, _check_pol_gas, _place_order, execute
 from src.polymarket.opportunities import Opportunity
 from src.polymarket.positions import PositionsLedger, new_position
 from src.polymarket.risk import RiskGuard
@@ -290,6 +290,117 @@ def test_execute_live_no_leg_first_fails_no_unhedged_recorded(tmp_path: Path) ->
     assert result.success is False
     assert "yes_leg_failed" in result.error
     assert ledger.open_count() == 0  # nothing recorded
+
+
+# ---------------------------------------------------------------------------
+# _place_order import guard
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# _check_pol_gas
+# ---------------------------------------------------------------------------
+
+def test_check_pol_gas_returns_true_when_web3_missing() -> None:
+    import builtins
+    real_import = builtins.__import__
+
+    def mock_import(name: str, *args: Any, **kwargs: Any) -> Any:
+        if name in ("web3", "eth_account"):
+            raise ImportError(f"no module named {name}")
+        return real_import(name, *args, **kwargs)
+
+    with patch("builtins.__import__", side_effect=mock_import):
+        assert _check_pol_gas("any_key") is True
+
+
+def test_check_pol_gas_returns_true_when_key_invalid() -> None:
+    with patch("src.polymarket.executor._check_pol_gas", wraps=_check_pol_gas):
+        result = _check_pol_gas("not-a-real-key")
+    # "not-a-real-key" is not a valid private key — eth_account raises, we fail open
+    assert result is True
+
+
+def test_check_pol_gas_returns_true_on_rpc_error() -> None:
+    mock_account = MagicMock()
+    mock_account.address = "0xDeadBeef00000000000000000000000000000000"
+    mock_w3 = MagicMock()
+    mock_w3.eth.get_balance.side_effect = Exception("RPC connection refused")
+    mock_web3_cls = MagicMock(return_value=mock_w3)
+
+    with patch.dict("sys.modules", {"web3": MagicMock(Web3=mock_web3_cls), "eth_account": MagicMock(Account=MagicMock(from_key=MagicMock(return_value=mock_account)))}):
+        result = _check_pol_gas("0x" + "a" * 64)
+    assert result is True
+
+
+def test_check_pol_gas_returns_false_when_balance_too_low() -> None:
+    mock_account = MagicMock()
+    mock_account.address = "0xDeadBeef00000000000000000000000000000000"
+    mock_w3 = MagicMock()
+    mock_w3.eth.get_balance.return_value = int(0.001 * 1e18)  # 0.001 POL — below 0.005 threshold
+
+    with patch.dict("sys.modules", {
+        "web3": MagicMock(Web3=MagicMock(return_value=mock_w3, HTTPProvider=MagicMock())),
+        "eth_account": MagicMock(Account=MagicMock(from_key=MagicMock(return_value=mock_account))),
+    }):
+        result = _check_pol_gas("0x" + "a" * 64)
+    assert result is False
+
+
+def test_check_pol_gas_returns_true_when_balance_sufficient() -> None:
+    mock_account = MagicMock()
+    mock_account.address = "0xDeadBeef00000000000000000000000000000000"
+    mock_w3 = MagicMock()
+    mock_w3.eth.get_balance.return_value = int(0.1 * 1e18)  # 0.1 POL — well above threshold
+
+    with patch.dict("sys.modules", {
+        "web3": MagicMock(Web3=MagicMock(return_value=mock_w3, HTTPProvider=MagicMock())),
+        "eth_account": MagicMock(Account=MagicMock(from_key=MagicMock(return_value=mock_account))),
+    }):
+        result = _check_pol_gas("0x" + "a" * 64)
+    assert result is True
+
+
+def test_execute_live_aborts_when_pol_gas_insufficient(tmp_path: Path) -> None:
+    config = _make_config(dry_run=False)
+    ledger = _ledger(tmp_path)
+    guard = RiskGuard(config=config, ledger=ledger)
+
+    with patch("src.polymarket.executor._check_pol_gas", return_value=False):
+        result = execute(_make_opp(), config=config, risk_guard=guard, ledger=ledger)
+
+    assert result.success is False
+    assert result.error == "pol_gas_insufficient"
+    assert ledger.open_count() == 0
+
+
+def test_execute_live_proceeds_when_pol_gas_ok(tmp_path: Path) -> None:
+    config = _make_config(dry_run=False)
+    ledger = _ledger(tmp_path)
+    guard = RiskGuard(config=config, ledger=ledger)
+
+    yes_resp = _mock_order_response("ord-yes-gas", 0.40)
+    no_resp = _mock_order_response("ord-no-gas", 0.40)
+
+    with (
+        patch("src.polymarket.executor._check_pol_gas", return_value=True),
+        patch("src.polymarket.executor._place_order", side_effect=[yes_resp, no_resp]),
+    ):
+        result = execute(_make_opp(), config=config, risk_guard=guard, ledger=ledger)
+
+    assert result.success is True
+    assert ledger.open_count() == 1
+
+
+def test_execute_dry_run_skips_pol_gas_check(tmp_path: Path) -> None:
+    config = _make_config(dry_run=True)
+    ledger = _ledger(tmp_path)
+    guard = RiskGuard(config=config, ledger=ledger)
+
+    with patch("src.polymarket.executor._check_pol_gas") as mock_gas:
+        result = execute(_make_opp(), config=config, risk_guard=guard, ledger=ledger)
+
+    mock_gas.assert_not_called()
+    assert result.success is True
 
 
 # ---------------------------------------------------------------------------

@@ -52,6 +52,37 @@ def _run_tuning_cycle(config: PolymarketConfig) -> None:
     )
 
 
+def _assert_wallet_key_match(config: PolymarketConfig) -> None:
+    """Raise RuntimeError if POLY_WALLET_ADDRESS doesn't match POLY_PRIVATE_KEY.
+
+    Skipped silently when POLY_WALLET_ADDRESS is unset or eth_account is missing.
+    Called once on startup, before the scan loop begins.
+    """
+    configured_address = os.getenv("POLY_WALLET_ADDRESS", "").strip()
+    if not configured_address:
+        return
+
+    try:
+        from eth_account import Account  # type: ignore[import]
+    except ImportError:
+        LOGGER.warning("wallet_key_check_skipped reason=eth_account_not_installed")
+        return
+
+    try:
+        derived: str = Account.from_key(config.private_key).address
+    except Exception as exc:
+        LOGGER.warning("wallet_key_check_skipped reason=key_derivation_failed error=%s", exc)
+        return
+
+    if derived.lower() != configured_address.lower():
+        raise RuntimeError(
+            f"POLY_WALLET_ADDRESS ({configured_address}) does not match the address "
+            f"derived from POLY_PRIVATE_KEY ({derived[:10]}...) — "
+            "check your .env configuration before going live"
+        )
+    LOGGER.info("polymarket_wallet_verified address=%s", derived[:10] + "...")
+
+
 def _run_ai_analysis_cycle() -> None:
     """Run the Phase 7 AI analysis (schedule-aware, idempotent)."""
     db_url = os.getenv("DATABASE_URL", "")
@@ -69,6 +100,7 @@ def _run_ai_analysis_cycle() -> None:
 def main() -> None:
     configure_logging()
     config = PolymarketConfig.from_env()
+    _assert_wallet_key_match(config)
     LOGGER.info(
         "polymarket_runtime_mode active_trading_mode=%s active_venue=%s "
         "execution_adapter=polymarket_clob paper_trading=%s dry_run=%s "

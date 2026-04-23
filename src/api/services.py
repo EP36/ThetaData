@@ -60,15 +60,31 @@ LOGGER = logging.getLogger("theta.api.services")
 RISK_PER_TRADE_PCT = 0.01
 
 # USDC on Polygon (native USDC, 6 decimals)
-_POLYGON_RPC_URL = "https://polygon-rpc.com"
+# Primary RPC first; QuikNode is the fallback if polygon-rpc.com is unreachable.
+_POLYGON_RPC_URLS = [
+    "https://polygon-rpc.com",
+    "https://rpc-mainnet.matic.quiknode.pro",
+]
 _POLYGON_USDC_CONTRACT = "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359"
 _BALANCE_OF_SELECTOR = "0x70a08231"  # keccak256("balanceOf(address)")[:4]
 
 
 def _fetch_polygon_usdc_balance(wallet_address: str) -> Optional[float]:
-    """Return USDC balance (6 decimals) for *wallet_address* on Polygon, or None on failure."""
+    """Return USDC balance (in whole USDC) for *wallet_address* on Polygon, or None on failure.
+
+    Calls balanceOf(wallet_address) on the native USDC contract
+    (0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359) and divides the raw
+    uint256 result by 10**6 (USDC has 6 decimals, not 18).
+
+    Tries each RPC in _POLYGON_RPC_URLS in order.  Returns None only after
+    all RPCs are exhausted.  Every failure path is logged explicitly so the
+    caller can tell whether this was an RPC error, a contract-level error,
+    a parsing failure, or an empty wallet address.
+    """
     if not wallet_address:
+        LOGGER.warning("polygon_usdc_balance_skipped reason=empty_wallet_address")
         return None
+
     padded = wallet_address.lower().removeprefix("0x").zfill(64)
     call_data = _BALANCE_OF_SELECTOR + padded
     payload = json.dumps({
@@ -77,20 +93,93 @@ def _fetch_polygon_usdc_balance(wallet_address: str) -> Optional[float]:
         "params": [{"to": _POLYGON_USDC_CONTRACT, "data": call_data}, "latest"],
         "id": 1,
     }).encode()
-    try:
-        req = urllib.request.Request(
-            _POLYGON_RPC_URL,
-            data=payload,
-            headers={"Content-Type": "application/json"},
-        )
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            body = json.loads(resp.read())
-        result = body.get("result", "0x0")
-        raw = int(result, 16)
-        return raw / 1_000_000  # USDC has 6 decimals
-    except Exception:
-        LOGGER.warning("polygon_usdc_balance_fetch_failed wallet=%s", wallet_address[:10] + "...")
-        return None
+
+    LOGGER.debug(
+        "polygon_usdc_balance_call wallet=%s contract=%s selector=%s",
+        wallet_address[:10] + "...",
+        _POLYGON_USDC_CONTRACT,
+        _BALANCE_OF_SELECTOR,
+    )
+
+    last_error: str = "no_rpc_attempted"
+    for rpc_url in _POLYGON_RPC_URLS:
+        try:
+            req = urllib.request.Request(
+                rpc_url,
+                data=payload,
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                raw_body = resp.read()
+
+            LOGGER.debug(
+                "polygon_usdc_rpc_raw_response rpc=%s wallet=%s body=%.300s",
+                rpc_url,
+                wallet_address[:10] + "...",
+                raw_body.decode("utf-8", errors="replace"),
+            )
+
+            body = json.loads(raw_body)
+
+            # JSON-RPC application-level error (e.g. reverted call, bad params)
+            if "error" in body:
+                rpc_error = body["error"]
+                LOGGER.warning(
+                    "polygon_usdc_rpc_error rpc=%s wallet=%s error=%s",
+                    rpc_url,
+                    wallet_address[:10] + "...",
+                    rpc_error,
+                )
+                last_error = f"rpc_error:{rpc_error}"
+                continue
+
+            result: str = body.get("result") or "0x0"
+            if result in ("0x", ""):
+                LOGGER.warning(
+                    "polygon_usdc_empty_result rpc=%s wallet=%s — treating as 0x0",
+                    rpc_url,
+                    wallet_address[:10] + "...",
+                )
+                result = "0x0"
+
+            try:
+                raw_units = int(result, 16)
+            except ValueError as exc:
+                LOGGER.error(
+                    "polygon_usdc_parse_failed rpc=%s wallet=%s result=%s error=%s",
+                    rpc_url,
+                    wallet_address[:10] + "...",
+                    result,
+                    exc,
+                )
+                last_error = f"parse_error:{exc}"
+                continue
+
+            usdc = raw_units / 1_000_000  # USDC has 6 decimals (not 18)
+            LOGGER.info(
+                "polygon_usdc_balance_ok rpc=%s wallet=%s raw_units=%d usdc=%.6f",
+                rpc_url,
+                wallet_address[:10] + "...",
+                raw_units,
+                usdc,
+            )
+            return usdc
+
+        except Exception as exc:
+            LOGGER.warning(
+                "polygon_usdc_balance_fetch_failed rpc=%s wallet=%s error=%s",
+                rpc_url,
+                wallet_address[:10] + "...",
+                exc,
+            )
+            last_error = str(exc)
+
+    LOGGER.error(
+        "polygon_usdc_balance_all_rpcs_failed wallet=%s last_error=%s",
+        wallet_address[:10] + "...",
+        last_error,
+    )
+    return None
 MAX_POSITION_SIZE_CAP_PCT = 0.25
 MAX_OPEN_POSITIONS_CAP = 3
 AnalyticsSource = Literal["execution", "paper", "backtest"]

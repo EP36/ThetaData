@@ -23,6 +23,58 @@ LOGGER = logging.getLogger("theta.polymarket.executor")
 # correlated_markets requires two-market coordination (Phase 3).
 _EXECUTABLE_STRATEGIES = {"orderbook_spread"}
 
+_POLYGON_RPC_URL = "https://polygon-rpc.com"
+_MIN_POL_GAS = 0.005  # minimum POL required to cover on-chain transaction gas
+
+
+# ---------------------------------------------------------------------------
+# Pre-flight: POL gas check
+# ---------------------------------------------------------------------------
+
+def _check_pol_gas(private_key: str) -> bool:
+    """Return False and log CRITICAL if the trading wallet has < 0.005 POL.
+
+    Derives the wallet address from private_key at call time.
+    Returns True (fail open) if web3/eth_account are missing or the RPC is
+    unreachable — a dependency outage should not silently block all trading.
+    Only returns False when the balance is definitively below the threshold.
+    """
+    try:
+        from eth_account import Account  # type: ignore[import]
+        from web3 import Web3  # type: ignore[import]
+    except ImportError:
+        LOGGER.warning("pol_gas_check_skipped reason=web3_not_installed")
+        return True
+
+    try:
+        address: str = Account.from_key(private_key).address
+    except Exception as exc:
+        LOGGER.warning("pol_gas_check_skipped reason=key_derivation_failed error=%s", exc)
+        return True
+
+    try:
+        w3 = Web3(Web3.HTTPProvider(_POLYGON_RPC_URL, request_kwargs={"timeout": 5}))
+        wei = w3.eth.get_balance(address)
+        pol = wei / 1e18
+    except Exception as exc:
+        LOGGER.warning(
+            "pol_gas_check_failed error=%s — proceeding with order placement", exc
+        )
+        return True
+
+    if pol < _MIN_POL_GAS:
+        LOGGER.critical(
+            "pol_gas_insufficient address=%s pol_balance=%.6f min_required=%.6f "
+            "— aborting trade to prevent stuck half-filled orders",
+            address[:10] + "...",
+            pol,
+            _MIN_POL_GAS,
+        )
+        return False
+
+    LOGGER.debug("pol_gas_ok pol_balance=%.6f address=%s", pol, address[:10] + "...")
+    return True
+
 
 @dataclass(frozen=True, slots=True)
 class ExecutionResult:
@@ -148,6 +200,9 @@ def _execute_orderbook_spread(
     If the YES leg fills but the NO leg fails, records an UNHEDGED position
     and logs at CRITICAL level — this must never be silently swallowed.
     """
+    if not _check_pol_gas(config.private_key):
+        return ExecutionResult(success=False, error="pol_gas_insufficient")
+
     total_cost_per_share = opportunity.entry_price_yes + opportunity.entry_price_no
     if total_cost_per_share <= 0:
         return ExecutionResult(
