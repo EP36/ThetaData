@@ -15,6 +15,32 @@ SUPPORTED_POLY_TRADING_MODES = ("disabled", "dry_run", "live")
 SUPPORTED_ALPACA_TRADING_MODES = ("disabled", "paper", "live")
 
 
+def _clean_credential(value: str) -> str:
+    """Strip whitespace/newlines from a credential string.
+
+    Trailing newlines are common when credentials are pasted into .env files
+    or set via the Render dashboard without trimming.
+    """
+    return value.strip()
+
+
+def _normalize_b64_secret(value: str) -> str:
+    """Strip whitespace and fix missing base64 padding.
+
+    py-clob-client base64-decodes POLY_API_SECRET internally when building
+    HMAC signatures.  If the value is missing trailing '=' padding chars
+    (common when secrets are copied from Polymarket's dashboard), Python's
+    base64 decoder raises 'Incorrect padding'.  Re-adding the padding is
+    always safe: base64.b64decode ignores excess '=' characters.
+    """
+    value = value.strip()
+    # Add padding so len is a multiple of 4
+    remainder = len(value) % 4
+    if remainder:
+        value += "=" * (4 - remainder)
+    return value
+
+
 def _normalize_signal_provider(value: str) -> str:
     normalized = value.strip().lower()
     if normalized in {"", "none"}:
@@ -170,10 +196,10 @@ class PolymarketConfig:
         )
 
         return cls(
-            api_key=os.getenv("POLY_API_KEY", ""),
-            api_secret=os.getenv("POLY_API_SECRET", ""),
-            passphrase=os.getenv("POLY_PASSPHRASE", ""),
-            private_key=os.getenv("POLY_PRIVATE_KEY", ""),
+            api_key=_clean_credential(os.getenv("POLY_API_KEY", "")),
+            api_secret=_normalize_b64_secret(os.getenv("POLY_API_SECRET", "")),
+            passphrase=_clean_credential(os.getenv("POLY_PASSPHRASE", "")),
+            private_key=_clean_credential(os.getenv("POLY_PRIVATE_KEY", "")),
             scan_interval_sec=int(os.getenv("POLY_SCAN_INTERVAL_SEC", "15")),
             min_edge_pct=float(os.getenv("POLY_MIN_EDGE_PCT", "1.5")),
             clob_base_url=os.getenv("POLY_CLOB_BASE_URL", "https://clob.polymarket.com"),
