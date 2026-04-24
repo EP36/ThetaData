@@ -377,6 +377,14 @@ def _parse_gamma_market(
     if crypto_only:
         if not _CRYPTO_RE.search(question):
             return None, "not_crypto"
+        # Require price-action threshold context: "$X" + "reach/hit/above/..." + no "between"
+        # Excludes hack/event/volume markets like "Another crypto hack over $100M"
+        if (
+            not _THRESHOLD_USD_RE.search(question)
+            or not _THRESHOLD_ABOVE_RE.search(question)
+            or _THRESHOLD_BETWEEN_RE.search(question)
+        ):
+            return None, "not_crypto"
     else:
         # All-threshold mode: keep any "Will X reach/hit/exceed $Y" question.
         # Range and non-threshold markets can never form dominance pairs.
