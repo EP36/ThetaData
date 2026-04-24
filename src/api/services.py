@@ -61,7 +61,10 @@ RISK_PER_TRADE_PCT = 0.01
 
 # USDC on Polygon (native USDC, 6 decimals)
 # Primary RPC first; QuikNode is the fallback if polygon-rpc.com is unreachable.
-_POLYGON_RPC_URLS = [
+_env_rpc = os.getenv("POLYGON_RPC_URL", "")
+_POLYGON_RPC_URLS = (
+    [_env_rpc] if _env_rpc else []
+) + [
     "https://polygon-rpc.com",
     "https://rpc-mainnet.matic.quiknode.pro",
 ]

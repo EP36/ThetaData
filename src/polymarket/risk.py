@@ -22,7 +22,7 @@ _MIN_CONFIDENCE_SCORE = 0.5
 
 # Polygon USDC balance check (mirrors src/api/services.py — kept local to avoid
 # pulling the full API service layer into the polymarket execution path)
-_POLYGON_RPC_URL = "https://polygon-rpc.com"
+_POLYGON_RPC_URL = os.getenv("POLYGON_RPC_URL", "https://polygon-rpc.com")
 _POLYGON_USDC_CONTRACT = "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359"
 _BALANCE_OF_SELECTOR = "0x70a08231"  # keccak256("balanceOf(address)")[:4]
 
