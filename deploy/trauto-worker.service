@@ -1,0 +1,20 @@
+[Unit]
+Description=Trauto Trading Worker
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/trauto
+EnvironmentFile=/etc/trauto/env
+Environment=PATH=/opt/trauto/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/bin/bash /opt/trauto/scripts/start_worker.sh
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=trauto-worker
+
+[Install]
+WantedBy=multi-user.target

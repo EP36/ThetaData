@@ -111,10 +111,22 @@ def _run_worker_for_settings(settings: DeploymentSettings) -> None:
     _run_equities_worker(settings)
 
 
+def _log_outbound_ip() -> None:
+    """Log the server's outbound IP on startup for geo-verification."""
+    try:
+        import httpx
+        r = httpx.get("https://api.ipify.org?format=json", timeout=5)
+        ip = r.json().get("ip", "unknown")
+        LOGGER.info("outbound_ip=%s region=hetzner-helsinki", ip)
+    except Exception as exc:
+        LOGGER.debug("outbound_ip_check_failed error=%s", exc)
+
+
 def main() -> None:
     configure_logging()
 
     LOGGER.info("worker_entrypoint_starting")
+    _log_outbound_ip()
     settings = DeploymentSettings.from_env()
     _run_worker_for_settings(settings)
 

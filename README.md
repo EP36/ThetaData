@@ -638,6 +638,100 @@ Recommended:
 Deployment checklist:
 - See [`docs/deployment-checklist.md`](docs/deployment-checklist.md).
 
+## Hetzner Deployment (Polymarket-Unblocked, Helsinki)
+
+Render's US-based IPs are geo-blocked by Polymarket. Deploy to Hetzner Cloud
+in Helsinki (Finland) to get an unblocked European IP.
+
+### 1. Create the server
+
+1. Sign up at [hetzner.com](https://www.hetzner.com/cloud)
+2. **New Server** → Location: **Helsinki (hel1)** → Image: **Ubuntu 22.04** → Type: **CX22** (2 vCPU, 4 GB RAM, ~€4/mo)
+3. Add your SSH public key, click **Create**
+
+### 2. First-time setup
+
+SSH in as root and run the setup script:
+
+```bash
+ssh root@<SERVER_IP>
+
+curl -fsSL https://raw.githubusercontent.com/EP36/Trauto/main/deploy/setup.sh | bash
+```
+
+This will:
+- Install Python 3.11, pip, git, screen
+- Clone the repo to `/opt/trauto`
+- Create a Python venv at `/opt/trauto/.venv` and install all deps
+- Create `/etc/trauto/env` with placeholder env vars
+- Install and enable `trauto-worker` and `trauto-web` systemd services
+
+### 3. Configure environment
+
+```bash
+nano /etc/trauto/env
+```
+
+Fill in at minimum:
+
+```
+DATABASE_URL=postgresql://...         # Hetzner Managed Postgres or Render Postgres external URL
+POLY_API_KEY=...
+POLY_API_SECRET=...
+POLY_PASSPHRASE=...
+POLY_PRIVATE_KEY=0x...
+AUTH_SESSION_SECRET=...               # 32+ random chars
+AUTH_PASSWORD_PEPPER=...
+POLY_TRADING_MODE=dry_run             # change to live when ready
+POLY_DRY_RUN=true
+```
+
+### 4. Start services
+
+```bash
+systemctl start trauto-worker trauto-web
+
+# Verify
+systemctl status trauto-worker trauto-web
+
+# Tail logs
+journalctl -u trauto-worker -f
+journalctl -u trauto-web -f
+```
+
+On startup the worker logs its outbound IP:
+```
+outbound_ip=65.21.x.x region=hetzner-helsinki
+```
+
+Verify this IP is not blocked by Polymarket before enabling live trading.
+
+### 5. Deploy updates
+
+```bash
+ssh root@<SERVER_IP> bash /opt/trauto/deploy/update.sh
+```
+
+This pulls the latest code, installs any new deps, and restarts both services.
+
+### Systemd service files
+
+| File | Purpose |
+|------|---------|
+| `deploy/trauto-worker.service` | Background scanner/execution loop |
+| `deploy/trauto-web.service` | FastAPI web dashboard |
+| `deploy/setup.sh` | First-time server provisioning |
+| `deploy/update.sh` | Rolling code update + service restart |
+
+### Docker (optional)
+
+A `Dockerfile` is included if you prefer container-based deployment:
+
+```bash
+docker build -t trauto .
+docker run --env-file /etc/trauto/env trauto
+```
+
 ## Frontend (Dashboard Shell)
 
 The frontend lives in `apps/web` and is API-first.
