@@ -203,10 +203,11 @@ class RiskGuard:
             return False, reason
 
         # 8 — market liquidity (volume)
-        if opportunity.volume_24h <= self.config.min_volume_24h:
+        # Use strict < so min_volume_24h=0 means "no minimum" (volume_24h=0 passes).
+        if opportunity.volume_24h < self.config.min_volume_24h:
             reason = (
                 f"volume_24h={opportunity.volume_24h:.0f} "
-                f"<= min={self.config.min_volume_24h:.0f}"
+                f"< min={self.config.min_volume_24h:.0f}"
             )
             LOGGER.info(
                 "polymarket_risk_fail check=volume reason=%s strategy=%s",
