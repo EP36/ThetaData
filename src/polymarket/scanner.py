@@ -31,12 +31,20 @@ _THRESHOLD_ABOVE_RE = re.compile(
 _THRESHOLD_BETWEEN_RE = re.compile(r"\bbetween\b", re.IGNORECASE)
 
 # Crypto-only filter applied when ALPACA_TRADING_MODE != "live".
-# Matches major crypto assets and exchanges by keyword.
+# Matches crypto *assets* by name/ticker only — exchange names (Coinbase, Binance)
+# are intentionally excluded because they also appear as equity ticker context
+# (e.g. "Will Coinbase (COIN) reach $350?" is a stock question, not a crypto one).
 _CRYPTO_RE = re.compile(
-    r"\b(bitcoin|btc|ethereum|eth|xrp|solana|sol|crypto|"
-    r"coinbase|binance|altcoin|defi)\b",
+    r"\b(bitcoin|btc|ethereum|eth|xrp|ripple|solana|sol|"
+    r"dogecoin|doge|cardano|ada|avalanche|avax|chainlink|link|"
+    r"polkadot|dot|matic|polygon|litecoin|ltc|"
+    r"crypto|altcoin|defi)\b",
     re.IGNORECASE,
 )
+
+# Equity-ticker guard: parenthetical all-caps tickers like (COIN), (MSTR), (NVDA)
+# are a strong signal the question is about a stock, not a crypto asset.
+_EQUITY_TICKER_RE = re.compile(r"\([A-Z]{2,5}\)")
 
 _BOOK_CONCURRENCY = 20   # max simultaneous /book requests
 _BOOK_TIMEOUT_SEC = 3.0  # per-request timeout; timed-out markets are skipped
@@ -376,6 +384,9 @@ def _parse_gamma_market(
 
     if crypto_only:
         if not _CRYPTO_RE.search(question):
+            return None, "not_crypto"
+        # Parenthetical all-caps tickers like (COIN), (MSTR) signal a stock question.
+        if _EQUITY_TICKER_RE.search(question):
             return None, "not_crypto"
         # Require price-action threshold context: "$X" + "reach/hit/above/..." + no "between"
         # Excludes hack/event/volume markets like "Another crypto hack over $100M"
