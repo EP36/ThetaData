@@ -338,31 +338,43 @@ def _execute_correlated_markets(
     sell_price = opportunity.entry_price_no   # bid of higher-priced market
     buy_price = opportunity.entry_price_yes   # ask of lower-priced market
 
-    if sell_price <= 0 or buy_price <= 0:
+    # buy_price must be positive — it's the cost of entry.
+    # sell_price=0 is valid: the higher-threshold market is near-worthless
+    # (best bid = 0), so leg A is skipped rather than posting a $0 limit sell.
+    if buy_price <= 0:
         return ExecutionResult(
-            success=False, error="correlated_markets_entry_prices_missing"
+            success=False, error="correlated_markets_buy_price_missing"
         )
 
     size_usdc = config.max_trade_usdc
 
-    # --- Leg A: SELL YES on the higher-priced market ---
-    sell_resp: dict[str, Any] | None = None
-    try:
-        sell_resp = _place_order(
-            config,
-            token_id=opportunity.yes_token_id_2,
-            size_usdc=size_usdc,
-            price=sell_price,
-            side="SELL",
-        )
-    except Exception as exc:
-        return ExecutionResult(
-            success=False,
-            error=f"sell_leg_failed: {exc}",
-        )
+    sell_order_id: str = ""
+    sell_fill: float = 0.0
 
-    sell_order_id: str = sell_resp.get("orderID", sell_resp.get("order_id", ""))
-    sell_fill = float(sell_resp.get("price", sell_price))
+    # --- Leg A: SELL YES on the higher-priced market (skip if near-worthless) ---
+    if sell_price > 0:
+        sell_resp: dict[str, Any] | None = None
+        try:
+            sell_resp = _place_order(
+                config,
+                token_id=opportunity.yes_token_id_2,
+                size_usdc=size_usdc,
+                price=sell_price,
+                side="SELL",
+            )
+        except Exception as exc:
+            return ExecutionResult(
+                success=False,
+                error=f"sell_leg_failed: {exc}",
+            )
+        sell_order_id = sell_resp.get("orderID", sell_resp.get("order_id", ""))
+        sell_fill = float(sell_resp.get("price", sell_price))
+    else:
+        LOGGER.info(
+            "correlated_markets_sell_leg_skipped condition_id=%s "
+            "sell_price=0 — higher market is near-worthless, executing buy leg only",
+            opportunity.condition_id_2,
+        )
 
     # --- Leg B: BUY YES on the lower-priced market ---
     try:
@@ -374,69 +386,74 @@ def _execute_correlated_markets(
             side="BUY",
         )
     except Exception as exc:
-        sell_contracts = size_usdc / sell_fill if sell_fill > 0 else 0.0
-        unhedged = new_position(
-            market_condition_id=opportunity.condition_id_2,
-            market_question=opportunity.market_question,
-            strategy=opportunity.strategy,
-            side="SELL_YES",
-            entry_price=sell_fill,
-            size_usdc=size_usdc,
-            status="unhedged",
-            yes_token_id=opportunity.yes_token_id_2,
-            contracts_held=sell_contracts,
-        )
-        ledger.add(unhedged)
-        LOGGER.critical(
-            "polymarket_unhedged_position sell_order_id=%s condition_id=%s "
-            "size_usdc=%.2f buy_error=%s — manual intervention required",
-            sell_order_id,
-            opportunity.condition_id_2,
-            size_usdc,
-            exc,
-        )
-        return ExecutionResult(
-            success=False,
-            order_id=sell_order_id,
-            fill_price=sell_fill,
-            size_usdc=size_usdc,
-            error=f"buy_leg_failed_unhedged: {exc}",
-        )
+        if sell_order_id:
+            # Leg A filled but leg B failed — unhedged
+            sell_contracts = size_usdc / sell_fill if sell_fill > 0 else 0.0
+            unhedged = new_position(
+                market_condition_id=opportunity.condition_id_2,
+                market_question=opportunity.market_question,
+                strategy=opportunity.strategy,
+                side="SELL_YES",
+                entry_price=sell_fill,
+                size_usdc=size_usdc,
+                status="unhedged",
+                yes_token_id=opportunity.yes_token_id_2,
+                contracts_held=sell_contracts,
+            )
+            ledger.add(unhedged)
+            LOGGER.critical(
+                "polymarket_unhedged_position sell_order_id=%s condition_id=%s "
+                "size_usdc=%.2f buy_error=%s — manual intervention required",
+                sell_order_id,
+                opportunity.condition_id_2,
+                size_usdc,
+                exc,
+            )
+            return ExecutionResult(
+                success=False,
+                order_id=sell_order_id,
+                fill_price=sell_fill,
+                size_usdc=size_usdc,
+                error=f"buy_leg_failed_unhedged: {exc}",
+            )
+        return ExecutionResult(success=False, error=f"buy_leg_failed: {exc}")
 
     buy_order_id: str = buy_resp.get("orderID", buy_resp.get("order_id", ""))
     buy_fill = float(buy_resp.get("price", buy_price))
-    realized_edge = sell_fill - buy_fill
 
+    two_leg = sell_order_id != ""
     position = new_position(
         market_condition_id=opportunity.condition_id,
         market_question=opportunity.market_question,
         strategy=opportunity.strategy,
-        side="SELL_HIGH+BUY_LOW",
-        entry_price=(sell_fill + buy_fill) / 2.0,
-        size_usdc=size_usdc * 2,
+        side="SELL_HIGH+BUY_LOW" if two_leg else "BUY_LOW",
+        entry_price=(sell_fill + buy_fill) / 2.0 if two_leg else buy_fill,
+        size_usdc=size_usdc * 2 if two_leg else size_usdc,
         status="open",
         yes_token_id=opportunity.yes_token_id,
-        no_token_id=opportunity.yes_token_id_2,
+        no_token_id=opportunity.yes_token_id_2 if two_leg else "",
         contracts_held=size_usdc / buy_fill if buy_fill > 0 else 0.0,
     )
     ledger.add(position)
 
+    realized_edge = sell_fill - buy_fill if two_leg else -buy_fill
     LOGGER.info(
-        "polymarket_executed strategy=correlated_markets "
+        "polymarket_executed strategy=correlated_markets two_leg=%s "
         "sell_order_id=%s buy_order_id=%s "
         "sell_fill=%.4f buy_fill=%.4f realized_edge=%.4f size_usdc=%.2f",
-        sell_order_id,
+        two_leg,
+        sell_order_id or "skipped",
         buy_order_id,
         sell_fill,
         buy_fill,
         realized_edge,
-        size_usdc,
+        size_usdc * 2 if two_leg else size_usdc,
     )
     return ExecutionResult(
         success=True,
-        order_id=f"{sell_order_id}/{buy_order_id}",
-        fill_price=(sell_fill + buy_fill) / 2.0,
-        size_usdc=size_usdc * 2,
+        order_id=f"{sell_order_id}/{buy_order_id}" if two_leg else buy_order_id,
+        fill_price=(sell_fill + buy_fill) / 2.0 if two_leg else buy_fill,
+        size_usdc=size_usdc * 2 if two_leg else size_usdc,
     )
 
 
