@@ -539,7 +539,7 @@ class TradingApiService:
 
         snapshot = self.repository.load_portfolio_snapshot(default_cash=starting_equity)
         if source == "backtest":
-            backtest_trades = self.repository.recent_backtest_trades(limit=5000)
+            backtest_trades = self.repository.recent_backtest_trades(limit=500)
             fills = [
                 {
                     "run_id": row["run_id"],
@@ -554,10 +554,10 @@ class TradingApiService:
             ]
         else:
             fills = self.repository.recent_fills(
-                limit=5000,
+                limit=500,
                 run_service_prefix="worker:",
             )
-        runs = self.repository.recent_runs(limit=2000)
+        runs = self.repository.recent_runs(limit=200)
         return build_performance_snapshot(
             fills=fills,
             runs=runs,
@@ -678,6 +678,8 @@ class TradingApiService:
             raise KeyError(f"Unknown strategy '{request.strategy}'")
         if self.kill_switch_enabled:
             self.rejected_orders.append("backtest_run_rejected_kill_switch_enabled")
+            if len(self.rejected_orders) > 1000:
+                del self.rejected_orders[:-1000]
             raise PermissionError("Kill switch is enabled")
 
         strategy_state = self.strategy_state[request.strategy]
@@ -1354,7 +1356,7 @@ class TradingApiService:
 
         worker_runs = [
             run
-            for run in self.repository.recent_runs(limit=500)
+            for run in self.repository.recent_runs(limit=100)
             if str(run.get("service") or "") == worker_service
             and (
                 not str(run.get("timeframe") or "").strip()
@@ -1601,6 +1603,8 @@ class TradingApiService:
             )
         if enabled:
             self.rejected_orders.append("kill_switch_manually_enabled")
+            if len(self.rejected_orders) > 1000:
+                del self.rejected_orders[:-1000]
             LOGGER.warning("api_kill_switch_enabled")
         else:
             LOGGER.info("api_kill_switch_disabled")

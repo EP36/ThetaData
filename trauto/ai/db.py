@@ -409,15 +409,16 @@ class AIRepository:
     # Trade history from fills table
     # ------------------------------------------------------------------
 
-    def load_recent_fills(self, days: int = 30) -> list[dict[str, Any]]:
-        """Load fills from the last N days for AI analysis."""
+    def load_recent_fills(self, days: int = 30, limit: int = 1000) -> list[dict[str, Any]]:
+        """Load fills from the last N days for AI analysis, newest-first up to limit."""
         from src.persistence.models import FillModel, OrderModel
         cutoff = utc_now() - timedelta(days=days)
         with self._store.session() as session:
             rows = session.scalars(
                 select(FillModel)
                 .where(FillModel.created_at >= cutoff)
-                .order_by(FillModel.created_at)
+                .order_by(FillModel.created_at.desc())
+                .limit(limit)
             ).all()
             return [
                 {
