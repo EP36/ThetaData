@@ -102,6 +102,8 @@ def scan_and_execute(config: PolymarketConfig) -> tuple[list[Opportunity], Execu
     if no opportunities were found.
     """
     opps = scan(config)
+    result: ExecutionResult | None = None
+
     if not opps:
         LOGGER.info(
             "polymarket_no_candidates dry_run=%s min_edge_pct=%.2f "
@@ -109,35 +111,43 @@ def scan_and_execute(config: PolymarketConfig) -> tuple[list[Opportunity], Execu
             config.dry_run,
             config.min_edge_pct,
         )
-        return opps, None
+    else:
+        ledger: PositionsLedger = make_ledger(config.positions_path)
+        risk_guard = RiskGuard(config=config, ledger=ledger)
+        top = opps[0]
 
-    ledger: PositionsLedger = make_ledger(config.positions_path)
-    risk_guard = RiskGuard(config=config, ledger=ledger)
-    top = opps[0]
-
-    LOGGER.info(
-        "polymarket_attempting_execution strategy=%s edge_pct=%.4f "
-        "confidence=%s dry_run=%s",
-        top.strategy,
-        top.edge_pct,
-        top.confidence,
-        config.dry_run,
-    )
-
-    result = execute(top, config=config, risk_guard=risk_guard, ledger=ledger)
-    LOGGER.info(
-        "polymarket_execute_result strategy=%s success=%s size_usdc=%.2f error=%s",
-        top.strategy,
-        result.success,
-        result.size_usdc,
-        result.error or "none",
-    )
-    if result.success:
-        ledger.record_fill(
-            strategy=top.strategy,
-            market=top.market_question,
-            side=top.direction or "BUY",
-            size_usdc=result.size_usdc,
-            edge_pct=top.edge_pct,
+        LOGGER.info(
+            "polymarket_attempting_execution strategy=%s edge_pct=%.4f "
+            "confidence=%s dry_run=%s",
+            top.strategy,
+            top.edge_pct,
+            top.confidence,
+            config.dry_run,
         )
+
+        result = execute(top, config=config, risk_guard=risk_guard, ledger=ledger)
+        LOGGER.info(
+            "polymarket_execute_result strategy=%s success=%s size_usdc=%.2f error=%s",
+            top.strategy,
+            result.success,
+            result.size_usdc,
+            result.error or "none",
+        )
+        if result.success:
+            ledger.record_fill(
+                strategy=top.strategy,
+                market=top.market_question,
+                side=top.direction or "BUY",
+                size_usdc=result.size_usdc,
+                edge_pct=top.edge_pct,
+            )
+
+    # Market maker passive quoting cycle
+    if os.getenv("POLY_MM_ENABLED", "false").lower() == "true":
+        try:
+            from src.polymarket.market_maker import run_market_maker_cycle
+            run_market_maker_cycle(config)
+        except Exception as exc:
+            LOGGER.warning("mm_cycle_error error=%s", exc)
+
     return opps, result
