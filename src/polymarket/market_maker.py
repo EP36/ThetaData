@@ -98,7 +98,7 @@ def _cancel_order(client: Any, order_id: str) -> None:
     if not order_id:
         return
     try:
-        client.cancel(order_id=order_id)
+        client.cancel_order(order_id=order_id)
         LOGGER.info("mm_order_cancelled order_id=%s", order_id)
     except Exception as exc:
         LOGGER.warning("mm_cancel_failed order_id=%s error=%s", order_id, exc)
@@ -113,11 +113,10 @@ def _place_gtc_order(client: Any, token_id: str, side: str,
     if size_contracts <= 0:
         return ""
     try:
-        signed = client.create_order(OrderArgs(
+        resp = client.create_and_post_order(OrderArgs(
             token_id=token_id, price=price, size=size_contracts,
             side=BUY if side == "BUY" else SELL,
         ))
-        resp = client.post_order(signed, OrderType.GTC)
         oid = resp.get("orderID") or resp.get("order_id") or ""
         LOGGER.info("mm_order_placed side=%s token=%.8s price=%.2f size_usdc=%.2f oid=%s",
                     side, token_id, price, size_usdc, oid)
