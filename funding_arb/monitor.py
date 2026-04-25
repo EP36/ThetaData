@@ -163,6 +163,25 @@ def scan_once(config: dict[str, str]) -> None:
                 "ENTER NOW (within 15min window)" if secs_left <= 900 else "monitor",
             )
 
+            if secs_left <= 900:  # only enter within 15min of funding
+                private_key = config.get("HL_PRIVATE_KEY", "").strip()
+                wallet      = config.get("HL_WALLET", "").strip()
+
+                if not private_key or not wallet:
+                    LOGGER.warning(
+                        "funding_arb_execution_skipped reason=missing_credentials "
+                        "set HL_PRIVATE_KEY and HL_WALLET in /etc/trauto/env"
+                    )
+                else:
+                    from funding_arb.executor import enter_arb
+                    enter_arb(
+                        private_key=private_key,
+                        wallet=wallet,
+                        asset=asset,
+                        size_usd=pos_usd,
+                        dry_run=dry_run,
+                    )
+
     if opps == 0:
         LOGGER.info(
             "funding_arb_no_opportunities min_rate=%.4f%% — rates below threshold",

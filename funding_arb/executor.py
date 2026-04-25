@@ -1,0 +1,333 @@
+"""Hyperliquid spot + perp execution for funding rate arb.
+
+Uses EIP-712 signed orders via the Hyperliquid L1 API.
+All order placement is gated behind HL_DRY_RUN (default: true).
+
+Auth:
+  HL_PRIVATE_KEY  — Ethereum private key (hex, with or without 0x prefix)
+  HL_WALLET       — Ethereum wallet address (checksummed)
+  HL_DRY_RUN      — "false" to enable live execution (default: "true")
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+import time
+from dataclasses import dataclass
+from typing import Any
+
+import httpx
+from eth_account.messages import encode_defunct
+
+LOGGER = logging.getLogger("theta.funding_arb.executor")
+
+HL_BASE_URL = "https://api.hyperliquid.xyz"
+HL_CHAIN_ID = 1337      # Hyperliquid L1 chain ID for EIP-712
+SLIPPAGE    = 0.003     # 0.3% max slippage on market orders
+
+
+@dataclass
+class FillResult:
+    success: bool
+    asset: str
+    side: str           # "spot_long" | "perp_short"
+    size: float
+    price: float
+    order_id: str
+    error: str = ""
+
+
+def _get_nonce() -> int:
+    return int(time.time() * 1000)
+
+
+def _sign_order(private_key: str, order_payload: dict[str, Any]) -> str:
+    """Sign an order payload using EIP-712 with eth_account."""
+    from eth_account import Account
+    from eth_account.structured_data import encode_structured_data
+
+    structured_data = {
+        "domain": {
+            "name": "HyperliquidSignTransaction",
+            "version": "1",
+            "chainId": HL_CHAIN_ID,
+        },
+        "types": {
+            "EIP712Domain": [
+                {"name": "name",    "type": "string"},
+                {"name": "version", "type": "string"},
+                {"name": "chainId", "type": "uint256"},
+            ],
+            "HyperliquidTransaction:Order": [
+                {"name": "hyperliquidChain", "type": "string"},
+                {"name": "asset",            "type": "uint32"},
+                {"name": "isBuy",            "type": "bool"},
+                {"name": "limitPx",          "type": "string"},
+                {"name": "sz",               "type": "string"},
+                {"name": "reduceOnly",       "type": "bool"},
+                {"name": "cloid",            "type": "string"},
+                {"name": "nonce",            "type": "uint64"},
+            ],
+        },
+        "primaryType": "HyperliquidTransaction:Order",
+        "message": order_payload,
+    }
+    account = Account.from_key(private_key)
+    encoded = encode_structured_data(structured_data)
+    signed  = account.sign_message(encoded)
+    return signed.signature.hex()
+
+
+def _hl_exchange_post(
+    private_key: str,
+    wallet: str,
+    action: dict[str, Any],
+    timeout: float = 10.0,
+) -> dict[str, Any]:
+    """POST to /exchange with a signed action."""
+    from eth_account import Account
+
+    nonce = _get_nonce()
+
+    # Hyperliquid uses personal_sign over SHA-256 of the serialised action+nonce
+    account     = Account.from_key(private_key)
+    payload_str = json.dumps(
+        {"action": action, "nonce": nonce},
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    msg_hash = hashlib.sha256(payload_str.encode()).digest()
+    signed   = account.sign_message(encode_defunct(primitive=msg_hash))
+
+    body = {
+        "action":       action,
+        "nonce":        nonce,
+        "signature":    {"r": hex(signed.r), "s": hex(signed.s), "v": signed.v},
+        "vaultAddress": None,
+    }
+
+    resp = httpx.post(f"{HL_BASE_URL}/exchange", json=body, timeout=timeout)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def _extract_order_id(result: dict[str, Any]) -> str:
+    """Pull the filled order ID from an /exchange response."""
+    statuses = result.get("response", {}).get("data", {}).get("statuses", [])
+    if not statuses:
+        return ""
+    return str(statuses[0].get("filled", {}).get("oid", ""))
+
+
+def get_asset_index(asset: str) -> int | None:
+    """Fetch the perp asset index from HL meta."""
+    resp = httpx.post(f"{HL_BASE_URL}/info", json={"type": "meta"}, timeout=10)
+    resp.raise_for_status()
+    data = resp.json()
+    for i, u in enumerate(data.get("universe", [])):
+        if u["name"] == asset:
+            return i
+    return None
+
+
+def get_spot_token_index(asset: str) -> int | None:
+    """Fetch the spot token index for an asset."""
+    resp = httpx.post(f"{HL_BASE_URL}/info", json={"type": "spotMeta"}, timeout=10)
+    resp.raise_for_status()
+    data = resp.json()
+    for token in data.get("tokens", []):
+        if token["name"] == asset:
+            return token["index"]
+    return None
+
+
+def get_mark_price(asset: str) -> float | None:
+    """Get current mark price for a perp asset."""
+    resp = httpx.post(
+        f"{HL_BASE_URL}/info", json={"type": "metaAndAssetCtxs"}, timeout=10
+    )
+    resp.raise_for_status()
+    meta, ctxs = resp.json()
+    for i, u in enumerate(meta["universe"]):
+        if u["name"] == asset:
+            return float(ctxs[i]["markPx"])
+    return None
+
+
+def place_perp_short(
+    private_key: str,
+    wallet: str,
+    asset: str,
+    size_usd: float,
+    dry_run: bool = True,
+) -> FillResult:
+    """Open a perp short position on Hyperliquid."""
+    try:
+        mark_px = get_mark_price(asset)
+        if mark_px is None or mark_px <= 0:
+            return FillResult(
+                success=False, asset=asset, side="perp_short",
+                size=0, price=0, order_id="", error="mark_price_unavailable",
+            )
+
+        size      = round(size_usd / mark_px, 6)
+        limit_px  = round(mark_px * (1 - SLIPPAGE), 6)  # slightly below for short IOC
+        asset_idx = get_asset_index(asset)
+
+        if asset_idx is None:
+            return FillResult(
+                success=False, asset=asset, side="perp_short",
+                size=0, price=0, order_id="", error=f"asset_index_not_found_{asset}",
+            )
+
+        LOGGER.info(
+            "hl_perp_short asset=%s size=%.4f mark_px=%.4f limit_px=%.4f dry_run=%s",
+            asset, size, mark_px, limit_px, dry_run,
+        )
+
+        if dry_run:
+            return FillResult(
+                success=True, asset=asset, side="perp_short",
+                size=size, price=mark_px, order_id="dry_run",
+            )
+
+        action = {
+            "type": "order",
+            "orders": [{
+                "a": asset_idx,
+                "b": False,         # False = sell/short
+                "p": str(limit_px),
+                "s": str(size),
+                "r": False,         # reduceOnly
+                "t": {"limit": {"tif": "Ioc"}},
+            }],
+            "grouping": "na",
+        }
+
+        result   = _hl_exchange_post(private_key, wallet, action)
+        order_id = _extract_order_id(result)
+        LOGGER.info("hl_perp_short_placed asset=%s order_id=%s result=%s", asset, order_id, result)
+        return FillResult(
+            success=True, asset=asset, side="perp_short",
+            size=size, price=limit_px, order_id=order_id,
+        )
+
+    except Exception as exc:
+        LOGGER.error("hl_perp_short_error asset=%s error=%s", asset, exc)
+        return FillResult(
+            success=False, asset=asset, side="perp_short",
+            size=0, price=0, order_id="", error=str(exc),
+        )
+
+
+def place_spot_long(
+    private_key: str,
+    wallet: str,
+    asset: str,
+    size_usd: float,
+    dry_run: bool = True,
+) -> FillResult:
+    """Buy spot asset on Hyperliquid spot market."""
+    try:
+        mark_px = get_mark_price(asset)
+        if mark_px is None or mark_px <= 0:
+            return FillResult(
+                success=False, asset=asset, side="spot_long",
+                size=0, price=0, order_id="", error="mark_price_unavailable",
+            )
+
+        size      = round(size_usd / mark_px, 6)
+        limit_px  = round(mark_px * (1 + SLIPPAGE), 6)
+        token_idx = get_spot_token_index(asset)
+
+        if token_idx is None:
+            return FillResult(
+                success=False, asset=asset, side="spot_long",
+                size=0, price=0, order_id="", error=f"spot_token_not_found_{asset}",
+            )
+
+        # Spot asset index offset: 10000 + token_index
+        spot_asset_idx = 10000 + token_idx
+
+        LOGGER.info(
+            "hl_spot_long asset=%s size=%.4f mark_px=%.4f limit_px=%.4f dry_run=%s",
+            asset, size, mark_px, limit_px, dry_run,
+        )
+
+        if dry_run:
+            return FillResult(
+                success=True, asset=asset, side="spot_long",
+                size=size, price=mark_px, order_id="dry_run",
+            )
+
+        action = {
+            "type": "order",
+            "orders": [{
+                "a": spot_asset_idx,
+                "b": True,          # True = buy
+                "p": str(limit_px),
+                "s": str(size),
+                "r": False,
+                "t": {"limit": {"tif": "Ioc"}},
+            }],
+            "grouping": "na",
+        }
+
+        result   = _hl_exchange_post(private_key, wallet, action)
+        order_id = _extract_order_id(result)
+        LOGGER.info("hl_spot_long_placed asset=%s order_id=%s result=%s", asset, order_id, result)
+        return FillResult(
+            success=True, asset=asset, side="spot_long",
+            size=size, price=limit_px, order_id=order_id,
+        )
+
+    except Exception as exc:
+        LOGGER.error("hl_spot_long_error asset=%s error=%s", asset, exc)
+        return FillResult(
+            success=False, asset=asset, side="spot_long",
+            size=0, price=0, order_id="", error=str(exc),
+        )
+
+
+def enter_arb(
+    private_key: str,
+    wallet: str,
+    asset: str,
+    size_usd: float,
+    dry_run: bool = True,
+) -> tuple[FillResult, FillResult]:
+    """Enter the full arb: spot long + perp short simultaneously.
+
+    If either leg fails, logs a CRITICAL warning (unhedged position).
+    Returns (spot_result, perp_result).
+    """
+    LOGGER.info("hl_arb_enter asset=%s size_usd=%.2f dry_run=%s", asset, size_usd, dry_run)
+
+    spot = place_spot_long(private_key, wallet, asset, size_usd, dry_run)
+    perp = place_perp_short(private_key, wallet, asset, size_usd, dry_run)
+
+    if spot.success and perp.success:
+        LOGGER.info(
+            "hl_arb_enter_success asset=%s spot_size=%.4f perp_size=%.4f",
+            asset, spot.size, perp.size,
+        )
+    elif spot.success and not perp.success:
+        LOGGER.critical(
+            "hl_arb_UNHEDGED_POSITION asset=%s spot_filled=%.4f perp_failed=%s "
+            "— manual intervention required",
+            asset, spot.size, perp.error,
+        )
+    elif not spot.success and perp.success:
+        LOGGER.critical(
+            "hl_arb_UNHEDGED_POSITION asset=%s perp_filled=%.4f spot_failed=%s "
+            "— manual intervention required",
+            asset, perp.size, spot.error,
+        )
+    else:
+        LOGGER.warning(
+            "hl_arb_enter_failed asset=%s spot_error=%s perp_error=%s",
+            asset, spot.error, perp.error,
+        )
+
+    return spot, perp
