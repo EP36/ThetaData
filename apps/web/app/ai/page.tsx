@@ -259,7 +259,9 @@ export default function AIInsightsPage() {
     );
   }
 
-  const paramEntries = Object.entries(data.signalParams).sort(([a], [b]) => a.localeCompare(b));
+  const paramEntries = Object.entries(data.signalParams ?? {}).sort(([a], [b]) => a.localeCompare(b));
+  const proposals = data.proposals ?? [];
+  const analysisLog = data.analysisLog ?? [];
 
   return (
     <section className="space-y-4">
@@ -304,14 +306,14 @@ export default function AIInsightsPage() {
 
       <CollapsibleSection
         title="Proposals"
-        description={`${data.proposals.length} most recent · pending proposals may auto-apply on timer`}
+        description={`${proposals.length} most recent · pending proposals may auto-apply on timer`}
         defaultOpen
       >
-        {data.proposals.length === 0 ? (
+        {proposals.length === 0 ? (
           <p className="text-sm text-[var(--muted)]">No proposals yet.</p>
         ) : (
           <div className="space-y-4">
-            {data.proposals.map((proposal) => (
+            {proposals.map((proposal) => (
               <ProposalCard key={proposal.id} proposal={proposal} />
             ))}
           </div>
@@ -322,7 +324,7 @@ export default function AIInsightsPage() {
         title="Analysis Log"
         description="Recent automated analysis runs and their outcomes."
       >
-        {data.analysisLog.length === 0 ? (
+        {analysisLog.length === 0 ? (
           <p className="text-sm text-[var(--muted)]">No analysis runs yet.</p>
         ) : (
           <TableScrollArea minWidth={860}>
@@ -350,7 +352,7 @@ export default function AIInsightsPage() {
                 </tr>
               </thead>
               <tbody>
-                {data.analysisLog.map((entry) => (
+                {analysisLog.map((entry) => (
                   <AnalysisLogRow key={entry.id} entry={entry} />
                 ))}
               </tbody>

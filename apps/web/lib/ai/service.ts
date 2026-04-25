@@ -14,7 +14,7 @@ export async function getAIInsightsData(): Promise<AIInsightsData> {
       updated_at: signalParamsRaw.updated_at ?? null,
       updated_by: signalParamsRaw.updated_by,
     },
-    proposals,
-    analysisLog,
+    proposals: proposals ?? [],
+    analysisLog: analysisLog ?? [],
   };
 }
