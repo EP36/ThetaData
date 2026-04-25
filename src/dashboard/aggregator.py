@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -250,6 +251,50 @@ def _btc_signals_dict() -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Multi-venue balance helpers
+# ---------------------------------------------------------------------------
+
+def _fetch_hl_balance() -> float:
+    """Return Hyperliquid clearinghouse accountValue in USDC, or 0.0 on any failure.
+
+    Reads HL_WALLET_ADDRESS from the environment.  HL being down must never
+    crash the dashboard — all errors are caught and logged as warnings.
+    """
+    hl_wallet = os.getenv("HL_WALLET_ADDRESS", "")
+    if not hl_wallet:
+        return 0.0
+    try:
+        import httpx
+        resp = httpx.post(
+            "https://api.hyperliquid.xyz/info",
+            json={"type": "clearinghouseState", "user": hl_wallet},
+            timeout=4,
+        )
+        m = resp.json().get("marginSummary", {})
+        return float(m.get("accountValue", 0))
+    except Exception as exc:
+        LOGGER.warning("hl_balance_fetch_error error=%s", exc)
+        return 0.0
+
+
+def _load_total_deposited() -> float:
+    """Read total_deposited from DEPOSITS_FILE (default: data/deposits.json).
+
+    The file must be created manually on the server with format:
+        {"total_deposited": 138.00, "as_of": "2026-04-25"}
+    (138 = ~80 Polymarket pUSD + 60 HL - bridge fees)
+    Returns 0.0 when the file is absent or unreadable.
+    """
+    deposits_path = Path(os.getenv("DEPOSITS_FILE", "data/deposits.json"))
+    if not deposits_path.exists():
+        return 0.0
+    try:
+        return float(json.loads(deposits_path.read_text()).get("total_deposited", 0))
+    except Exception:
+        return 0.0
+
+
+# ---------------------------------------------------------------------------
 # Aggregator
 # ---------------------------------------------------------------------------
 
@@ -391,7 +436,11 @@ class DashboardAggregator:
             }
             poly_error = str(exc)
 
-        combined_value = float(alpaca.get("portfolio_value", 0)) + float(poly.get("deployed_usdc", 0))
+        hl_balance = _fetch_hl_balance()
+        total_deposited = _load_total_deposited()
+
+        poly_usdc = float(poly.get("deployed_usdc", 0.0))
+        combined_value = float(alpaca.get("portfolio_value", 0)) + poly_usdc + hl_balance
         combined_unrealized = float(alpaca.get("unrealized_pnl", 0)) + float(poly.get("unrealized_pnl", 0))
         combined_today = float(alpaca.get("realized_pnl_today", 0)) + float(poly.get("realized_pnl_today", 0))
 
@@ -412,13 +461,23 @@ class DashboardAggregator:
 
         pnl_series = _read_pnl_series(self.poly_config.poly_log_dir)
 
+        equity = poly_usdc + hl_balance
+        total_pnl = (equity - total_deposited) if total_deposited > 0 else 0.0
+
         snapshot: dict[str, Any] = {
             "generated_at": datetime.now(tz=timezone.utc).isoformat(),
+            "equity": round(equity, 2),
+            "equity_breakdown": {
+                "polymarket_usdc": round(poly_usdc, 2),
+                "hyperliquid_usdc": round(hl_balance, 2),
+            },
+            "total_pnl": round(total_pnl, 2),
+            "total_deposited": total_deposited,
             "account": {
                 "alpaca_cash": alpaca.get("cash", 0.0),
                 "alpaca_portfolio_value": alpaca.get("portfolio_value", 0.0),
-                "polymarket_usdc_balance": 0.0,  # requires live Polymarket account API
-                "polymarket_deployed_usdc": poly.get("deployed_usdc", 0.0),
+                "polymarket_deployed_usdc": poly_usdc,
+                "hyperliquid_balance": round(hl_balance, 2),
                 "combined_total_value": round(combined_value, 2),
             },
             "pnl": {

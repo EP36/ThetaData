@@ -408,6 +408,8 @@ class DashboardSummaryResponse(BaseModel):
     risk_alerts: list[str]
     last_run_id: Optional[str]
     trading_status: TradingStatusResponse = Field(default_factory=TradingStatusResponse)
+    equity_breakdown: Optional[dict] = None
+    total_deposited: Optional[float] = None
 
 
 class RiskStatusResponse(BaseModel):

@@ -1,4 +1,10 @@
-"""File-based positions ledger for Polymarket open/closed trades."""
+"""File-based positions ledger for Polymarket open/closed trades.
+
+# SETUP: Add DATABASE_URL to /etc/trauto/env on Hetzner.
+# Value: the Render Postgres connection string from Render dashboard
+# → trauto-postgres → Connect → External Connection String
+# Then run: systemctl restart trauto-worker
+"""
 
 from __future__ import annotations
 
@@ -207,7 +213,42 @@ class PositionsLedger:
             new_status,
             reason,
         )
+        if new_status in ("closed", "resolved") and target.get("pnl") is not None:
+            try:
+                closed_record = PositionRecord(**target)
+                _persist_fill_to_db(closed_record)
+            except Exception as exc:
+                LOGGER.warning("positions_fill_persist_error id=%s error=%s", position_id, exc)
         return True
+
+    def record_fill(
+        self,
+        strategy: str,
+        market: str,
+        side: str,
+        size_usdc: float,
+        edge_pct: float,
+    ) -> None:
+        """Append a lightweight fill record to fills.jsonl for the trades dashboard."""
+        fills_path = self.path.parent / "fills.jsonl"
+        entry = json.dumps({
+            "ts": _now_iso(),
+            "strategy": strategy,
+            "market": market,
+            "side": side,
+            "size_usdc": size_usdc,
+            "edge_pct": edge_pct,
+        })
+        try:
+            fills_path.parent.mkdir(parents=True, exist_ok=True)
+            with fills_path.open("a", encoding="utf-8") as fh:
+                fh.write(entry + "\n")
+            LOGGER.info(
+                "fill_recorded strategy=%s side=%s size_usdc=%.2f edge_pct=%.4f",
+                strategy, side, size_usdc, edge_pct,
+            )
+        except OSError as exc:
+            LOGGER.warning("fill_record_error path=%s error=%s", fills_path, exc)
 
     def open_count(self) -> int:
         """Count active positions (open, unhedged, closing)."""
@@ -270,3 +311,63 @@ def new_position(
         end_date=end_date,
         contracts_held=contracts_held,
     )
+
+
+def _persist_fill_to_db(record: PositionRecord) -> None:
+    """Write a closed Polymarket position to Postgres poly_fills table.
+
+    Silently no-ops if DATABASE_URL is unset (local dev) or on any error.
+    Never raises — DB being unavailable must not crash the scanner.
+    """
+    db_url = os.getenv("DATABASE_URL", "").strip()
+    if not db_url or record.pnl is None:
+        return
+    if record.size_usdc <= 0:
+        return
+    try:
+        from sqlalchemy import create_engine, text
+        engine = create_engine(
+            db_url,
+            pool_pre_ping=True,
+            pool_size=1,
+            max_overflow=0,
+        )
+        pnl_pct = record.pnl / record.size_usdc
+        now = datetime.now(tz=timezone.utc)
+        with engine.connect() as conn:
+            conn.execute(
+                text("""
+                    INSERT INTO poly_fills
+                      (fill_id, symbol, side, notional, price, pnl, pnl_pct,
+                       win, strategy, edge_pct, direction, closed_at, created_at)
+                    VALUES
+                      (:fill_id, :symbol, :side, :notional, :price, :pnl, :pnl_pct,
+                       :win, :strategy, :edge_pct, :direction, :closed_at, :created_at)
+                    ON CONFLICT (fill_id) DO NOTHING
+                """),
+                {
+                    "fill_id":    str(uuid.uuid4()),
+                    "symbol":     record.market_question[:200],
+                    "side":       record.side,
+                    "notional":   record.size_usdc,
+                    "price":      record.entry_price,
+                    "pnl":        record.pnl,
+                    "pnl_pct":    pnl_pct,
+                    "win":        record.pnl > 0,
+                    "strategy":   record.strategy,
+                    "edge_pct":   0.0,
+                    "direction":  record.side,
+                    "closed_at":  now,
+                    "created_at": now,
+                },
+            )
+            conn.commit()
+        engine.dispose()
+        LOGGER.info(
+            "poly_fill_persisted symbol=%s pnl=%.4f pnl_pct=%.4f",
+            record.market_question[:60],
+            record.pnl,
+            pnl_pct,
+        )
+    except Exception as exc:
+        LOGGER.warning("poly_fill_persist_error error=%s", exc)

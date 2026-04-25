@@ -359,6 +359,32 @@ class AIRepository:
             ).all()
             return [_log_to_dict(r) for r in rows]
 
+    def list_analysis_log(self, limit: int = 10) -> list[dict[str, Any]]:
+        """Return recent analysis log entries with key fields extracted from output_summary."""
+        with self._store.session() as session:
+            rows = session.scalars(
+                select(AIAnalysisLogModel)
+                .order_by(desc(AIAnalysisLogModel.created_at))
+                .limit(limit)
+            ).all()
+            result = []
+            for r in rows:
+                out = r.output_summary or {}
+                result.append({
+                    "id": r.id,
+                    "created_at": r.created_at.isoformat() if r.created_at else None,
+                    "analysis_type": r.analysis_type,
+                    "outcome": out.get("outcome"),
+                    "trade_count": out.get("trade_count"),
+                    "win_rate": out.get("win_rate"),
+                    "avg_pnl_pct": out.get("avg_pnl_pct"),
+                    "confidence": out.get("confidence"),
+                    "proposal_id": out.get("proposal_id"),
+                    "tokens_used": r.tokens_used,
+                    "duration_ms": r.duration_ms,
+                })
+            return result
+
     def get_last_analysis_at(self) -> datetime | None:
         with self._store.session() as session:
             row = session.scalar(
@@ -430,6 +456,35 @@ class AIRepository:
                     "price": r.price,
                     "notional": r.notional,
                     "timestamp": r.timestamp.isoformat() if r.timestamp else None,
+                }
+                for r in rows
+            ]
+
+    def load_recent_poly_fills(self, days: int = 30, limit: int = 500) -> list[dict[str, Any]]:
+        """Load Polymarket fills from poly_fills table for AI analysis."""
+        from src.persistence.models import PolyFillModel
+        cutoff = utc_now() - timedelta(days=days)
+        with self._store.session() as session:
+            rows = session.scalars(
+                select(PolyFillModel)
+                .where(PolyFillModel.closed_at >= cutoff)
+                .order_by(PolyFillModel.closed_at.desc())
+                .limit(limit)
+            ).all()
+            return [
+                {
+                    "fill_id":  r.fill_id,
+                    "symbol":   r.symbol,
+                    "side":     r.side,
+                    "notional": r.notional,
+                    "price":    r.price,
+                    "pnl":      r.pnl,
+                    "pnl_pct":  r.pnl_pct,
+                    "win":      r.win,
+                    "strategy": r.strategy,
+                    "edge_pct": r.edge_pct,
+                    "direction": r.direction,
+                    "closed_at": r.closed_at.isoformat() if r.closed_at else None,
                 }
                 for r in rows
             ]

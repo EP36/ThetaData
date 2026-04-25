@@ -101,8 +101,15 @@ def _execute_analysis(repo: "AIRepository") -> dict[str, Any]:
 
     t0 = time.monotonic()
 
-    # Load inputs
-    fills = repo.load_recent_fills(days=30)
+    # Load inputs — poly fills carry pnl_pct/win/strategy the analyst needs;
+    # regular fills (Alpaca paper) are appended as supplementary context.
+    poly_fills: list[dict] = []
+    try:
+        poly_fills = repo.load_recent_poly_fills(days=30)
+    except Exception as exc:
+        LOGGER.warning("ai_poly_fills_load_error error=%s", exc)
+
+    fills = poly_fills + repo.load_recent_fills(days=30)
     current_params = repo.load_signal_params()
 
     btc_signals = None
@@ -114,6 +121,7 @@ def _execute_analysis(repo: "AIRepository") -> dict[str, Any]:
 
     input_summary = {
         "fills_count": len(fills),
+        "poly_fills_count": len(poly_fills),
         "params_count": len(current_params),
         "btc_available": btc_signals is not None,
     }

@@ -132,4 +132,12 @@ def scan_and_execute(config: PolymarketConfig) -> tuple[list[Opportunity], Execu
         result.size_usdc,
         result.error or "none",
     )
+    if result.success:
+        ledger.record_fill(
+            strategy=top.strategy,
+            market=top.market_question,
+            side=top.direction or "BUY",
+            size_usdc=result.size_usdc,
+            edge_pct=top.edge_pct,
+        )
     return opps, result

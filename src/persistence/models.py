@@ -216,6 +216,27 @@ class FillModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
 
 
+class PolyFillModel(Base):
+    """Polymarket closed-position fill records for AI analysis."""
+
+    __tablename__ = "poly_fills"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    fill_id: Mapped[str] = mapped_column(String(128), nullable=False, unique=True, index=True)
+    symbol: Mapped[str] = mapped_column(String(200), nullable=False)
+    side: Mapped[str] = mapped_column(String(8), nullable=False)
+    notional: Mapped[float] = mapped_column(Float, nullable=False)
+    price: Mapped[float] = mapped_column(Float, nullable=False)
+    pnl: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    pnl_pct: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    win: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    strategy: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    edge_pct: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    direction: Mapped[str] = mapped_column(String(16), nullable=False, default="")
+    closed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+
 class BacktestTradeModel(Base):
     """Backtest trade records stored separately from execution fills."""
 

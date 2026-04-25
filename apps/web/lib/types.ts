@@ -11,6 +11,11 @@ export type DashboardSummary = {
   systemStatus: string;
   riskAlerts: string[];
   tradingStatus: TradingStatus;
+  equityBreakdown?: {
+    polymarketUsdc: number;
+    hyperliquidUsdc: number;
+  };
+  totalDeposited?: number;
 };
 
 export type TradingStatus = {
@@ -274,6 +279,74 @@ export type WorkerExecutionStatusData = {
   symbolFilterReasons: Record<string, string[]>;
   activeStrategyBySymbol: Record<string, string>;
   symbols: WorkerSymbolDecision[];
+};
+
+export type PolymarketArbStatus = {
+  enabled: boolean;
+  dryRun: boolean;
+  activePositions: number;
+};
+
+export type FundingRateArbStatus = {
+  enabled: boolean;
+  dryRun: boolean;
+  fundingRate: number | null;
+  nextFundingAt: string | null;
+  activePositions: number;
+};
+
+export type MarketMakerStatus = {
+  enabled: boolean;
+  dryRun: boolean;
+  activePositions: number;
+};
+
+export type StrategyPanelStatus = {
+  polymarketArb: PolymarketArbStatus;
+  fundingRateArb: FundingRateArbStatus;
+  marketMaker: MarketMakerStatus;
+  fetchedAt: string;
+};
+
+export type AIProposal = {
+  id: number;
+  created_at: string | null;
+  status: string;
+  proposal_type: string;
+  current_params: Record<string, number>;
+  proposed_params: Record<string, number>;
+  reasoning: string;
+  trade_count: number;
+  win_rate: number;
+  avg_pnl_pct: number;
+  confidence: number;
+  key_findings: string[];
+  warnings: string[];
+  applied_at: string | null;
+  applied_by: string | null;
+  rejected_at: string | null;
+  auto_apply_after: string | null;
+};
+
+export type AIAnalysisEntry = {
+  id: number;
+  created_at: string | null;
+  analysis_type: string;
+  outcome: string | null;
+  trade_count: number | null;
+  win_rate: number | null;
+  avg_pnl_pct: number | null;
+  confidence: number | null;
+  proposal_id: number | null;
+  tokens_used: number;
+  duration_ms: number;
+};
+
+export type AIInsightsData = {
+  signalParams: Record<string, number>;
+  signalParamsMeta: { version: number; updated_at: string | null; updated_by: string };
+  proposals: AIProposal[];
+  analysisLog: AIAnalysisEntry[];
 };
 
 export type AuthenticatedUser = {

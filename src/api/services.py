@@ -183,6 +183,53 @@ def _fetch_polygon_usdc_balance(wallet_address: str) -> Optional[float]:
         last_error,
     )
     return None
+
+
+_DEPOSITS_FILE = Path("data/deposits.json")
+
+
+def _load_total_deposited() -> float:
+    """Read total_deposited from data/deposits.json. Returns 0.0 if file missing."""
+    try:
+        with _DEPOSITS_FILE.open("r", encoding="utf-8") as fh:
+            return float(json.load(fh).get("total_deposited", 0.0))
+    except Exception:
+        return 0.0
+
+
+def _fetch_hl_usdc_balance(wallet_address: str) -> float:
+    """Return accountValue in USDC from Hyperliquid clearinghouse, or 0.0 on failure."""
+    if not wallet_address:
+        return 0.0
+    try:
+        payload = json.dumps({
+            "type": "clearinghouseState",
+            "user": wallet_address,
+        }).encode()
+        req = urllib.request.Request(
+            "https://api.hyperliquid.xyz/info",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read())
+        account_value = float(data.get("marginSummary", {}).get("accountValue", 0))
+        LOGGER.debug(
+            "hl_balance_fetched wallet=%s value=%.4f",
+            wallet_address[:10] + "...",
+            account_value,
+        )
+        return account_value
+    except Exception as exc:
+        LOGGER.warning(
+            "hl_balance_fetch_failed wallet=%s error=%s",
+            wallet_address[:10] + "..." if wallet_address else "",
+            exc,
+        )
+        return 0.0
+
+
 MAX_POSITION_SIZE_CAP_PCT = 0.25
 MAX_OPEN_POSITIONS_CAP = 3
 AnalyticsSource = Literal["execution", "paper", "backtest"]
@@ -942,16 +989,27 @@ class TradingApiService:
                         last_run_id = None
 
             if trading_status.trading_venue == "polymarket":
-                equity = _fetch_polygon_usdc_balance(trading_status.poly_wallet_address)
+                poly_usdc = _fetch_polygon_usdc_balance(trading_status.poly_wallet_address) or 0.0
+                hl_usdc = _fetch_hl_usdc_balance(os.getenv("HL_WALLET_ADDRESS", ""))
+                combined = poly_usdc + hl_usdc
+                equity: Optional[float] = combined if combined > 0 else None
+                total_deposited = _load_total_deposited()
+                total_pnl = (combined - total_deposited) if equity is not None else 0.0
+                breakdown = (
+                    {"polymarket_usdc": poly_usdc, "hyperliquid_usdc": hl_usdc}
+                    if equity is not None else None
+                )
                 return DashboardSummaryResponse(
                     equity=equity,
                     daily_pnl=0.0,
-                    total_pnl=0.0,
+                    total_pnl=total_pnl,
                     open_positions=0,
                     system_status=self._dashboard_system_status(0),
                     risk_alerts=alerts,
                     last_run_id=last_run_id,
                     trading_status=trading_status,
+                    equity_breakdown=breakdown,
+                    total_deposited=total_deposited if total_deposited > 0 else None,
                 )
 
             snapshot = self.repository.load_portfolio_snapshot(

@@ -351,30 +351,15 @@ def _execute_correlated_markets(
     sell_order_id: str = ""
     sell_fill: float = 0.0
 
-    # --- Leg A: SELL YES on the higher-priced market (skip if near-worthless) ---
-    if sell_price > 0:
-        sell_resp: dict[str, Any] | None = None
-        try:
-            sell_resp = _place_order(
-                config,
-                token_id=opportunity.yes_token_id_2,
-                size_usdc=size_usdc,
-                price=sell_price,
-                side="SELL",
-            )
-        except Exception as exc:
-            return ExecutionResult(
-                success=False,
-                error=f"sell_leg_failed: {exc}",
-            )
-        sell_order_id = sell_resp.get("orderID", sell_resp.get("order_id", ""))
-        sell_fill = float(sell_resp.get("price", sell_price))
-    else:
-        LOGGER.info(
-            "correlated_markets_sell_leg_skipped condition_id=%s "
-            "sell_price=0 — higher market is near-worthless, executing buy leg only",
-            opportunity.condition_id_2,
-        )
+    # Leg A (SELL) is permanently disabled: Polymarket does not support
+    # short-selling without an existing position. sell_order_id stays ""
+    # so two_leg is always False and only the BUY leg is executed.
+    LOGGER.info(
+        "correlated_markets_sell_leg_skipped condition_id=%s sell_price=%.4f "
+        "reason=short_selling_not_supported",
+        opportunity.condition_id_2,
+        sell_price,
+    )
 
     # --- Leg B: BUY YES on the lower-priced market ---
     try:

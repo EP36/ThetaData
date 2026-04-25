@@ -44,6 +44,7 @@ from src.api.schemas import (
     WorkerExecutionStatusResponse,
 )
 from src.dashboard.api import router as poly_router, register as _poly_register
+from trauto.ai.api import ai_router as _ai_router, register_ai_repo as _ai_register_repo
 from src.api.services import TradingApiService
 from src.config.deployment import DeploymentSettings
 from src.persistence import DatabaseStore, PersistenceRepository
@@ -135,6 +136,7 @@ async def _start_ai_background_loop() -> None:
         repo = AIRepository(store=DatabaseStore(database_url=db_url))
         repo.ensure_schema()
         repo.seed_signal_params_if_needed()
+        _ai_register_repo(repo)
         from trauto.ai.loop import background_loop
         asyncio.create_task(background_loop(db_url))
         _APP_LOGGER.info("ai_loop_started db_url_set=%s", bool(db_url))
@@ -230,6 +232,9 @@ def require_admin_user(
     except AuthorizationError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     return user
+
+
+app.include_router(_ai_router, dependencies=[Depends(require_authenticated_user)])
 
 
 @app.post("/api/auth/login", response_model=AuthLoginResponse)

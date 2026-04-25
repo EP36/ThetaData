@@ -278,3 +278,90 @@ def get_backtest_list() -> list[dict[str, Any]]:
     """Return summary list of all past backtest runs."""
     from trauto.backtester.report import list_results
     return list_results()
+
+
+# ---------------------------------------------------------------------------
+# Strategy status panel endpoint
+# ---------------------------------------------------------------------------
+
+def _next_hl_funding_window(now: datetime) -> datetime:
+    """Return the next Hyperliquid funding settlement time (00:00/08:00/16:00 UTC)."""
+    from datetime import timedelta
+    hour = now.hour
+    if hour < 8:
+        return now.replace(hour=8, minute=0, second=0, microsecond=0)
+    if hour < 16:
+        return now.replace(hour=16, minute=0, second=0, microsecond=0)
+    next_day = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    return next_day
+
+
+@router.get("/api/strategies/status")
+def get_strategies_status() -> dict[str, Any]:
+    """Return live status for the three active trading strategies."""
+    import json
+
+    now = datetime.now(tz=timezone.utc)
+
+    # Hyperliquid funding rate (BTC perp, index 0)
+    hl_funding_rate: float | None = None
+    try:
+        import httpx
+        resp = httpx.post(
+            "https://api.hyperliquid.xyz/info",
+            json={"type": "metaAndAssetCtxs"},
+            timeout=5,
+        )
+        data = resp.json()
+        if isinstance(data, list) and len(data) > 1:
+            asset_ctxs = data[1]
+            if asset_ctxs:
+                hl_funding_rate = float(asset_ctxs[0].get("funding", 0))
+    except Exception:
+        pass
+
+    next_funding = _next_hl_funding_window(now)
+
+    # Market maker state file
+    mm_active = False
+    mm_positions = 0
+    mm_state_path = os.getenv("MM_STATE_FILE", "/opt/trauto/mm_state.json")
+    try:
+        with open(mm_state_path) as fh:
+            mm_state = json.load(fh)
+            mm_active = bool(mm_state.get("active", False))
+            mm_positions = int(mm_state.get("open_positions", 0))
+    except Exception:
+        pass
+
+    def _flag(name: str, default: str = "false") -> bool:
+        return os.getenv(name, default).strip().lower() in ("true", "1", "yes")
+
+    poly_enabled = os.getenv("POLY_TRADING_MODE", "disabled") not in ("disabled", "")
+    poly_dry_run = _flag("POLY_DRY_RUN", "true")
+
+    hl_enabled = _flag("HL_ENABLED", "false")
+    hl_dry_run = _flag("HL_DRY_RUN", "true")
+
+    mm_dry_run = _flag("MM_DRY_RUN", "true")
+
+    return {
+        "polymarket_arb": {
+            "enabled": poly_enabled,
+            "dry_run": poly_dry_run,
+            "active_positions": 0,
+        },
+        "funding_rate_arb": {
+            "enabled": hl_enabled,
+            "dry_run": hl_dry_run,
+            "funding_rate": hl_funding_rate,
+            "next_funding_at": next_funding.isoformat(),
+            "active_positions": 0,
+        },
+        "market_maker": {
+            "enabled": mm_active,
+            "dry_run": mm_dry_run,
+            "active_positions": mm_positions,
+        },
+        "fetched_at": now.isoformat(),
+    }

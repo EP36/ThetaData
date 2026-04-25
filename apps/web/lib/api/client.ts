@@ -1,4 +1,7 @@
 import type {
+  AIAnalysisEntry,
+  AIInsightsData,
+  AIProposal,
   AuthSessionData,
   BacktestFormInput,
   BacktestResultData,
@@ -9,6 +12,7 @@ import type {
   SelectionStatusData,
   StrategyAnalyticsData,
   StrategyConfig,
+  StrategyPanelStatus,
   TradeRow,
   WorkerExecutionStatusData
 } from "@/lib/types";
@@ -58,6 +62,8 @@ type ApiDashboardSummary = {
   risk_alerts: string[];
   last_run_id: string | null;
   trading_status?: ApiTradingStatus;
+  equity_breakdown?: { polymarket_usdc: number; hyperliquid_usdc: number } | null;
+  total_deposited?: number | null;
 };
 
 type ApiTradingStatus = {
@@ -444,7 +450,14 @@ export async function getDashboardSummary(): Promise<DashboardSummary> {
       liveTradingEnabled: tradingStatus?.live_trading_enabled ?? false,
       executionAdapter: tradingStatus?.execution_adapter ?? "alpaca_execution_disabled",
       polyWalletAddress: tradingStatus?.poly_wallet_address ?? ""
-    }
+    },
+    equityBreakdown: payload.equity_breakdown
+      ? {
+          polymarketUsdc: payload.equity_breakdown.polymarket_usdc,
+          hyperliquidUsdc: payload.equity_breakdown.hyperliquid_usdc,
+        }
+      : undefined,
+    totalDeposited: payload.total_deposited ?? undefined,
   };
 }
 
@@ -724,5 +737,55 @@ export async function getWorkerExecutionStatus(): Promise<WorkerExecutionStatusD
       rejectionReasons: item.rejection_reasons,
       candidates: item.candidates.map(mapScore)
     }))
+  };
+}
+
+type ApiAISignalParamsResponse = {
+  id?: number;
+  version: number;
+  params: Record<string, number>;
+  performance: Record<string, unknown>;
+  updated_at: string | null;
+  updated_by: string;
+};
+
+export async function getAISignalParamsRaw(): Promise<ApiAISignalParamsResponse> {
+  return fetchJson<ApiAISignalParamsResponse>("/api/ai/signal-params");
+}
+
+export async function getAIProposals(): Promise<AIProposal[]> {
+  return fetchJson<AIProposal[]>("/api/ai/proposals");
+}
+
+export async function getAIAnalysisLog(): Promise<AIAnalysisEntry[]> {
+  return fetchJson<AIAnalysisEntry[]>("/api/ai/analysis-log");
+}
+
+export async function getStrategyPanelStatus(): Promise<StrategyPanelStatus> {
+  const payload = await fetchJson<{
+    polymarket_arb: { enabled: boolean; dry_run: boolean; active_positions: number };
+    funding_rate_arb: { enabled: boolean; dry_run: boolean; funding_rate: number | null; next_funding_at: string | null; active_positions: number };
+    market_maker: { enabled: boolean; dry_run: boolean; active_positions: number };
+    fetched_at: string;
+  }>("/api/strategies/status");
+  return {
+    polymarketArb: {
+      enabled: payload.polymarket_arb.enabled,
+      dryRun: payload.polymarket_arb.dry_run,
+      activePositions: payload.polymarket_arb.active_positions,
+    },
+    fundingRateArb: {
+      enabled: payload.funding_rate_arb.enabled,
+      dryRun: payload.funding_rate_arb.dry_run,
+      fundingRate: payload.funding_rate_arb.funding_rate,
+      nextFundingAt: payload.funding_rate_arb.next_funding_at,
+      activePositions: payload.funding_rate_arb.active_positions,
+    },
+    marketMaker: {
+      enabled: payload.market_maker.enabled,
+      dryRun: payload.market_maker.dry_run,
+      activePositions: payload.market_maker.active_positions,
+    },
+    fetchedAt: payload.fetched_at,
   };
 }

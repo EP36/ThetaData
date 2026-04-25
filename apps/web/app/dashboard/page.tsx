@@ -6,13 +6,14 @@ import { EquityDrawdownCharts } from "@/components/dashboard/equity-drawdown-cha
 import { RecentTradesTable } from "@/components/dashboard/recent-trades-table";
 import { RiskAlertsPanel } from "@/components/dashboard/risk-alerts-panel";
 import { StatusBadge } from "@/components/dashboard/status-badge";
+import { StrategyPanel } from "@/components/dashboard/strategy-panel";
 import { SummaryCard } from "@/components/dashboard/summary-card";
 import { CollapsibleSection } from "@/components/ui/collapsible-section";
 import { PageHeader } from "@/components/ui/page-header";
 import { StatePanel } from "@/components/ui/state-panel";
-import { getDashboardSummary } from "@/lib/api/client";
+import { getDashboardSummary, getStrategyPanelStatus } from "@/lib/api/client";
 import { getDashboardData } from "@/lib/dashboard/service";
-import type { DashboardSummary, TimeSeriesPoint, TradeRow } from "@/lib/types";
+import type { DashboardSummary, StrategyPanelStatus, TimeSeriesPoint, TradeRow } from "@/lib/types";
 
 const BALANCE_POLL_MS = 60_000;
 
@@ -37,6 +38,7 @@ export default function DashboardPage() {
   const [equity, setEquity] = useState<TimeSeriesPoint[]>([]);
   const [drawdown, setDrawdown] = useState<TimeSeriesPoint[]>([]);
   const [trades, setTrades] = useState<TradeRow[]>([]);
+  const [strategyStatus, setStrategyStatus] = useState<StrategyPanelStatus | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -44,12 +46,16 @@ export default function DashboardPage() {
 
     async function loadDashboard() {
       setLoading(true);
-      const data = await getDashboardData();
+      const [data, strategies] = await Promise.all([
+        getDashboardData(),
+        getStrategyPanelStatus().catch(() => null),
+      ]);
       if (!cancelled) {
         setSummary(data.summary);
         setEquity(data.equityCurve);
         setDrawdown(data.drawdownCurve);
         setTrades(data.recentTrades);
+        setStrategyStatus(strategies);
         setLoading(false);
       }
     }
@@ -64,7 +70,17 @@ export default function DashboardPage() {
     const id = setInterval(async () => {
       try {
         const updated = await getDashboardSummary();
-        setSummary((prev) => (prev === null ? prev : { ...prev, equity: updated.equity }));
+        setSummary((prev) =>
+          prev === null
+            ? prev
+            : {
+                ...prev,
+                equity: updated.equity,
+                equityBreakdown: updated.equityBreakdown ?? prev.equityBreakdown,
+                totalDeposited: updated.totalDeposited ?? prev.totalDeposited,
+                totalPnl: updated.totalPnl,
+              }
+        );
       } catch {
         // leave stale value; next tick will retry
       }
@@ -126,7 +142,7 @@ export default function DashboardPage() {
           label="Total PnL"
           value={formatUsd(summary.totalPnl)}
           tone={totalTone}
-          meta="Portfolio"
+          meta={summary.totalDeposited ? `vs $${summary.totalDeposited.toFixed(0)} deposited` : "Portfolio"}
         />
         <SummaryCard
           label="Daily PnL"
@@ -140,11 +156,25 @@ export default function DashboardPage() {
           meta="Open now"
         />
         <SummaryCard
-          label={isPolymarket ? "USDC Balance" : "Equity"}
+          label="Total Balance"
           value={summary.equity !== null ? formatUsd(summary.equity) : "Unavailable"}
-          meta={isPolymarket ? "Polygon wallet" : "Net value"}
+          meta={
+            isPolymarket && summary.equityBreakdown
+              ? `Poly: ${formatUsd(summary.equityBreakdown.polymarketUsdc)} | HL: ${formatUsd(summary.equityBreakdown.hyperliquidUsdc)}`
+              : isPolymarket
+              ? "Polygon wallet"
+              : "Net value"
+          }
         />
       </div>
+
+      <CollapsibleSection
+        title="Strategy Status"
+        description="Live state of the three active trading strategies."
+        defaultOpen={false}
+      >
+        <StrategyPanel status={strategyStatus} />
+      </CollapsibleSection>
 
       <CollapsibleSection
         title="Performance Trend"

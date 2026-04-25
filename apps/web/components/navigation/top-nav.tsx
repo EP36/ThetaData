@@ -15,6 +15,7 @@ const navItems = [
   { href: "/strategies", label: "Strategies" },
   { href: "/risk", label: "Risk" },
   { href: "/trades", label: "Trades" },
+  { href: "/ai", label: "AI Insights" },
   { href: "/settings", label: "Settings" }
 ];
 
