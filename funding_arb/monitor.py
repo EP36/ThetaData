@@ -33,6 +33,12 @@ logging.basicConfig(
 )
 LOGGER = logging.getLogger("theta.funding_arb")
 
+# Env vars (set in /etc/trauto/env):
+#   HL_MIN_FUNDING_RATE  float  default=0.0015  (0.15%/hr minimum to flag)
+#   HL_MAX_POSITION_USD  float  default=50      (position size when executing)
+#   HL_DRY_RUN           bool   default=true    (set false to enable execution)
+#   HL_SCAN_INTERVAL_SEC int    default=60      (seconds between scans)
+
 HL_BASE_URL       = "https://api.hyperliquid.xyz"
 MAKER_FEE_SPOT    = 0.00040
 MAKER_FEE_PERP    = 0.00015
@@ -177,6 +183,27 @@ def main() -> None:
         if args.once:
             break
         time.sleep(SCAN_INTERVAL_SEC)
+
+
+def run_background(config: dict[str, str] | None = None) -> None:
+    """Run the funding arb monitor in a background thread loop.
+
+    Designed to be called via threading.Thread(target=run_background).
+    Never raises — all errors are caught and logged.
+    Reads config from /etc/trauto/env if config is None.
+    """
+    if config is None:
+        config = _load_env()
+
+    interval = int(config.get("HL_SCAN_INTERVAL_SEC", SCAN_INTERVAL_SEC))
+    LOGGER.info("funding_arb_background_thread_start interval_sec=%d", interval)
+
+    while True:
+        try:
+            scan_once(config)
+        except Exception as exc:
+            LOGGER.error("funding_arb_background_error error=%s", exc)
+        time.sleep(interval)
 
 
 if __name__ == "__main__":

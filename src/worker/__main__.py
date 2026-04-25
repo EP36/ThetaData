@@ -83,6 +83,18 @@ def _run_polymarket_worker(settings: DeploymentSettings) -> None:
 
     from src.polymarket.__main__ import main as polymarket_main
 
+    # Start funding rate arb monitor as a daemon background thread
+    import threading
+    from funding_arb.monitor import run_background as _run_funding_arb
+
+    _funding_arb_thread = threading.Thread(
+        target=_run_funding_arb,
+        name="funding-arb-monitor",
+        daemon=True,   # dies automatically when main thread exits
+    )
+    _funding_arb_thread.start()
+    LOGGER.info("funding_arb_thread_started")
+
     LOGGER.info("polymarket_worker_starting")
     polymarket_main()
 
