@@ -754,11 +754,13 @@ export async function getAISignalParamsRaw(): Promise<ApiAISignalParamsResponse>
 }
 
 export async function getAIProposals(): Promise<AIProposal[]> {
-  return fetchJson<AIProposal[]>("/api/ai/proposals");
+  const data = await fetchJson<{ proposals: AIProposal[]; count: number }>("/api/ai/proposals");
+  return data.proposals ?? [];
 }
 
 export async function getAIAnalysisLog(): Promise<AIAnalysisEntry[]> {
-  return fetchJson<AIAnalysisEntry[]>("/api/ai/analysis-log");
+  const data = await fetchJson<{ entries: AIAnalysisEntry[]; count: number }>("/api/ai/analysis-log");
+  return data.entries ?? [];
 }
 
 export async function getStrategyPanelStatus(): Promise<StrategyPanelStatus> {
