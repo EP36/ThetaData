@@ -346,6 +346,15 @@ def _execute_correlated_markets(
             success=False, error="correlated_markets_buy_price_missing"
         )
 
+    if buy_price >= 0.99 or buy_price <= 0.01:
+        LOGGER.info(
+            "correlated_markets_buy_price_invalid skipped buy_price=%.4f",
+            buy_price,
+        )
+        return ExecutionResult(
+            success=False, error="buy_price_out_of_valid_range"
+        )
+
     size_usdc = config.max_trade_usdc
 
     sell_order_id: str = ""
@@ -360,6 +369,16 @@ def _execute_correlated_markets(
         opportunity.condition_id_2,
         sell_price,
     )
+
+    if buy_price > 0.70:
+        LOGGER.info(
+            "correlated_markets_skipped_unhedged buy_price=%.4f "
+            "reason=buy_price_too_high_without_hedge",
+            buy_price,
+        )
+        return ExecutionResult(
+            success=False, error="unhedged_buy_price_too_high"
+        )
 
     # --- Leg B: BUY YES on the lower-priced market ---
     try:
