@@ -110,8 +110,8 @@ def _get_midpoint(yes_token_id: str, timeout: float = 5.0) -> float | None:
                          params={"token_id": yes_token_id}, timeout=timeout)
         if resp.status_code == 200:
             return float(resp.json().get("mid", 0))
-    except Exception as e:
-        logger.debug("midpoint_fetch_failed err=%s", e)
+    except Exception:
+        pass
     return None
 
 
