@@ -4,6 +4,7 @@ Strategy: quote symmetric bid/ask around the CLOB midpoint on high-volume
 markets, refresh every 60s, earn spread + liquidity rewards.
 
 Integration: call run_market_maker_cycle(config) from runner.py each loop.
+# Env var: POLY_MM_ENABLED=true  (default: false, set true to enable)
 """
 from __future__ import annotations
 
@@ -17,17 +18,34 @@ import httpx
 LOGGER = logging.getLogger("theta.polymarket.market_maker")
 
 # ── tunables ────────────────────────────────────────────────────────────────
-HALF_SPREAD     = 0.01    # ±1¢ around mid → 2¢ gross spread
-MIN_MID         = 0.08    # skip near-resolved-NO markets
-MAX_MID         = 0.92    # skip near-resolved-YES markets
-MIN_VOL_24H     = 50_000  # minimum 24h USDC volume
-MAX_MARKETS     = 5       # markets to quote simultaneously
-QUOTE_SIZE_USDC = 0.18    # $ per side per market (fits $0.99 budget: 5×2×0.18=$1.80 max, but orders stagger)
-REFRESH_SEC     = 60      # requote interval
-STALE_TICK      = 0.005   # requote if mid moves >0.5¢
-GAMMA_URL       = "https://gamma-api.polymarket.com/markets"
-CLOB_URL        = "https://clob.polymarket.com"
+HALF_SPREAD            = 0.01    # ±1¢ around mid → 2¢ gross spread
+MIN_MID                = 0.08    # skip near-resolved-NO markets
+MAX_MID                = 0.92    # skip near-resolved-YES markets
+MIN_VOL_24H            = 50_000  # minimum 24h USDC volume
+MAX_MARKETS            = 5       # markets to quote simultaneously
+QUOTE_SIZE_USDC        = 0.18    # $ per side per market (fits $0.99 budget: 5×2×0.18=$1.80 max, but orders stagger)
+REFRESH_SEC            = 60      # requote interval
+STALE_TICK             = 0.005   # requote if mid moves >0.5¢
+INVENTORY_SKEW_FACTOR  = 0.005   # price skew per net YES contract held
+EVENT_RISK_HOURS       = 6.0     # widen spread this many hours before resolution
+EVENT_RISK_MULTIPLIER  = 3.0     # spread multiplier in event risk window
+GAMMA_URL              = "https://gamma-api.polymarket.com/markets"
+CLOB_URL               = "https://clob.polymarket.com"
 # ────────────────────────────────────────────────────────────────────────────
+
+
+def _compute_half_spread(end_date: str) -> float:
+    """Return HALF_SPREAD, widened 3x if within EVENT_RISK_HOURS of resolution."""
+    if end_date:
+        try:
+            from src.polymarket.opportunities import _hours_to_resolution
+            hrs = _hours_to_resolution(end_date)
+            if 0.0 <= hrs <= EVENT_RISK_HOURS:
+                LOGGER.info("mm_event_risk_widening hrs_to_resolution=%.1f spread_multiplier=%.0fx", hrs, EVENT_RISK_MULTIPLIER)
+                return HALF_SPREAD * EVENT_RISK_MULTIPLIER
+        except Exception:
+            pass
+    return HALF_SPREAD
 
 
 @dataclass
@@ -40,6 +58,8 @@ class QuotedMarket:
     bid_order_id:   str   = ""
     ask_order_id:   str   = ""
     last_quoted_at: float = 0.0
+    yes_inventory:  float = 0.0  # net YES contracts held (positive = long)
+    end_date:       str   = ""   # ISO resolution date for event risk widening
 
 
 def _fetch_candidate_markets(timeout: float = 10.0) -> list[dict[str, Any]]:
@@ -77,6 +97,7 @@ def _fetch_candidate_markets(timeout: float = 10.0) -> list[dict[str, Any]]:
             "question":     m.get("question", "")[:80],
             "mid":          mid,
             "vol":          vol,
+            "end_date":     m.get("endDateIso") or m.get("end_date_iso") or "",
         })
         if len(candidates) >= MAX_MARKETS:
             break
@@ -155,7 +176,7 @@ class MarketMaker:
             cid = c["condition_id"]
             if cid not in self._quoted:
                 self._quoted[cid] = QuotedMarket(**{k: c[k] for k in
-                    ("condition_id","yes_token_id","no_token_id","question","mid")})
+                    ("condition_id","yes_token_id","no_token_id","question","mid","end_date")})
                 LOGGER.info("mm_market_added cid=%.12s question=%s mid=%.2f",
                             cid, c["question"], c["mid"])
 
@@ -185,15 +206,18 @@ class MarketMaker:
         _cancel_order(client, qm.ask_order_id)
         qm.bid_order_id = qm.ask_order_id = ""
 
-        bid_price    = round(live_mid - HALF_SPREAD, 2)
-        no_bid_price = round(1.0 - (live_mid + HALF_SPREAD), 2)
+        half_spread  = _compute_half_spread(qm.end_date)
+        # Inventory skew: if long YES, lower bid (discourage buys) and raise ask.
+        skew         = qm.yes_inventory * INVENTORY_SKEW_FACTOR
+        bid_price    = round(live_mid - half_spread - skew, 2)
+        no_bid_price = round(1.0 - (live_mid + half_spread - skew), 2)
 
         if self.config.dry_run:
             LOGGER.info(
                 "mm_dry_run_quote cid=%.12s question=%s mid=%.3f "
-                "YES_bid=%.2f NO_bid=%.2f size_usdc=%.2f",
+                "YES_bid=%.2f NO_bid=%.2f spread=%.3f skew=%.4f inventory=%.2f size_usdc=%.2f",
                 qm.condition_id, qm.question, live_mid,
-                bid_price, no_bid_price, QUOTE_SIZE_USDC,
+                bid_price, no_bid_price, half_spread, skew, qm.yes_inventory, QUOTE_SIZE_USDC,
             )
         else:
             qm.bid_order_id = _place_gtc_order(client, qm.yes_token_id, "BUY", bid_price, QUOTE_SIZE_USDC)
@@ -221,6 +245,15 @@ class MarketMaker:
             _cancel_order(client, qm.bid_order_id)
             _cancel_order(client, qm.ask_order_id)
         LOGGER.info("mm_all_cancelled count=%d", len(self._quoted))
+
+    def record_fill(self, condition_id: str, yes_delta: float) -> None:
+        """Update YES inventory for a market after a fill (positive = bought YES)."""
+        qm = self._quoted.get(condition_id)
+        if qm is None:
+            return
+        qm.yes_inventory += yes_delta
+        LOGGER.info("mm_fill_recorded cid=%.12s yes_delta=%.4f inventory=%.4f",
+                    condition_id, yes_delta, qm.yes_inventory)
 
 
 _MM_INSTANCE: MarketMaker | None = None

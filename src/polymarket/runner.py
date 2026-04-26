@@ -77,11 +77,14 @@ def scan(config: PolymarketConfig) -> list[Opportunity]:
     for i, opp in enumerate(opps[:3]):
         LOGGER.info(
             "polymarket_opportunity rank=%d strategy=%s edge_pct=%.4f "
+            "annualized_edge_pct=%.1f hours_to_resolution=%.1f "
             "confidence=%s rank_score=%.4f direction=%s signal_notes=%s "
             "market=%s action=%s",
             i + 1,
             opp.strategy,
             opp.edge_pct,
+            opp.annualized_edge_pct,
+            opp.hours_to_resolution if opp.hours_to_resolution != float("inf") else -1,
             opp.confidence,
             opp.rank_score,
             opp.direction or "unscored",

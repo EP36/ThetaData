@@ -6,6 +6,7 @@ import difflib
 import logging
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -56,6 +57,28 @@ _DATE_MY_RE = re.compile(
 _DATE_Y_RE = re.compile(r"\b(202\d)\b")
 
 
+def _hours_to_resolution(end_date: str) -> float:
+    """Return hours until market resolution, or inf if end_date is missing/unparseable."""
+    if not end_date:
+        return float("inf")
+    try:
+        dt_str = end_date.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(dt_str)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        delta = dt - datetime.now(timezone.utc)
+        return max(0.0, delta.total_seconds() / 3600.0)
+    except Exception:
+        return float("inf")
+
+
+def _annualized_edge(edge_pct: float, hours: float) -> float:
+    """Return annualized edge% assuming capital locked until resolution."""
+    if hours <= 0 or hours == float("inf"):
+        return 0.0
+    return edge_pct * (8760.0 / hours)
+
+
 @dataclass(frozen=True, slots=True)
 class Opportunity:
     """A detected arbitrage or mispricing opportunity."""
@@ -82,6 +105,9 @@ class Opportunity:
     signal_notes: tuple[str, ...] = () # per-rule annotations from score_opportunity()
     confidence_score: float = 0.0      # signal-adjusted float confidence; 0.0 = unscored
     rank_score: float = 0.0            # confidence_score * edge_pct; used for post-signal ranking
+    # --- Phase 6: resolution carry fields ---
+    hours_to_resolution: float = float("inf")  # hours until market resolves
+    annualized_edge_pct: float = 0.0           # edge_pct * (8760 / hours_to_resolution)
 
 
 # ---------------------------------------------------------------------------
@@ -106,6 +132,7 @@ def detect_orderbook_spread(
         edge = (net_payout - total_cost) * 100.0
 
         if edge >= min_edge_pct:
+            hrs = _hours_to_resolution(ob.market.end_date)
             opps.append(
                 Opportunity(
                     strategy="orderbook_spread",
@@ -127,6 +154,8 @@ def detect_orderbook_spread(
                     entry_price_yes=ob.yes.best_ask,
                     entry_price_no=ob.no.best_ask,
                     volume_24h=ob.market.volume_24h,
+                    hours_to_resolution=hrs,
+                    annualized_edge_pct=round(_annualized_edge(edge, hrs), 2),
                 )
             )
 
@@ -360,6 +389,10 @@ def detect_correlated_markets(
             if higher_yes_mid > lower_yes_mid:
                 edge = (higher_yes_mid - lower_yes_mid) * 100.0
                 if edge >= min_edge_pct:
+                    hrs = min(
+                        _hours_to_resolution(lower_ob.market.end_date),
+                        _hours_to_resolution(higher_ob.market.end_date),
+                    )
                     opps.append(
                         Opportunity(
                             strategy="correlated_markets",
@@ -389,6 +422,8 @@ def detect_correlated_markets(
                                 lower_ob.market.volume_24h,
                                 higher_ob.market.volume_24h,
                             ),
+                            hours_to_resolution=hrs,
+                            annualized_edge_pct=round(_annualized_edge(edge, hrs), 2),
                         )
                     )
 
@@ -405,7 +440,9 @@ def run_all_scanners(
     min_edge_pct: float = 1.5,
     timeout: float = 15.0,
 ) -> list[Opportunity]:
-    """Run all three arb scanners and return results sorted by edge_pct descending."""
+    """Run all arb scanners and return results sorted by annualized_edge_pct descending."""
+    from src.polymarket.underround import detect_underround
+
     opps: list[Opportunity] = []
     opps.extend(detect_orderbook_spread(orderbooks, min_edge_pct=min_edge_pct))
     opps.extend(
@@ -417,5 +454,9 @@ def run_all_scanners(
         )
     )
     opps.extend(detect_correlated_markets(orderbooks, min_edge_pct=min_edge_pct))
-    opps.sort(key=lambda o: o.edge_pct, reverse=True)
+    opps.extend(detect_underround(orderbooks, min_edge_pct=min_edge_pct))
+    opps.sort(
+        key=lambda o: o.annualized_edge_pct if o.annualized_edge_pct > 0 else o.edge_pct,
+        reverse=True,
+    )
     return opps

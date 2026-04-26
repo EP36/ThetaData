@@ -107,6 +107,46 @@ def seconds_to_next_funding() -> int:
     return 3600 - (now.minute * 60 + now.second)
 
 
+def calculate_basis_vs_spot(asset: str, mark_px: float) -> dict[str, float]:
+    """Compare perp mark price vs spot price (stub: uses mark as proxy for spot).
+
+    Returns basis in $ and % terms. A positive basis means perp > spot (contango),
+    which independently confirms positive funding is likely to persist.
+
+    TODO: replace spot_px with a real spot feed (Binance/Coinbase REST) once wired.
+    """
+    try:
+        resp = httpx.post(
+            f"{HL_BASE_URL}/info",
+            json={"type": "spotMetaAndAssetCtxs"},
+            timeout=5.0,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        # data[0] = spotMeta, data[1] = list of assetCtxs
+        spot_meta, spot_ctxs = data[0], data[1]
+        spot_px = None
+        for token in spot_meta.get("tokens", []):
+            if token.get("name") == asset:
+                idx = token.get("index")
+                if idx is not None and idx < len(spot_ctxs):
+                    spot_px = float(spot_ctxs[idx].get("midPx") or 0)
+                break
+        if not spot_px:
+            return {"basis_usd": 0.0, "basis_pct": 0.0, "mark_px": mark_px, "spot_px": 0.0}
+        basis_usd = mark_px - spot_px
+        basis_pct = (basis_usd / spot_px) * 100.0 if spot_px > 0 else 0.0
+        return {
+            "basis_usd": round(basis_usd, 4),
+            "basis_pct": round(basis_pct, 4),
+            "mark_px":   mark_px,
+            "spot_px":   spot_px,
+        }
+    except Exception as exc:
+        LOGGER.debug("basis_fetch_failed asset=%s error=%s", asset, exc)
+        return {"basis_usd": 0.0, "basis_pct": 0.0, "mark_px": mark_px, "spot_px": 0.0}
+
+
 def calc_profit(rate: float, position_usd: float) -> dict[str, float]:
     gross   = rate * position_usd
     fees    = ROUND_TRIP_FEES * position_usd
@@ -156,10 +196,14 @@ def scan_once(config: dict[str, str]) -> None:
 
         if good:
             opps += 1
+            basis = calculate_basis_vs_spot(asset, r["mark_px"])
             LOGGER.info(
                 "funding_arb_OPPORTUNITY asset=%s rate=%.4f%% net_usd=$%.4f "
+                "basis_pct=%.4f%% basis_usd=%.2f spot_px=%.2f mark_px=%.2f "
                 "time_to_funding_sec=%d — %s",
-                asset, cur_rate * 100, profit["net_usd"], secs_left,
+                asset, cur_rate * 100, profit["net_usd"],
+                basis["basis_pct"], basis["basis_usd"], basis["spot_px"], basis["mark_px"],
+                secs_left,
                 "ENTER NOW (within 15min window)" if secs_left <= 900 else "monitor",
             )
 

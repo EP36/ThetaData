@@ -165,8 +165,14 @@ def main() -> None:
                 LOGGER.error("polymarket_ai_analysis_error error=%s", exc)
             last_ai_time = time.monotonic()
 
-        LOGGER.info("polymarket_scan_sleeping seconds=%d", config.scan_interval_sec)
-        time.sleep(config.scan_interval_sec)
+        try:
+            from src.events.calendar import get_scan_multiplier
+            multiplier = get_scan_multiplier()
+        except Exception:
+            multiplier = 1.0
+        sleep_sec = max(30, int(config.scan_interval_sec * multiplier))
+        LOGGER.info("polymarket_scan_sleeping seconds=%d event_multiplier=%.2f", sleep_sec, multiplier)
+        time.sleep(sleep_sec)
 
 
 if __name__ == "__main__":
