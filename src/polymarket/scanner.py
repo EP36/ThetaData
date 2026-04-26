@@ -1,7 +1,6 @@
+from __future__ import annotations
 import httpx
 """Fetch BTC prediction markets and their orderbooks from Polymarket."""
-
-from __future__ import annotations
 
 import json
 import logging
