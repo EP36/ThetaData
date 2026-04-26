@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from src.polymarket.config import PolymarketConfig
 from src.polymarket.opportunities import Opportunity
 from src.polymarket.positions import PositionsLedger
+import httpx
 
 LOGGER = logging.getLogger("theta.polymarket.risk")
 
@@ -49,8 +50,9 @@ def _fetch_polygon_usdc_balance(wallet_address: str) -> float | None:
             data=payload,
             headers={"Content-Type": "application/json"},
         )
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            body = json.loads(resp.read())
+        with httpx.Client(timeout=5) as client:
+            resp = client.get(url)
+        body = resp.json()
         raw = int(body.get("result", "0x0"), 16)
         return raw / 1_000_000  # USDC has 6 decimals
     except Exception as exc:

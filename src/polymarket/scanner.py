@@ -1,3 +1,4 @@
+import httpx
 """Fetch BTC prediction markets and their orderbooks from Polymarket."""
 
 from __future__ import annotations
@@ -529,8 +530,9 @@ def fetch_markets_gamma(timeout_seconds: float = 15.0) -> list[Market]:
             headers={"Accept": "application/json", "User-Agent": "Trauto/1.0"},
         )
         try:
-            with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:
-                page: list[dict[str, Any]] = json.loads(resp.read())
+            with httpx.Client(timeout=timeout_seconds) as client:
+                resp = client.get(url)
+            page = resp.json()
         except Exception as exc:
             LOGGER.error("polymarket_gamma_fetch_failed offset=%d error=%s", offset, exc)
             break

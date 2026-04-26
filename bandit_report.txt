@@ -1,0 +1,285 @@
+Run started:2026-04-25 20:20:52.011498+00:00
+
+Test results:
+>> Issue: [B310:blacklist] Audit url open for permitted schemes. Allowing use of file:/ or custom schemes is often unexpected.
+   Severity: Medium   Confidence: High
+   CWE: CWE-22 (https://cwe.mitre.org/data/definitions/22.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b310-urllib-urlopen
+   Location: src/api/services.py:115:17
+114	            )
+115	            with urllib.request.urlopen(req, timeout=5) as resp:
+116	                raw_body = resp.read()
+
+--------------------------------------------------
+>> Issue: [B310:blacklist] Audit url open for permitted schemes. Allowing use of file:/ or custom schemes is often unexpected.
+   Severity: Medium   Confidence: High
+   CWE: CWE-22 (https://cwe.mitre.org/data/definitions/22.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b310-urllib-urlopen
+   Location: src/api/services.py:215:13
+214	        )
+215	        with urllib.request.urlopen(req, timeout=5) as resp:
+216	            data = json.loads(resp.read())
+
+--------------------------------------------------
+>> Issue: [B101:assert_used] Use of assert detected. The enclosed code will be removed when compiling to optimised byte code.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b101_assert_used.html
+   Location: src/backtest/walk_forward.py:176:8
+175	
+176	        assert best_params is not None
+177	        return best_params, best_score
+
+--------------------------------------------------
+>> Issue: [B104:hardcoded_bind_all_interfaces] Possible binding to all interfaces.
+   Severity: Medium   Confidence: Medium
+   CWE: CWE-605 (https://cwe.mitre.org/data/definitions/605.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b104_hardcoded_bind_all_interfaces.html
+   Location: src/config/deployment.py:150:16
+149	    service_name: str = "trauto"
+150	    host: str = "0.0.0.0"
+151	    port: int = 8000
+
+--------------------------------------------------
+>> Issue: [B104:hardcoded_bind_all_interfaces] Possible binding to all interfaces.
+   Severity: Medium   Confidence: Medium
+   CWE: CWE-605 (https://cwe.mitre.org/data/definitions/605.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b104_hardcoded_bind_all_interfaces.html
+   Location: src/config/deployment.py:736:35
+735	            service_name=os.getenv("SERVICE_NAME", "trauto").strip(),
+736	            host=os.getenv("HOST", "0.0.0.0").strip(),
+737	            port=int(os.getenv("PORT", "8000")),
+
+--------------------------------------------------
+>> Issue: [B101:assert_used] Use of assert detected. The enclosed code will be removed when compiling to optimised byte code.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b101_assert_used.html
+   Location: src/data/loaders.py:165:8
+164	
+165	        assert last_error is not None
+166	        raise RuntimeError(
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html
+   Location: src/polymarket/market_maker.py:92:4
+91	            return float(resp.json().get("mid", 0))
+92	    except Exception:
+93	        pass
+94	    return None
+
+--------------------------------------------------
+>> Issue: [B107:hardcoded_password_default] Possible hardcoded password: ''
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b107_hardcoded_password_default.html
+   Location: src/polymarket/positions.py:284:0
+283	
+284	def new_position(
+285	    market_condition_id: str,
+286	    market_question: str,
+287	    strategy: str,
+288	    side: str,
+289	    entry_price: float,
+290	    size_usdc: float,
+291	    status: str = "open",
+292	    yes_token_id: str = "",
+293	    no_token_id: str = "",
+294	    end_date: str = "",
+295	    contracts_held: float = 0.0,
+296	) -> PositionRecord:
+297	    """Build a new PositionRecord with a fresh UUID and current timestamp."""
+298	    return PositionRecord(
+299	        id=_new_id(),
+300	        market_condition_id=market_condition_id,
+301	        market_question=market_question,
+302	        strategy=strategy,
+303	        side=side,
+304	        entry_price=entry_price,
+305	        size_usdc=size_usdc,
+306	        opened_at=_now_iso(),
+307	        status=status,
+308	        pnl=None,
+309	        yes_token_id=yes_token_id,
+310	        no_token_id=no_token_id,
+311	        end_date=end_date,
+312	        contracts_held=contracts_held,
+313	    )
+314	
+
+--------------------------------------------------
+>> Issue: [B310:blacklist] Audit url open for permitted schemes. Allowing use of file:/ or custom schemes is often unexpected.
+   Severity: Medium   Confidence: High
+   CWE: CWE-22 (https://cwe.mitre.org/data/definitions/22.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b310-urllib-urlopen
+   Location: src/polymarket/risk.py:52:13
+51	        )
+52	        with urllib.request.urlopen(req, timeout=5) as resp:
+53	            body = json.loads(resp.read())
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'skipped_missing_tokens'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b105_hardcoded_password_string.html
+   Location: src/polymarket/scanner.py:59:4
+58	    "orderbook_disabled": "skipped_no_orderbook",
+59	    "missing_yes_or_no_token": "skipped_missing_tokens",
+60	    "wrong_token_format": "skipped_wrong_token_format",
+61	    "invalid_yes_token_id": "skipped_wrong_token_format",
+62	    "invalid_no_token_id": "skipped_wrong_token_format",
+63	    "missing_condition_id": "skipped_malformed",
+64	}
+65	
+66	# Candidate outcome label sets for flexible YES/NO matching.
+67	_YES_LABELS = {"yes", "true", "1"}
+68	_NO_LABELS = {"no", "false", "0"}
+69	# Token dict keys tried in order when looking for an outcome label.
+70	_OUTCOME_KEYS = ("outcome", "name", "title", "side")
+71	
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'skipped_wrong_token_format'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b105_hardcoded_password_string.html
+   Location: src/polymarket/scanner.py:60:4
+59	    "missing_yes_or_no_token": "skipped_missing_tokens",
+60	    "wrong_token_format": "skipped_wrong_token_format",
+61	    "invalid_yes_token_id": "skipped_wrong_token_format",
+62	    "invalid_no_token_id": "skipped_wrong_token_format",
+63	    "missing_condition_id": "skipped_malformed",
+64	}
+65	
+66	# Candidate outcome label sets for flexible YES/NO matching.
+67	_YES_LABELS = {"yes", "true", "1"}
+68	_NO_LABELS = {"no", "false", "0"}
+69	# Token dict keys tried in order when looking for an outcome label.
+70	_OUTCOME_KEYS = ("outcome", "name", "title", "side")
+71	
+72	
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'skipped_wrong_token_format'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b105_hardcoded_password_string.html
+   Location: src/polymarket/scanner.py:61:4
+60	    "wrong_token_format": "skipped_wrong_token_format",
+61	    "invalid_yes_token_id": "skipped_wrong_token_format",
+62	    "invalid_no_token_id": "skipped_wrong_token_format",
+63	    "missing_condition_id": "skipped_malformed",
+64	}
+65	
+66	# Candidate outcome label sets for flexible YES/NO matching.
+67	_YES_LABELS = {"yes", "true", "1"}
+68	_NO_LABELS = {"no", "false", "0"}
+69	# Token dict keys tried in order when looking for an outcome label.
+70	_OUTCOME_KEYS = ("outcome", "name", "title", "side")
+71	
+72	
+73	@dataclass(frozen=True, slots=True)
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: 'skipped_wrong_token_format'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b105_hardcoded_password_string.html
+   Location: src/polymarket/scanner.py:62:4
+61	    "invalid_yes_token_id": "skipped_wrong_token_format",
+62	    "invalid_no_token_id": "skipped_wrong_token_format",
+63	    "missing_condition_id": "skipped_malformed",
+64	}
+65	
+66	# Candidate outcome label sets for flexible YES/NO matching.
+67	_YES_LABELS = {"yes", "true", "1"}
+68	_NO_LABELS = {"no", "false", "0"}
+69	# Token dict keys tried in order when looking for an outcome label.
+70	_OUTCOME_KEYS = ("outcome", "name", "title", "side")
+71	
+72	
+73	@dataclass(frozen=True, slots=True)
+74	class MarketToken:
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: '0'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b105_hardcoded_password_string.html
+   Location: src/polymarket/scanner.py:510:8
+509	        "skipped_missing_tokens": 0,
+510	        "skipped_wrong_token_format": 0,
+511	        "skipped_malformed": 0,
+512	        "candidates_retained": 0,
+513	    }
+514	    t0 = time.monotonic()
+515	    offset = 0
+516	    sample_logged = False
+517	
+518	    while True:
+519	        from urllib.parse import urlencode
+520	        params = {
+521	            "active": "true",
+
+--------------------------------------------------
+>> Issue: [B310:blacklist] Audit url open for permitted schemes. Allowing use of file:/ or custom schemes is often unexpected.
+   Severity: Medium   Confidence: High
+   CWE: CWE-22 (https://cwe.mitre.org/data/definitions/22.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b310-urllib-urlopen
+   Location: src/polymarket/scanner.py:532:17
+531	        try:
+532	            with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:
+533	                page: list[dict[str, Any]] = json.loads(resp.read())
+
+--------------------------------------------------
+>> Issue: [B105:hardcoded_password_string] Possible hardcoded password: '0'
+   Severity: Low   Confidence: Medium
+   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b105_hardcoded_password_string.html
+   Location: src/polymarket/scanner.py:607:8
+606	        "skipped_missing_tokens": 0,
+607	        "skipped_wrong_token_format": 0,
+608	        "skipped_malformed": 0,
+609	        "candidates_retained": 0,
+610	    }
+611	    cursor = ""
+612	
+613	    while True:
+614	        response = client.fetch_markets(next_cursor=cursor)
+615	        for raw in response.get("data", []):
+616	            stats["total"] += 1
+617	            market, reason = _parse_market(raw)
+
+--------------------------------------------------
+>> Issue: [B110:try_except_pass] Try, Except, Pass detected.
+   Severity: Low   Confidence: High
+   CWE: CWE-703 (https://cwe.mitre.org/data/definitions/703.html)
+   More Info: https://bandit.readthedocs.io/en/1.9.4/plugins/b110_try_except_pass.html
+   Location: src/worker/universe.py:354:16
+353	                    )
+354	                except Exception:
+355	                    pass
+356	                else:
+
+--------------------------------------------------
+
+Code scanned:
+	Total lines of code: 18613
+	Total lines skipped (#nosec): 0
+	Total potential issues skipped due to specifically being disabled (e.g., #nosec BXXX): 0
+
+Run metrics:
+	Total issues (by severity):
+		Undefined: 0
+		Low: 11
+		Medium: 6
+		High: 0
+	Total issues (by confidence):
+		Undefined: 0
+		Low: 0
+		Medium: 9
+		High: 8
+Files skipped (0):

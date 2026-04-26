@@ -173,7 +173,8 @@ class WalkForwardRunner:
                 best_score = score
                 best_params = params
 
-        assert best_params is not None
+        if best_params is None:
+            raise RuntimeError("walk_forward: best_params is None after exhausting all combinations")
         return best_params, best_score
 
     def _parameter_combinations(self) -> list[dict[str, Any]]:
