@@ -18,7 +18,7 @@ from src.polymarket.risk import RiskGuard
 
 LOGGER = logging.getLogger("theta.polymarket.executor")
 
-_EXECUTABLE_STRATEGIES = {"orderbook_spread", "correlated_markets"}
+_EXECUTABLE_STRATEGIES = {"orderbook_spread", "correlated_markets", "underround", "resolution_carry"}
 
 _POLYGON_RPC_URL = "https://polygon-rpc.com"
 _MIN_POL_GAS = 0.005  # minimum POL required to cover on-chain transaction gas
@@ -348,8 +348,24 @@ def _execute_correlated_markets(
 
     if buy_price >= 0.99 or buy_price <= 0.01:
         LOGGER.info(
-            "correlated_markets_buy_price_invalid skipped buy_price=%.4f",
-            buy_price,
+            "correlated_markets_buy_price_invalid skipped buy_price=%.4f "
+            "sell_price=%.4f edge_pct=%.4f hours_to_resolution=%.1f "
+            "market=%.80s buy_ask=%.4f sell_bid=%.4f",
+            buy_price, sell_price,
+            opportunity.edge_pct,
+            opportunity.hours_to_resolution if opportunity.hours_to_resolution != float("inf") else -1,
+            opportunity.market_question,
+            opportunity.entry_price_yes,
+            opportunity.entry_price_no,
+        )
+        LOGGER.warning(
+            "polymarket_opportunity_rejected strategy=correlated_markets "
+            "reason=buy_price_out_of_valid_range "
+            "buy_price=%.4f sell_price=%.4f "
+            "edge_pct=%.4f hours_to_resolution=%.1f",
+            buy_price, sell_price,
+            opportunity.edge_pct,
+            opportunity.hours_to_resolution if opportunity.hours_to_resolution != float("inf") else -1,
         )
         return ExecutionResult(
             success=False, error="buy_price_out_of_valid_range"
@@ -462,6 +478,194 @@ def _execute_correlated_markets(
 
 
 # ---------------------------------------------------------------------------
+# Underround execution (YES + NO legs, asymmetric market)
+# ---------------------------------------------------------------------------
+
+def _execute_underround(
+    opportunity: Opportunity,
+    config: PolymarketConfig,
+    ledger: PositionsLedger,
+) -> ExecutionResult:
+    """Buy both YES and NO legs for an underround arbitrage opportunity.
+
+    Uses config.underround_max_trade_usdc (capped at config.max_trade_usdc).
+    Identical leg structure to orderbook_spread; labelled separately for
+    per-strategy tracking.
+    """
+    if not _check_pol_gas(config.private_key):
+        return ExecutionResult(success=False, error="pol_gas_insufficient")
+
+    total_cost_per_share = opportunity.entry_price_yes + opportunity.entry_price_no
+    if total_cost_per_share <= 0:
+        return ExecutionResult(success=False, error="entry_prices_missing_or_zero")
+
+    size_usdc = min(config.underround_max_trade_usdc, config.max_trade_usdc)
+    n_shares = size_usdc / total_cost_per_share
+    yes_usdc = n_shares * opportunity.entry_price_yes
+    no_usdc  = n_shares * opportunity.entry_price_no
+    total_usdc = yes_usdc + no_usdc
+
+    # --- YES leg ---
+    yes_resp: dict[str, Any] | None = None
+    try:
+        yes_resp = _place_order(
+            config,
+            token_id=opportunity.yes_token_id,
+            size_usdc=yes_usdc,
+            price=opportunity.entry_price_yes,
+            side="BUY",
+        )
+    except Exception as exc:
+        return ExecutionResult(success=False, error=f"yes_leg_failed: {exc}")
+
+    yes_order_id: str = yes_resp.get("orderID", yes_resp.get("order_id", ""))
+    yes_fill = float(yes_resp.get("price", opportunity.entry_price_yes))
+
+    # --- NO leg ---
+    try:
+        no_resp = _place_order(
+            config,
+            token_id=opportunity.no_token_id,
+            size_usdc=no_usdc,
+            price=opportunity.entry_price_no,
+            side="BUY",
+        )
+    except Exception as exc:
+        yes_contracts = yes_usdc / yes_fill if yes_fill > 0 else 0.0
+        unhedged = new_position(
+            market_condition_id=opportunity.condition_id,
+            market_question=opportunity.market_question,
+            strategy=opportunity.strategy,
+            side="YES",
+            entry_price=yes_fill,
+            size_usdc=yes_usdc,
+            status="unhedged",
+            yes_token_id=opportunity.yes_token_id,
+            contracts_held=yes_contracts,
+        )
+        ledger.add(unhedged)
+        LOGGER.critical(
+            "polymarket_unhedged_position yes_order_id=%s condition_id=%s "
+            "yes_usdc=%.2f no_error=%s — manual intervention required",
+            yes_order_id, opportunity.condition_id, yes_usdc, exc,
+        )
+        return ExecutionResult(
+            success=False,
+            order_id=yes_order_id,
+            fill_price=yes_fill,
+            size_usdc=yes_usdc,
+            error=f"no_leg_failed_unhedged: {exc}",
+        )
+
+    no_order_id: str = no_resp.get("orderID", no_resp.get("order_id", ""))
+    no_fill = float(no_resp.get("price", opportunity.entry_price_no))
+    avg_fill = (yes_fill + no_fill) / 2.0
+
+    position = new_position(
+        market_condition_id=opportunity.condition_id,
+        market_question=opportunity.market_question,
+        strategy=opportunity.strategy,
+        side="YES+NO",
+        entry_price=avg_fill,
+        size_usdc=total_usdc,
+        status="open",
+        yes_token_id=opportunity.yes_token_id,
+        no_token_id=opportunity.no_token_id,
+        contracts_held=n_shares,
+    )
+    ledger.add(position)
+
+    LOGGER.info(
+        "polymarket_underround_execute_result condition_id=%s "
+        "yes_order_id=%s no_order_id=%s "
+        "total_usdc=%.2f avg_fill=%.4f edge_pct=%.2f",
+        opportunity.condition_id,
+        yes_order_id,
+        no_order_id,
+        total_usdc,
+        avg_fill,
+        opportunity.edge_pct,
+    )
+    return ExecutionResult(
+        success=True,
+        order_id=f"{yes_order_id}/{no_order_id}",
+        fill_price=avg_fill,
+        size_usdc=total_usdc,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Resolution carry execution (single YES leg, near-certain outcome)
+# ---------------------------------------------------------------------------
+
+def _execute_resolution_carry(
+    opportunity: Opportunity,
+    config: PolymarketConfig,
+    ledger: PositionsLedger,
+) -> ExecutionResult:
+    """Buy the YES leg for a near-certain market approaching resolution.
+
+    Uses config.res_carry_max_trade_usdc (capped at config.max_trade_usdc).
+    Only a BUY leg — no short-selling or NO leg needed.
+    """
+    if not _check_pol_gas(config.private_key):
+        return ExecutionResult(success=False, error="pol_gas_insufficient")
+
+    buy_price = opportunity.entry_price_yes
+    if buy_price <= 0 or buy_price >= 1.0:
+        return ExecutionResult(
+            success=False, error=f"res_carry_invalid_price buy_price={buy_price:.4f}"
+        )
+
+    size_usdc = min(config.res_carry_max_trade_usdc, config.max_trade_usdc)
+
+    try:
+        resp = _place_order(
+            config,
+            token_id=opportunity.yes_token_id,
+            size_usdc=size_usdc,
+            price=buy_price,
+            side="BUY",
+        )
+    except Exception as exc:
+        return ExecutionResult(success=False, error=f"buy_leg_failed: {exc}")
+
+    order_id: str = resp.get("orderID", resp.get("order_id", ""))
+    fill_price = float(resp.get("price", buy_price))
+    contracts = size_usdc / fill_price if fill_price > 0 else 0.0
+
+    position = new_position(
+        market_condition_id=opportunity.condition_id,
+        market_question=opportunity.market_question,
+        strategy=opportunity.strategy,
+        side="YES",
+        entry_price=fill_price,
+        size_usdc=size_usdc,
+        status="open",
+        yes_token_id=opportunity.yes_token_id,
+        contracts_held=contracts,
+    )
+    ledger.add(position)
+
+    LOGGER.info(
+        "polymarket_res_carry_execute_result condition_id=%s order_id=%s "
+        "fill_price=%.4f size_usdc=%.2f edge_pct=%.2f hours_to_resolution=%.1f",
+        opportunity.condition_id,
+        order_id,
+        fill_price,
+        size_usdc,
+        opportunity.edge_pct,
+        opportunity.hours_to_resolution if opportunity.hours_to_resolution != float("inf") else -1,
+    )
+    return ExecutionResult(
+        success=True,
+        order_id=order_id,
+        fill_price=fill_price,
+        size_usdc=size_usdc,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
 
@@ -528,6 +732,10 @@ def execute(
         return _execute_orderbook_spread(opportunity, config, ledger)
     if opportunity.strategy == "correlated_markets":
         return _execute_correlated_markets(opportunity, config, ledger)
+    if opportunity.strategy == "underround":
+        return _execute_underround(opportunity, config, ledger)
+    if opportunity.strategy == "resolution_carry":
+        return _execute_resolution_carry(opportunity, config, ledger)
 
     # Should not reach here given the _EXECUTABLE_STRATEGIES check above
     return ExecutionResult(success=False, error="unhandled_strategy")

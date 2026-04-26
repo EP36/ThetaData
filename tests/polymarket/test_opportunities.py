@@ -1,7 +1,9 @@
-"""Tests for the three arb detection functions using mocked market data."""
+"""Tests for the arb detection functions using mocked market data."""
 
 from __future__ import annotations
 
+import datetime
+import logging
 from unittest.mock import patch
 
 import pytest
@@ -258,3 +260,244 @@ def test_run_all_scanners_returns_empty_on_no_opportunities() -> None:
         opps = run_all_scanners([ob], kalshi_base_url="http://mock", min_edge_pct=1.5)
 
     assert opps == []
+
+
+# ---------------------------------------------------------------------------
+# Strategy 4: underround
+# ---------------------------------------------------------------------------
+
+def test_underround_detects_asymmetric_arb() -> None:
+    # YES_ask=0.20, NO_ask=0.70 → total=0.90 < net_payout=0.98; diff=0.50 > 0.05
+    from src.polymarket.underround import detect_underround
+
+    ob = _make_ob(yes_ask=0.20, no_ask=0.70)
+    opps = detect_underround([ob], min_edge_pct=1.5)
+
+    assert len(opps) == 1
+    assert opps[0].strategy == "underround"
+    assert opps[0].edge_pct == pytest.approx(8.0, abs=0.1)
+    assert opps[0].confidence == "high"
+    assert "0.2000" in opps[0].action
+    assert "0.7000" in opps[0].action
+
+
+def test_underround_skips_symmetric_market() -> None:
+    # YES_ask=0.45, NO_ask=0.45 → total=0.90; but abs(0.45-0.45)=0 < 0.05 → skip
+    from src.polymarket.underround import detect_underround
+
+    ob = _make_ob(yes_ask=0.45, no_ask=0.45)
+    opps = detect_underround([ob], min_edge_pct=1.5)
+
+    assert opps == []
+
+
+def test_underround_skips_when_disabled() -> None:
+    from src.polymarket.underround import detect_underround
+
+    ob = _make_ob(yes_ask=0.20, no_ask=0.70)
+    opps = detect_underround([ob], min_edge_pct=1.5, enabled=False)
+
+    assert opps == []
+
+
+def test_underround_skips_below_min_edge() -> None:
+    # YES_ask=0.48, NO_ask=0.50 → total=0.98 == net_payout=0.98 → edge≈0 < 1.5
+    from src.polymarket.underround import detect_underround
+
+    ob = _make_ob(yes_ask=0.48, no_ask=0.50)
+    opps = detect_underround([ob], min_edge_pct=1.5)
+
+    assert opps == []
+
+
+def test_underround_respects_max_hold_hours(tmp_path: "Path") -> None:
+    # Market resolves in 100h; max_hold_hours=72 → skip
+    from src.polymarket.underround import detect_underround
+
+    far_date = (
+        datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=100)
+    ).isoformat()
+    market = Market(
+        condition_id="0xfar",
+        question="Will X happen?",
+        yes_token=MarketToken(token_id="t-yes", outcome="Yes"),
+        no_token=MarketToken(token_id="t-no", outcome="No"),
+        end_date=far_date,
+    )
+    ob = MarketOrderbook(
+        market=market,
+        yes=OrderbookSide(best_bid=0.15, best_ask=0.20),
+        no=OrderbookSide(best_bid=0.65, best_ask=0.70),
+    )
+    opps = detect_underround([ob], min_edge_pct=1.5, max_hold_hours=72.0)
+
+    assert opps == []
+
+
+def test_underround_logs_opportunity(caplog: pytest.LogCaptureFixture) -> None:
+    from src.polymarket.underround import detect_underround
+
+    ob = _make_ob(yes_ask=0.20, no_ask=0.70)
+    with caplog.at_level(logging.INFO, logger="theta.polymarket.underround"):
+        detect_underround([ob], min_edge_pct=1.5)
+
+    assert any("polymarket_underround_opportunity" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# Strategy 5: resolution carry
+# ---------------------------------------------------------------------------
+
+def _make_ob_with_end_date(
+    hours_ahead: float,
+    yes_ask: float = 0.96,
+    yes_bid: float = 0.95,
+    no_ask: float = 0.05,
+    no_bid: float = 0.03,
+) -> MarketOrderbook:
+    end_date = (
+        datetime.datetime.now(datetime.timezone.utc)
+        + datetime.timedelta(hours=hours_ahead)
+    ).isoformat()
+    market = Market(
+        condition_id="0xres",
+        question="Will X resolve YES?",
+        yes_token=MarketToken(token_id="t-yes-res", outcome="Yes"),
+        no_token=MarketToken(token_id="t-no-res", outcome="No"),
+        end_date=end_date,
+    )
+    return MarketOrderbook(
+        market=market,
+        yes=OrderbookSide(best_bid=yes_bid, best_ask=yes_ask),
+        no=OrderbookSide(best_bid=no_bid, best_ask=no_ask),
+    )
+
+
+def test_res_carry_detects_near_maturity_opportunity() -> None:
+    # YES_ask=0.96, resolves in 4h → edge=(0.98-0.96)*100=2%, ann=2*(8760/4)=4380%
+    from src.polymarket.resolution_carry import detect_resolution_carry
+
+    ob = _make_ob_with_end_date(hours_ahead=4.0, yes_ask=0.96)
+    opps = detect_resolution_carry([ob], min_price=0.95, max_hold_hours=48.0, min_annualized_edge_pct=50.0)
+
+    assert len(opps) == 1
+    assert opps[0].strategy == "resolution_carry"
+    assert opps[0].annualized_edge_pct >= 50.0
+    assert opps[0].hours_to_resolution == pytest.approx(4.0, abs=0.1)
+
+
+def test_res_carry_skips_market_too_far_from_resolution() -> None:
+    # Resolves in 100h, max_hold_hours=48 → skip
+    from src.polymarket.resolution_carry import detect_resolution_carry
+
+    ob = _make_ob_with_end_date(hours_ahead=100.0, yes_ask=0.96)
+    opps = detect_resolution_carry([ob], min_price=0.95, max_hold_hours=48.0, min_annualized_edge_pct=50.0)
+
+    assert opps == []
+
+
+def test_res_carry_skips_price_below_min() -> None:
+    # YES_ask=0.85 < min_price=0.95 → skip
+    from src.polymarket.resolution_carry import detect_resolution_carry
+
+    ob = _make_ob_with_end_date(hours_ahead=4.0, yes_ask=0.85, yes_bid=0.84)
+    opps = detect_resolution_carry([ob], min_price=0.95, max_hold_hours=48.0, min_annualized_edge_pct=50.0)
+
+    assert opps == []
+
+
+def test_res_carry_skips_when_annualized_edge_too_low() -> None:
+    # YES_ask=0.97, resolves in 2000h → ann_edge very low
+    from src.polymarket.resolution_carry import detect_resolution_carry
+
+    ob = _make_ob_with_end_date(hours_ahead=2000.0, yes_ask=0.97)
+    opps = detect_resolution_carry([ob], min_price=0.95, max_hold_hours=5000.0, min_annualized_edge_pct=500.0)
+
+    assert opps == []
+
+
+def test_res_carry_skips_when_disabled() -> None:
+    from src.polymarket.resolution_carry import detect_resolution_carry
+
+    ob = _make_ob_with_end_date(hours_ahead=4.0, yes_ask=0.96)
+    opps = detect_resolution_carry([ob], min_price=0.95, max_hold_hours=48.0, min_annualized_edge_pct=50.0, enabled=False)
+
+    assert opps == []
+
+
+def test_res_carry_high_confidence_at_or_above_0_97() -> None:
+    # yes_ask=0.97 → edge=(0.98-0.97)*100=1%; 0.97>=0.97 → high confidence
+    from src.polymarket.resolution_carry import detect_resolution_carry
+
+    ob = _make_ob_with_end_date(hours_ahead=2.0, yes_ask=0.97, yes_bid=0.96)
+    opps = detect_resolution_carry([ob], min_price=0.95, max_hold_hours=48.0, min_annualized_edge_pct=1.0)
+
+    assert len(opps) == 1
+    assert opps[0].confidence == "high"
+
+
+def test_res_carry_logs_opportunity(caplog: pytest.LogCaptureFixture) -> None:
+    from src.polymarket.resolution_carry import detect_resolution_carry
+
+    ob = _make_ob_with_end_date(hours_ahead=4.0, yes_ask=0.96)
+    with caplog.at_level(logging.INFO, logger="theta.polymarket.resolution_carry"):
+        detect_resolution_carry([ob], min_price=0.95, max_hold_hours=48.0, min_annualized_edge_pct=50.0)
+
+    assert any("polymarket_res_carry_opportunity" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# Task A: correlated_markets rejection logging
+# ---------------------------------------------------------------------------
+
+def test_correlated_markets_buy_price_invalid_logs_rejected_event(
+    tmp_path: "Path", caplog: pytest.LogCaptureFixture
+) -> None:
+    """buy_price=1.0 must log both the invalid event and polymarket_opportunity_rejected."""
+    from pathlib import Path
+    from unittest.mock import patch
+
+    from src.polymarket.config import PolymarketConfig
+    from src.polymarket.executor import _execute_correlated_markets
+    from src.polymarket.positions import PositionsLedger
+
+    config = PolymarketConfig(
+        api_key="k", api_secret="s", passphrase="p", private_key="pk",
+        scan_interval_sec=30, min_edge_pct=1.5,
+        clob_base_url="https://clob.polymarket.com",
+        kalshi_base_url="https://trading-api.kalshi.com/trade-api/v2",
+        max_retries=3, timeout_seconds=15.0,
+        max_trade_usdc=200.0, max_positions=5, daily_loss_limit=200.0,
+        dry_run=True, min_volume_24h=0.0,
+    )
+    ledger = PositionsLedger(path=Path(tmp_path) / "positions.json")
+
+    opp = Opportunity(
+        strategy="correlated_markets",
+        market_question="Will BTC hit $80k? vs Will BTC hit $100k?",
+        edge_pct=5.0,
+        action="test",
+        confidence="high",
+        notes="",
+        condition_id="0xlow",
+        yes_token_id="t-low",
+        yes_token_id_2="t-high",
+        condition_id_2="0xhigh",
+        entry_price_yes=1.0,   # buy_price = 1.0, will be rejected
+        entry_price_no=0.60,
+        hours_to_resolution=24.0,
+    )
+
+    with patch("src.polymarket.executor._check_pol_gas", return_value=True):
+        with caplog.at_level(logging.INFO, logger="theta.polymarket.executor"):
+            result = _execute_correlated_markets(opp, config, ledger)
+
+    assert result.success is False
+    assert result.error == "buy_price_out_of_valid_range"
+    msgs = [r.message for r in caplog.records]
+    assert any("correlated_markets_buy_price_invalid" in m for m in msgs)
+    assert any("polymarket_opportunity_rejected" in m for m in msgs)
+    # Verify key fields appear in the rejected log
+    rejected = next(m for m in msgs if "polymarket_opportunity_rejected" in m)
+    assert "buy_price_out_of_valid_range" in rejected
+    assert "edge_pct" in rejected

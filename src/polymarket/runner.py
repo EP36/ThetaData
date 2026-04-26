@@ -42,6 +42,13 @@ def scan(config: PolymarketConfig) -> list[Opportunity]:
         kalshi_base_url=config.kalshi_base_url,
         min_edge_pct=config.min_edge_pct,
         timeout=config.timeout_seconds,
+        underround_enabled=config.underround_enabled,
+        underround_min_spread_pct=config.underround_min_spread_pct,
+        underround_max_hold_hours=float(config.underround_max_hold_hours),
+        res_carry_enabled=config.res_carry_enabled,
+        res_carry_min_price=config.res_carry_min_price,
+        res_carry_max_hold_hours=float(config.res_carry_max_hold_hours),
+        res_carry_min_annualized_edge_pct=config.res_carry_min_annualized_edge_pct,
     )
 
     # Score and re-rank by signal engine

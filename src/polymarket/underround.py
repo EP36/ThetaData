@@ -23,13 +23,18 @@ def detect_underround(
     orderbooks: list[MarketOrderbook],
     fee_pct: float = _POLY_FEE_PCT,
     min_edge_pct: float = 1.5,
+    enabled: bool = True,
+    max_hold_hours: float = float("inf"),
 ) -> list[Opportunity]:
     """Return opportunities where sum(YES ask + NO ask) < net_payout.
 
     Identical math to orderbook_spread but labelled separately.
     Skips markets already captured by orderbook_spread to avoid duplicates
-    by checking YES_ask > 0.50 (those are already flagged there).
+    by requiring abs(yes_ask - no_ask) >= 0.05 (asymmetric markets only).
     """
+    if not enabled:
+        return []
+
     opps: list[Opportunity] = []
     net_payout = 1.0 * (1.0 - fee_pct)
 
@@ -48,6 +53,16 @@ def detect_underround(
             continue
 
         hrs = _hours_to_resolution(ob.market.end_date)
+        if max_hold_hours < float("inf") and hrs > max_hold_hours:
+            continue
+
+        LOGGER.info(
+            "polymarket_underround_opportunity market=%.60s "
+            "yes_ask=%.4f no_ask=%.4f total_cost=%.4f "
+            "edge_pct=%.2f hours_to_resolution=%.1f",
+            ob.market.question, yes_ask, no_ask, total_cost, edge,
+            hrs if hrs != float("inf") else -1,
+        )
         opps.append(
             Opportunity(
                 strategy="underround",

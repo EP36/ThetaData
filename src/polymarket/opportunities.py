@@ -439,9 +439,17 @@ def run_all_scanners(
     kalshi_base_url: str,
     min_edge_pct: float = 1.5,
     timeout: float = 15.0,
+    underround_enabled: bool = True,
+    underround_min_spread_pct: float = 2.5,
+    underround_max_hold_hours: float = float("inf"),
+    res_carry_enabled: bool = True,
+    res_carry_min_price: float = 0.95,
+    res_carry_max_hold_hours: float = 48.0,
+    res_carry_min_annualized_edge_pct: float = 50.0,
 ) -> list[Opportunity]:
     """Run all arb scanners and return results sorted by annualized_edge_pct descending."""
     from src.polymarket.underround import detect_underround
+    from src.polymarket.resolution_carry import detect_resolution_carry
 
     opps: list[Opportunity] = []
     opps.extend(detect_orderbook_spread(orderbooks, min_edge_pct=min_edge_pct))
@@ -454,7 +462,19 @@ def run_all_scanners(
         )
     )
     opps.extend(detect_correlated_markets(orderbooks, min_edge_pct=min_edge_pct))
-    opps.extend(detect_underround(orderbooks, min_edge_pct=min_edge_pct))
+    opps.extend(detect_underround(
+        orderbooks,
+        min_edge_pct=underround_min_spread_pct,
+        enabled=underround_enabled,
+        max_hold_hours=underround_max_hold_hours,
+    ))
+    opps.extend(detect_resolution_carry(
+        orderbooks,
+        min_price=res_carry_min_price,
+        max_hold_hours=res_carry_max_hold_hours,
+        min_annualized_edge_pct=res_carry_min_annualized_edge_pct,
+        enabled=res_carry_enabled,
+    ))
     opps.sort(
         key=lambda o: o.annualized_edge_pct if o.annualized_edge_pct > 0 else o.edge_pct,
         reverse=True,

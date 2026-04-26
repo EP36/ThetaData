@@ -89,6 +89,19 @@ class PolymarketConfig:
     max_hold_hours: int = 72           # force-close after this many hours
     unhedged_grace_minutes: int = 5    # attempt close of unhedged leg after this many minutes
     poly_log_dir: str = "logs"         # directory for poly_YYYY-MM-DD.log daily summaries
+    # --- Underround strategy ---
+    underround_enabled: bool = True
+    underround_min_spread_pct: float = 2.5
+    underround_max_hold_hours: int = 72
+    underround_max_trade_usdc: float = 1.50
+    underround_max_positions: int = 10
+    # --- Resolution carry strategy ---
+    res_carry_enabled: bool = True
+    res_carry_min_price: float = 0.95
+    res_carry_max_hold_hours: int = 48
+    res_carry_min_annualized_edge_pct: float = 50.0
+    res_carry_max_trade_usdc: float = 1.00
+    res_carry_max_positions: int = 10
 
     def __post_init__(self) -> None:
         if not self.api_key.strip():
@@ -228,4 +241,15 @@ class PolymarketConfig:
             max_hold_hours=int(os.getenv("POLY_MAX_HOLD_HOURS", "72")),
             unhedged_grace_minutes=int(os.getenv("POLY_UNHEDGED_GRACE_MINUTES", "5")),
             poly_log_dir=os.getenv("POLY_LOG_DIR", "logs"),
+            underround_enabled=_bool("POLY_UNDERROUND_ENABLED", default=True),
+            underround_min_spread_pct=float(os.getenv("POLY_UNDERROUND_MIN_SPREAD_PCT", "2.5")),
+            underround_max_hold_hours=int(os.getenv("POLY_UNDERROUND_MAX_HOLD_HOURS", "72")),
+            underround_max_trade_usdc=float(os.getenv("POLY_UNDERROUND_MAX_TRADE_USDC", "1.50")),
+            underround_max_positions=int(os.getenv("POLY_UNDERROUND_MAX_POSITIONS", "10")),
+            res_carry_enabled=_bool("POLY_RES_CARRY_ENABLED", default=True),
+            res_carry_min_price=float(os.getenv("POLY_RES_CARRY_MIN_PRICE", "0.95")),
+            res_carry_max_hold_hours=int(os.getenv("POLY_RES_CARRY_MAX_HOLD_HOURS", "48")),
+            res_carry_min_annualized_edge_pct=float(os.getenv("POLY_RES_CARRY_MIN_ANNUALIZED_EDGE_PCT", "50.0")),
+            res_carry_max_trade_usdc=float(os.getenv("POLY_RES_CARRY_MAX_TRADE_USDC", "1.00")),
+            res_carry_max_positions=int(os.getenv("POLY_RES_CARRY_MAX_POSITIONS", "10")),
         )

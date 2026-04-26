@@ -171,7 +171,8 @@ def test_execute_skips_cross_market_strategy(tmp_path: Path) -> None:
     assert "not_executable_in_phase2" in result.error or "cross_market" in result.error
 
 
-def test_execute_skips_correlated_strategy(tmp_path: Path) -> None:
+def test_execute_correlated_strategy_dry_run_succeeds(tmp_path: Path) -> None:
+    # correlated_markets is executable; dry_run=True returns success=True with error="dry_run"
     config = _make_config(dry_run=True)
     ledger = _ledger(tmp_path)
     guard = RiskGuard(config=config, ledger=ledger)
@@ -179,7 +180,8 @@ def test_execute_skips_correlated_strategy(tmp_path: Path) -> None:
 
     result = execute(opp, config=config, risk_guard=guard, ledger=ledger)
 
-    assert result.success is False
+    assert result.success is True
+    assert result.error == "dry_run"
 
 
 # ---------------------------------------------------------------------------

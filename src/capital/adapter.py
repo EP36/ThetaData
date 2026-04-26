@@ -5,9 +5,11 @@ from src.capital.allocator import OpportunityScore
 
 _EXEC_CONF = {"high": 0.90, "medium": 0.60, "low": 0.30}
 _CAP_EFF   = {
-    "orderbook_spread":  1.00,  # both legs resolve at $1; full capital works
+    "orderbook_spread":   1.00,  # both legs resolve at $1; full capital works
     "correlated_markets": 0.80,  # spread trade; partial exposure
-    "cross_market":      0.50,  # cross-venue; execution risk higher
+    "cross_market":       0.50,  # cross-venue; execution risk higher
+    "underround":         1.00,  # YES+NO both resolve at $1; full capital works
+    "resolution_carry":   0.95,  # single near-certain leg; near-full efficiency
 }
 
 
