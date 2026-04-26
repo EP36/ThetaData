@@ -409,16 +409,16 @@ def test_execute_dry_run_skips_pol_gas_check(tmp_path: Path) -> None:
 
 def test_place_order_raises_runtime_error_when_py_clob_missing() -> None:
     """_place_order should raise RuntimeError with a helpful message if the
-    optional py-clob-client dependency is not installed."""
+    optional py-clob-client-v2 dependency is not installed."""
     config = _make_config()
     import builtins
     real_import = builtins.__import__
 
     def mock_import(name: str, *args: Any, **kwargs: Any) -> Any:
-        if "py_clob_client" in name:
-            raise ImportError("no module named py_clob_client")
+        if "py_clob_client_v2" in name:
+            raise ImportError("no module named py_clob_client_v2")
         return real_import(name, *args, **kwargs)
 
     with patch("builtins.__import__", side_effect=mock_import):
-        with pytest.raises(RuntimeError, match="py-clob-client"):
+        with pytest.raises(RuntimeError, match="py-clob-client-v2"):
             _place_order(config, token_id="t", size_usdc=100.0, price=0.5, side="BUY")

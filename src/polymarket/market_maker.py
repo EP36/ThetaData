@@ -62,6 +62,17 @@ class QuotedMarket:
     end_date:       str   = ""   # ISO resolution date for event risk widening
 
 
+def _extract_token_id(token: Any) -> str:
+    """Return a plain token ID string regardless of how the API encoded it."""
+    if isinstance(token, str):
+        return token
+    if isinstance(token, list):
+        return str(token[0]) if token else ""
+    if isinstance(token, dict):
+        return str(token.get("token_id", ""))
+    return str(token)
+
+
 def _fetch_candidate_markets(timeout: float = 10.0) -> list[dict[str, Any]]:
     try:
         resp = httpx.get(
@@ -92,8 +103,8 @@ def _fetch_candidate_markets(timeout: float = 10.0) -> list[dict[str, Any]]:
         t0, t1 = tokens[0], tokens[1]
         candidates.append({
             "condition_id": m.get("conditionId") or m.get("id", ""),
-            "yes_token_id": str(t0) if isinstance(t0, (int, str)) else t0.get("token_id", ""),
-            "no_token_id":  str(t1) if isinstance(t1, (int, str)) else t1.get("token_id", ""),
+            "yes_token_id": _extract_token_id(t0),
+            "no_token_id":  _extract_token_id(t1),
             "question":     m.get("question", "")[:80],
             "mid":          mid,
             "vol":          vol,
@@ -158,7 +169,7 @@ class MarketMaker:
         from py_clob_client_v2.client import ClobClient
         from py_clob_client_v2.clob_types import ApiCreds
         return ClobClient(
-            CLOB_URL, key=self.config.private_key, chain_id=137,
+            CLOB_URL, key=self.config.private_key, chain=137,
             creds=ApiCreds(api_key=self.config.api_key,
                            api_secret=self.config.api_secret,
                            api_passphrase=self.config.passphrase),

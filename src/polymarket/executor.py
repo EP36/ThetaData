@@ -95,26 +95,26 @@ def _place_order(
     price: float,
     side: str,  # "BUY" | "SELL"
 ) -> dict[str, Any]:
-    """Build, sign, and POST a GTC limit order via py-clob-client.
+    """Build, sign, and POST a GTC limit order via py-clob-client-v2.
 
-    Requires `pip install py-clob-client` for live execution.
+    Requires `pip install py-clob-client-v2` for live execution.
     Retries up to config.max_retries times on transient network errors.
     Raises RuntimeError on auth/funding failures (non-retryable).
     """
     try:
-        from py_clob_client.client import ClobClient as _PyClobClient  # type: ignore[import]
-        from py_clob_client.clob_types import ApiCreds, OrderArgs, OrderType  # type: ignore[import]
-        from py_clob_client.order_builder.constants import BUY, SELL  # type: ignore[import]
+        from py_clob_client_v2.client import ClobClient as _PyClobClient  # type: ignore[import]
+        from py_clob_client_v2.clob_types import ApiCreds, OrderArgs, OrderType  # type: ignore[import]
+        from py_clob_client_v2.order_builder.constants import BUY, SELL  # type: ignore[import]
     except ImportError as exc:
         raise RuntimeError(
-            "py-clob-client is required for live order execution. "
-            "Install it with: pip install 'py-clob-client>=0.7'"
+            "py-clob-client-v2 is required for live order execution. "
+            "Install it with: pip install py-clob-client-v2"
         ) from exc
 
     py_client = _PyClobClient(
         host=config.clob_base_url,
         key=config.private_key,
-        chain_id=137,  # Polygon mainnet
+        chain=137,  # Polygon mainnet
         creds=ApiCreds(
             api_key=config.api_key,
             api_secret=config.api_secret,

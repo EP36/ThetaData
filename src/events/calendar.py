@@ -45,13 +45,17 @@ def _load_scheduled_events() -> list[ScheduledEvent]:
     """Load one-off events from POLY_EVENTS_JSON env var (JSON list of ISO strings)."""
     import json
     import os
-    raw = os.getenv("POLY_EVENTS_JSON", "").strip()
+    raw = (os.getenv("POLY_EVENTS_JSON") or "").strip()
     if not raw:
         return []
     try:
         items = json.loads(raw)
-        events = []
-        for item in items:
+    except Exception as exc:
+        LOGGER.warning("events_json_parse_failed error=%s raw=%.40r", exc, raw)
+        return []
+    events = []
+    for item in items:
+        try:
             if isinstance(item, str):
                 dt = datetime.fromisoformat(item.replace("Z", "+00:00"))
                 if dt.tzinfo is None:
@@ -66,10 +70,9 @@ def _load_scheduled_events() -> list[ScheduledEvent]:
                     event_time=dt,
                     category=item.get("category", "other"),
                 ))
-        return events
-    except Exception as exc:
-        LOGGER.warning("events_load_failed error=%s", exc)
-        return []
+        except Exception as exc:
+            LOGGER.warning("events_item_parse_failed item=%r error=%s", item, exc)
+    return events
 
 
 def _recurring_intensity(now: datetime) -> float:

@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 import json
 import logging
-import urllib.request
 from dataclasses import dataclass, field
 
 from src.polymarket.config import PolymarketConfig
@@ -45,13 +44,12 @@ def _fetch_polygon_usdc_balance(wallet_address: str) -> float | None:
         "id": 1,
     }).encode()
     try:
-        req = urllib.request.Request(
-            _POLYGON_RPC_URL,
-            data=payload,
-            headers={"Content-Type": "application/json"},
-        )
         with httpx.Client(timeout=5) as client:
-            resp = client.get(url)
+            resp = client.post(
+                _POLYGON_RPC_URL,
+                content=payload,
+                headers={"Content-Type": "application/json"},
+            )
         body = resp.json()
         raw = int(body.get("result", "0x0"), 16)
         return raw / 1_000_000  # USDC has 6 decimals
