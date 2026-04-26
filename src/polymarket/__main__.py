@@ -133,11 +133,12 @@ def main() -> None:
     last_ai_time = 0.0
 
     while True:
+        _scan_opps: list = []
         if is_poly_paused():
             LOGGER.info("polymarket_scan_skipped reason=dashboard_pause_flag")
         else:
             try:
-                scan_and_execute(config)
+                _scan_opps, _ = scan_and_execute(config)
             except Exception as exc:
                 LOGGER.error("polymarket_scan_error error=%s", exc)
 
@@ -164,6 +165,22 @@ def main() -> None:
             except Exception as exc:
                 LOGGER.error("polymarket_ai_analysis_error error=%s", exc)
             last_ai_time = time.monotonic()
+
+        # Cross-venue capital unification (REBALANCE_DRY_RUN=true by default)
+        try:
+            from src.capital.adapter import opportunity_to_score, funding_rate_to_score
+            from src.capital.rebalance_orchestrator import run_rebalance_cycle
+            _scores = [opportunity_to_score(o) for o in _scan_opps]
+            try:
+                from funding_arb.monitor import get_funding_rates
+                for r in get_funding_rates():
+                    if r.get("rate", 0) > 0:
+                        _scores.append(funding_rate_to_score(r["asset"], r["rate"]))
+            except Exception:
+                pass  # funding rates are best-effort
+            run_rebalance_cycle(_scores)
+        except Exception as exc:
+            LOGGER.warning("rebalance_cycle_error error=%s", exc)
 
         try:
             from src.events.calendar import get_scan_multiplier
