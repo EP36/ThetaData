@@ -1,857 +1,301 @@
-# Trading System MVP (Research + Paper Trading)
+# Trauto — Multi-Strategy Crypto Arb Bot
 
-A modular Python 3.12 MVP for strategy research, backtesting, and paper-trading stubs.
+> **Status (April 2026):** Worker running live on Hetzner Helsinki (`ubuntu-4gb-hel1-1`). All 3 strategies are scanning; no errors in logs. Opportunities are being ranked but thresholds have not been crossed yet.
 
-## Features
+Trauto is a modular Python 3.12 arbitrage bot that runs three independent carry/arb strategies on a single VPS and uses a composite scoring model to rank opportunities. **Capital does not move automatically between venues today** — rebalancing across wallets is on the roadmap.
 
-- Historical market data loading (CSV) + synthetic data generator
-- Provider-based historical data ingestion with parquet cache and retries
-- Strategy interface with `generate_signals(data)`
-- Long-only backtest engine with:
-  - fixed transaction fee
-  - percentage slippage
-  - position sizing by percent of equity
-  - stop loss and take profit
-- Risk manager with:
-  - max position size
-  - max gross exposure
-  - max open positions
-  - max daily loss
-  - trading-hours guard
-  - drawdown kill switch
-- Paper trading executor stub (live trading is disabled by default)
-- Trade logging to CSV
-- Performance report:
-  - total return
-  - Sharpe ratio
-  - max drawdown
-  - win rate
-- Deterministic analytics + allocation layer:
-  - strategy-level performance analytics (including rolling windows)
-  - portfolio-level contribution/exposure analytics
-  - rule-based market regime classification
-  - deterministic strategy eligibility + scoring + selection
-- Single-user admin authentication (future-ready role/user model):
-  - secure password hashing + session-token revocation
-  - server-enforced route protection for sensitive API actions
-  - login attempt throttling + audit events
-- Analytics report artifacts:
-  - equity curve plot
-  - drawdown plot
-  - monthly returns table
+---
 
-## Project Structure
+## Architecture Overview
 
 ```
-src/
-  backtest/
-  config/
-  data/
-  execution/
-  risk/
-  strategies/
-  run_sample.py
-tests/
-requirements.txt
-.env.example
-README.md
+/opt/trauto   (Hetzner VPS, Helsinki)
+├── trauto-worker.service  ← systemd background loop
+├── trauto-web.service     ← FastAPI dashboard + API
+│
+├── polymarket/            ← Polymarket CLOB v2 arb
+├── funding_arb/           ← Hyperliquid funding + Coinbase basis arb
+│   ├── monitor.py         ← scan loop, strategy picker
+│   ├── executor.py        ← HL order placement
+│   └── coinbase_client.py ← CB spot price + order feed
+├── src/
+│   └── capital/
+│       └── allocator.py   ← composite opportunity scorer (read-only)
+└── /etc/trauto/env        ← all secrets & config (not in repo)
 ```
 
-## Setup (Python 3.12)
+### Worker boot order
+
+1. `trauto-worker` starts, reads `/etc/trauto/env`
+2. Three strategy threads start in parallel:
+   - Polymarket arbitrage monitor
+   - Hyperliquid funding-rate monitor (`funding_arb/monitor.py`)
+   - Coinbase spot → HL perp basis monitor (via `coinbase_client.py`)
+3. Each cycle calls `CapitalAllocator.rank()` to score live opportunities
+4. Orders are placed only when an opportunity clears the configured threshold **and** the relevant `DRY_RUN` flag is `false`
+
+---
+
+## Live Strategies
+
+### 1. Polymarket Arbitrage (`polymarket/`)
+
+| Item | Detail |
+|------|--------|
+| Venue | Polymarket CLOB v2 |
+| Network | **Polygon** (MATIC gas, USDC.e collateral) |
+| Wallet | Dedicated Polygon EOA (`POLY_WALLET`) |
+| Edge | Order-book spread + correlated-market mispricing |
+| Status | Scanning; CLOB v2 migration pending **April 28** |
+| Dry-run flag | `POLY_DRY_RUN=true` in `/etc/trauto/env` |
+
+**Funding this venue:**
+1. Bridge USDC to Polygon (e.g. via [Stargate](https://stargate.finance) or Coinbase → Polygon)
+2. Send to your `POLY_WALLET` address on Polygon
+3. Approve the CLOB v2 contract once: `python3 approve_polymarket.py`
+4. Polymarket locks USDC as collateral per open position — it is **not** available to other venues while deployed
+
+---
+
+### 2. Hyperliquid Funding-Rate Arb (`funding_arb/monitor.py`)
+
+| Item | Detail |
+|------|--------|
+| Venue | Hyperliquid L1 (spot + perp) |
+| Network | **Arbitrum** bridge → HL deposit |
+| Wallet | HL vault wallet (`HL_WALLET`) |
+| Edge | Long HL spot + short HL perp; collect hourly funding when rate > 0.15 %/hr |
+| Break-even | 0.11 %/hr (round-trip maker fees: spot 0.04 % × 2 + perp 0.015 % × 2) |
+| Assets scanned | BTC, ETH, SOL, HYPE, WIF, DOGE, AVAX, ONDO |
+| Status | Scanning every 60 s; waiting for rate ≥ `HL_MIN_FUNDING_RATE` |
+| Dry-run flag | `HL_DRY_RUN=true` in `/etc/trauto/env` |
+
+**Funding this venue:**
+1. Bridge USDC/USDT via [Hyperliquid bridge](https://app.hyperliquid.xyz/portfolio) from Arbitrum
+2. Deposit lands in your HL account associated with `HL_WALLET`
+3. Capital must cover **both** legs: spot buy + perp margin simultaneously
+4. Rule of thumb: fund 2× the intended position size for margin buffer
+
+---
+
+### 3. Coinbase Spot + HL Perp Basis Arb (`funding_arb/coinbase_client.py`)
+
+| Item | Detail |
+|------|--------|
+| Venues | Coinbase Advanced Trade (spot) + Hyperliquid (perp) |
+| Networks | Coinbase custodial (USD/USDC) + HL vault |
+| Wallets | Coinbase API key (`COINBASE_API_KEY`) + `HL_WALLET` |
+| Edge | Perp mark > CB spot (contango) → sell perp short on HL, buy spot on CB; delta-neutral |
+| Signal | `basis_pct × 52 weeks` as annualized proxy; threshold set by `MIN_BASIS_PCT` (default 1 %) |
+| Status | Integrated; uses CB real spot price as primary, HL spot proxy as fallback |
+| Dry-run flag | `BASIS_DRY_RUN=true` in `/etc/trauto/env` |
+
+**Funding this venue:**
+1. Fund your Coinbase Advanced Trade account with USD or USDC (normal ACH/wire or crypto deposit)
+2. Set `COINBASE_API_KEY` and `COINBASE_API_SECRET` (EC private key PEM) in `/etc/trauto/env`
+3. The HL perp leg uses the same `HL_WALLET` margin as strategy 2 — **shared capital pool on HL**
+4. Size the CB deposit to match your HL available margin so both legs are balanced
+
+---
+
+## Capital Flow Map
+
+```
+┌─────────────────────────────────────────────────────┐
+│                  YOUR CAPITAL TODAY                  │
+└──────┬────────────────┬────────────────┬────────────┘
+       │                │                │
+       ▼                ▼                ▼
+ ┌──────────┐    ┌───────────────┐  ┌──────────────┐
+ │ Polygon  │    │  Arbitrum /   │  │  Coinbase    │
+ │  wallet  │    │  HL vault     │  │  custodial   │
+ │ (USDC.e) │    │  (USDC/USDT)  │  │  (USD/USDC)  │
+ └────┬─────┘    └───────┬───────┘  └──────┬───────┘
+      │                  │                 │
+      ▼                  ▼                 ▼
+ Polymarket         HL spot + perp     CB spot price
+ CLOB v2 arb        funding arb         (feeds basis
+                    (strat 2)           calc; CB spot
+                    + basis arb         leg of strat 3)
+                    (strat 3 perp leg)
+```
+
+### Key constraint: capital is venue-siloed
+
+Capital deposited to Polygon **cannot** fill a Hyperliquid opportunity without a manual bridge + withdraw. The `CapitalAllocator` ranks opportunities by composite score but **does not move capital between venues**. If HL funding arb is returning 200 % annualized and Polymarket is returning 50 %, Trauto will *prefer* the HL opportunity when sizing new trades — but Polymarket collateral locked in existing positions stays there.
+
+---
+
+## Capital Allocator (`src/capital/allocator.py`)
+
+The allocator ranks `OpportunityScore` objects from all strategies and logs the top-5 each cycle.
+
+```
+Composite score = 0.40 × annualized_edge
+               + 0.30 × exec_confidence
+               + 0.20 × capital_efficiency
+               + 0.10 × (1 − lockup_penalty)
+```
+
+**What it does today:**
+- Scores and ranks opportunities cross-venue
+- Blocks trades that score below a minimum threshold
+- Logs rankings with `capital_rank` structured log events
+
+**What it does NOT do today:**
+- Move capital between venues automatically
+- Withdraw from Polymarket and deposit to HL
+- Rebalance positions across chains
+
+See [Roadmap](#roadmap) for the planned cross-venue rebalancing module.
+
+---
+
+## What to Deposit Where
+
+| If you want to run… | Deposit here | Asset | Minimum suggested |
+|---------------------|--------------|-------|-------------------|
+| Polymarket arb | `POLY_WALLET` on Polygon | USDC.e | $100+ per market |
+| HL funding arb | HL vault (bridge from Arbitrum) | USDC | 2× target position size |
+| Basis arb (CB spot) | Coinbase Advanced account | USD or USDC | Match HL perp margin |
+| Basis arb (HL perp) | Same HL vault as funding arb | USDC | Shared with strat 2 |
+
+The HL vault is shared between strategies 2 and 3. The monitor compares `funding_annual` vs `basis_annual` each cycle and takes the better trade — it will not run both on the same asset simultaneously.
+
+---
+
+## Configuration (`/etc/trauto/env`)
 
 ```bash
-python3.12 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env
-```
-
-Bootstrap the first admin user (required before using protected dashboard/API routes):
-
-```bash
-python -m src.auth.bootstrap_admin --email admin@example.com --password "ChangeMeNow123!"
-```
-
-## Run End-to-End Sample
-
-```bash
-python -m src.run_sample
-```
-
-This runs:
-1. synthetic data generation
-2. moving-average crossover strategy
-3. risk-managed backtest
-4. trade log CSV export
-5. sample paper-trade stub execution
-
-Paper order submission is disabled by default. Set `PAPER_TRADING=true` in `.env` to allow simulated paper fills.
-
-Output files:
-- `logs/trades.csv` (backtest trades)
-- `logs/paper_trades.csv` (paper executor fills)
-
-## Strategy Usage
-
-Available registered strategies:
-- `moving_average_crossover`
-- `rsi_mean_reversion`
-- `breakout_momentum`
-- `vwap_mean_reversion`
-
-Example creation via registry:
-
-```python
-from src.strategies import create_strategy
-
-ma = create_strategy("moving_average_crossover", short_window=20, long_window=50)
-rsi = create_strategy("rsi_mean_reversion", lookback=14, oversold=30, overbought=70)
-breakout = create_strategy(
-    "breakout_momentum",
-    lookback_period=20,
-    breakout_threshold=1.01,
-    volume_multiplier=1.5,
-    stop_loss_pct=0.02,
-    take_profit_pct=0.05,
-    trailing_stop_pct=0.02,
-)
-vwap = create_strategy(
-    "vwap_mean_reversion",
-    vwap_window=20,
-    vwap_deviation=0.02,
-    rsi_oversold=30,
-    rsi_overbought=70,
-    stop_loss_pct=0.015,
-    target="vwap",
-)
-```
-
-Default profiles implemented:
-- `breakout_momentum`: lookback `20`, breakout threshold `1.01`, volume multiplier `1.5`, stop loss `2%`, take profit `5%`, trailing stop `2%`.
-- `vwap_mean_reversion`: VWAP deviation `2%`, RSI thresholds `30/70`, stop loss `1.5%`, target `VWAP`.
-
-## Run Tests
-
-```bash
-python -m pytest -q
-```
-
-## CLI
-
-Use the CLI entrypoint:
-
-```bash
-python -m src.cli --help
-```
-
-Core commands:
-
-```bash
-python -m src.cli download-data --symbol SPY --timeframe 1d --force-refresh
-python -m src.cli backtest --symbol SPY --timeframe 1d --strategy moving_average_crossover
-python -m src.cli report --symbol SPY --timeframe 1d --strategy moving_average_crossover
-```
-
-## Backend API
-
-Run the API locally:
-
-```bash
-python -m src.api
-```
-
-Core endpoints:
-- `POST /api/auth/login`
-- `GET /api/auth/session`
-- `POST /api/auth/logout`
-- `POST /api/auth/password`
-- `GET /api/dashboard/summary`
-- `POST /api/backtests/run`
-- `GET /api/strategies`
-- `PATCH /api/strategies/{name}`
-- `GET /api/risk/status`
-- `GET /api/trades`
-- `GET /api/analytics/strategies`
-- `GET /api/analytics/portfolio`
-- `GET /api/analytics/context`
-- `GET /api/selection/status`
-- `GET /api/worker/execution-status`
-- `POST /api/system/kill-switch`
-- `GET /healthz`
-- `GET /api/system/status`
-
-Route protection model:
-- `GET /healthz` is public for uptime checks.
-- `POST /api/auth/login` is public.
-- All other `/api/*` routes require authentication.
-- Sensitive mutations (`PATCH /api/strategies/*`, `POST /api/system/kill-switch`, `POST /api/backtests/run`) require `admin` role.
-
-### Authentication Setup
-
-Required auth env vars:
-- `AUTH_SESSION_SECRET` (32+ char random secret in production/staging)
-- `AUTH_PASSWORD_PEPPER` (32+ char random secret in production/staging)
-
-Optional auth tuning:
-- `AUTH_SESSION_TTL_MINUTES` (default `720`)
-- `AUTH_LOGIN_MAX_ATTEMPTS` (default `5`)
-- `AUTH_LOGIN_WINDOW_SECONDS` (default `900`)
-- `AUTH_LOGIN_BLOCK_SECONDS` (default `900`)
-
-Bootstrap options:
-1. CLI (recommended):
-   - `python -m src.auth.bootstrap_admin --email <admin_email> --password \"<strong_password>\"`
-2. Startup-safe env bootstrap:
-   - `AUTH_BOOTSTRAP_ADMIN_ON_STARTUP=true`
-   - `AUTH_BOOTSTRAP_ADMIN_EMAIL=<admin_email>`
-   - `AUTH_BOOTSTRAP_ADMIN_PASSWORD=<strong_password>`
-   - set back to `false` after first bootstrap/rotation.
-
-Security notes:
-- Passwords are PBKDF2-HMAC-SHA256 hashed with a secret pepper.
-- Session tokens are opaque bearer tokens; only token hashes are stored in DB.
-- Login failures and sensitive admin actions are persisted in `log_events` with actor identity.
-- Password changes require the current password and are audit logged as `auth_password_changed`.
-
-Architecture note (current single-user + future multi-user extension points):
-- [`docs/auth-architecture.md`](docs/auth-architecture.md)
-
-### Analytics Metrics
-
-Analytics source categories are explicit via `source` query param:
-- `source=backtest`: backtest-trade analytics only
-- `source=paper`: persisted paper-execution fill analytics only
-- `source=execution`: execution-fill analytics (currently the same as paper in this paper-only system)
-
-Examples:
-- `GET /api/analytics/strategies?source=backtest`
-- `GET /api/analytics/portfolio?source=paper`
-- `GET /api/analytics/context?source=execution`
-
-Strategy analytics (`/api/analytics/strategies`) include:
-- total return
-- win rate
-- average win / average loss
-- profit factor
-- expectancy
-- Sharpe ratio
-- max drawdown
-- trade count
-- average hold time
-- rolling 20-trade metrics (win rate, expectancy, Sharpe)
-- recent windows (last 5 / 20 / 60 trades)
-
-Backtest analytics return semantics:
-- Backtest analytics are computed from persisted backtest trades and may cover multiple runs.
-- `total_return` for backtest analytics is run-normalized (`sum_pnl / (initial_capital * run_count)`), not compounded across every trade across all runs.
-- Use the Backtests page run result for single-run metrics.
-
-Portfolio analytics (`/api/analytics/portfolio`) include:
-- equity curve
-- daily pnl
-- realized + unrealized pnl
-- rolling drawdown
-- contribution by strategy
-- exposure by symbol
-- open risk summary
-
-Context analytics (`/api/analytics/context`) include:
-- performance by symbol
-- performance by timeframe
-- performance by weekday
-- performance by hour
-- performance by regime
-
-If data is insufficient, analytics endpoints return empty arrays/zero-safe values (no fake demo metrics).
-Backtest and execution/paper analytics are persisted separately; execution/paper tables are not reused for backtest rows.
-
-### Deterministic Strategy Selection
-
-The worker uses a deterministic `StrategySelector` (rule-based, no ML) and does **not** trade all strategies equally.
-
-Selection flow:
-1. Build current market regime (`trending`, `mean_reverting`, `neutral`) from:
-   - moving-average slope
-   - price vs moving average
-   - ATR%
-   - directional persistence
-2. Apply eligibility gates per strategy:
-   - strategy enabled
-   - kill switch off
-   - paper/worker trading gates enabled
-   - sufficient recent trades/performance
-   - drawdown under threshold
-   - risk budget available
-   - required data available
-   - open-position constraints not breached
-   - regime compatibility
-3. Score eligible strategies with:
-   - recent expectancy (35%)
-   - recent Sharpe (25%)
-   - win rate (15%)
-   - regime fit (15%)
-   - drawdown penalty (10%)
-4. Select the highest-scoring strategy (default top-1).
-5. Apply size reduction when score is mediocre; if no strategy clears threshold, no trade is placed.
-
-Selection diagnostics are exposed via `/api/selection/status`, including:
-- current regime and regime signals
-- candidate scores
-- selected strategy
-- rejection reasons for non-selected strategies
-- sizing/allocation decision
-
-### Worker Execution Model (Universe + Conflict Rules)
-
-Universe source of truth:
-- `WORKER_SYMBOLS` (comma-separated) provides the explicit candidate universe.
-- If `WORKER_SYMBOLS` is blank, fallback is `WORKER_SYMBOL` (single-symbol compatibility mode).
-- `WORKER_UNIVERSE_MODE` controls shortlist behavior:
-  - `static`
-  - `top_gainers`
-  - `top_losers`
-  - `high_relative_volume`
-  - `index_constituents` (uses explicit `WORKER_SYMBOLS` as deterministic constituent input)
-- Scanner applies deterministic filters before strategy evaluation:
-  - `MIN_PRICE`
-  - `MIN_AVG_VOLUME`
-  - `MAX_SPREAD_PCT` (only when quote columns exist)
-  - stale intraday-data exclusion
-- `MIN_RELATIVE_VOLUME` is logged and used by strategy-specific filters by default. It is no longer a global universe gate unless `ENFORCE_RELATIVE_VOLUME_FILTER=true`.
-- `EXECUTION_PROFILE=active_day_trader` switches defaults toward intraday paper-trading readiness: `1m` timeframe, larger shortlist, lower per-trade risk, more daily trades, shorter cooldowns, and end-of-day flattening. It does not enable live trading.
-- Extended-hours trading is gated by `EXTENDED_HOURS_ENABLED=true` plus broker support (`BROKER_EXTENDED_HOURS_SUPPORTED=true`), and extended-hours orders use limit pricing by default.
-- `WORKER_MAX_CANDIDATES` limits shortlist size for each worker cycle.
-- Default behavior is non-executing until `WORKER_ENABLE_TRADING=true`.
-- With `WORKER_DRY_RUN=true` (default), the worker runs full scan/filter/select logic but does not submit orders.
-- In dry-run mode, strategy eligibility is evaluated as if paper execution were available; order submission is skipped only at execution time.
-- Worker execution uses a single configured timeframe (`WORKER_TIMEFRAME`) per worker process; mixed timeframe execution is not enabled by default.
-- To place paper orders, set all of:
-  - `WORKER_ENABLE_TRADING=true`
-  - `PAPER_TRADING=true`
-  - `WORKER_DRY_RUN=false`
-- Strategy minimum-history gating:
-  - `SELECTION_MIN_RECENT_TRADES` controls the required trade count for `insufficient_recent_trades`.
-  - `WORKER_STARTUP_WARMUP_CYCLES` bypasses that gate for the first N registered worker cycles so fresh deployments can start evaluating/trading.
-  - Set `WORKER_STARTUP_WARMUP_CYCLES=0` to disable warm-up bypass.
-
-Cycle behavior:
-1. Worker scans the configured symbol universe.
-2. Scanner filters/ranks symbols and produces a deterministic shortlist.
-3. Only shortlisted symbols are evaluated by enabled strategies.
-4. For each shortlisted symbol, one strategy is selected (or none) by the selector.
-5. Orders are generated only from the selected strategy outcome.
-
-Duplicate-cycle model:
-- Universe-cycle key (`heartbeat_cycle_key`) is bucketed by `WORKER_POLL_SECONDS` (UTC) so each poll window has one deterministic cycle id.
-- Symbol-cycle key is derived from `symbol + heartbeat_cycle_key`.
-- First registration is logged with:
-  - `worker_universe_cycle_key_registered`
-  - `worker_symbol_cycle_key_registered`
-- Duplicate detection logs:
-  - `worker_universe_cycle_duplicate_detected` when the same poll-bucket cycle is re-entered
-  - `worker_symbol_cycle_duplicate_detected` with `duplicate_validity`:
-    - `valid`: same-cycle duplicate protection
-    - `invalid`: stale key collision (should not happen under normal operation)
-- Order idempotency remains separate (`dedupe_key`) to prevent duplicate persisted orders.
-- Operational log distinction:
-  - `strategy_not_eligible` (`reason_classification=strategy_logic|global_gate|mixed`) for explicit ineligibility reasoning.
-  - `worker_dry_run_order_skipped` (`skip_classification=eligible_but_skipped_dry_run`) when a valid order opportunity is intentionally not submitted.
-  - `worker_no_shortlist` when scan/filter produced no shortlisted symbols.
-
-Multiple enabled strategies:
-- Enabled strategies are **eligible candidates**, not auto-executed orders.
-- The selector chooses one strategy per symbol decision context.
-- Rejected/deprioritized strategies include explicit reasons in logs and API payloads.
-
-Same-symbol conflict prevention:
-- By default, only one strategy can actively manage an open position per symbol.
-- The worker persists a per-symbol active strategy lock and blocks other strategies with reason:
-  - `symbol_locked_by_active_strategy:<strategy>`
-- Lock is released when the symbol position is fully closed.
-- Override is explicit: `WORKER_ALLOW_MULTI_STRATEGY_PER_SYMBOL=true`.
-
-Operational visibility:
-- `GET /api/worker/execution-status` returns:
-  - dry-run mode status
-  - universe mode
-  - configured universe symbols
-  - scanned symbols
-  - shortlisted symbols
-  - selected symbol + strategy summary
-  - last selected symbol/strategy
-  - last no-trade reason
-  - symbol-level filter reasons
-  - per-symbol active strategy lock
-  - latest per-symbol action/order status
-  - rejected/skipped strategy reasons from the latest decision
-
-Universe mode examples:
-```bash
-# 1) Static watchlist
-WORKER_UNIVERSE_MODE=static
-WORKER_SYMBOLS=SPY,QQQ,AAPL,MSFT
-
-# 2) Top gainers/losers from configured universe
-WORKER_UNIVERSE_MODE=top_gainers
-# or: WORKER_UNIVERSE_MODE=top_losers
-WORKER_SYMBOLS=SPY,QQQ,NVDA,TSLA,AMD,AAPL,META,AMZN,MSFT,GOOGL
-WORKER_MAX_CANDIDATES=5
-
-# 3) High relative volume ranking mode
-WORKER_UNIVERSE_MODE=high_relative_volume
-WORKER_SYMBOLS=SPY,QQQ,NVDA,TSLA,AMD,AAPL,META,AMZN,MSFT,GOOGL
-WORKER_MAX_CANDIDATES=5
-```
-
-### Why a Strategy Can Be Blocked While Enabled
-
-Even when a strategy is enabled, it can still be blocked for safety/quality reasons such as:
-- kill switch enabled
-- worker trading gate disabled
-- no active signal
-- insufficient recent trades
-- recent expectancy below threshold
-- recent drawdown above threshold
-- insufficient risk budget
-- max open positions breached
-- required market data missing
-- regime incompatibility
-- score below threshold
-
-### Backtest Data Source
-
-`POST /api/backtests/run` executes the real backend backtest engine and uses the
-request payload inputs directly:
-- `symbol`
-- `timeframe`
-- `start`
-- `end`
-- `strategy`
-
-Historical data is loaded through `HistoricalDataLoader` and a provider interface.
-
-Provider selection:
-- `DATA_PROVIDER=synthetic` (default, deterministic synthetic OHLCV)
-- `DATA_PROVIDER=alpaca` (real historical bars from Alpaca data API)
-
-For Alpaca mode, set:
-- `ALPACA_API_KEY` and `ALPACA_API_SECRET`
-- optional: `ALPACA_DATA_BASE_URL` and `ALPACA_DATA_FEED` (default `iex`)
-
-Web service environment required for real backtests (`POST /api/backtests/run`):
-- `DATA_PROVIDER=alpaca`
-- `ALPACA_API_KEY=<your_alpaca_key>`
-- `ALPACA_API_SECRET=<your_alpaca_secret>`
-- optional: `ALPACA_DATA_BASE_URL=https://data.alpaca.markets`
-- optional: `ALPACA_DATA_FEED=iex`
-
-If Alpaca credentials are missing while `DATA_PROVIDER=alpaca`, the endpoint returns a clear `422` explaining which web-service env vars are required.
-
-Current timeframe support in Alpaca mode:
-- `1m`, `5m`, `15m`, `30m`, `1h`, `2h`, `4h`, `1d`
-
-Limitations:
-- Alpaca data availability depends on account/feed and market hours.
-- If data is unavailable for a symbol/date range, the endpoint returns an error instead of synthetic substitution.
-
-Backtest risk + sizing defaults:
-- `risk_per_trade = 1%` of account equity
-- `position_size_pct = risk_per_trade_pct / stop_loss_pct`
-- hard cap `max_position_size = 25%`
-- hard cap `max_open_positions = 3`
-- orders violating risk checks are rejected and logged
-
-### Environment Contract: Market Data vs Execution
-
-Canonical market-data env vars:
-- `ALPACA_API_KEY`
-- `ALPACA_API_SECRET`
-- `ALPACA_DATA_BASE_URL`
-- `ALPACA_DATA_FEED`
-
-Canonical execution env vars:
-- `ALPACA_API_KEY`
-- `ALPACA_API_SECRET`
-- `ALPACA_BASE_URL`
-
-Current behavior:
-- Execution is still paper-only (`PaperTradingExecutor` + `SimulatedPaperBroker`).
-- `ALPACA_BASE_URL` is now part of the canonical execution config contract and is loaded by runtime settings for worker/web services.
-- No live trading path is enabled by default.
-
-Backward compatibility:
-- `ALPACA_SECRET_KEY` is accepted as a temporary fallback for `ALPACA_API_SECRET`.
-- Canonical name remains `ALPACA_API_SECRET`; prefer it in all new deployments.
-
-### Web Service vs Worker Service Alpaca Env Table
-
-| Env Var | Web Service | Worker Service | Notes |
-|---|---|---|---|
-| `ALPACA_API_KEY` | Required if `DATA_PROVIDER=alpaca` | Required if `DATA_PROVIDER=alpaca` | Shared Alpaca credential |
-| `ALPACA_API_SECRET` | Required if `DATA_PROVIDER=alpaca` | Required if `DATA_PROVIDER=alpaca` | Shared Alpaca credential |
-| `ALPACA_DATA_BASE_URL` | Optional | Optional | Default: `https://data.alpaca.markets` |
-| `ALPACA_DATA_FEED` | Optional | Optional | Default: `iex` |
-| `ALPACA_BASE_URL` | Optional (recommended for parity) | Recommended | Canonical execution base URL, default `https://paper-api.alpaca.markets` |
-| `ALPACA_SECRET_KEY` | Optional (legacy only) | Optional (legacy only) | Deprecated fallback alias for `ALPACA_API_SECRET` |
-
-Full contract reference: [`docs/alpaca-env-contract.md`](docs/alpaca-env-contract.md)
-
-## Render Deployment (Web + Worker + Postgres)
-
-This repository includes a Render blueprint at `render.yaml` for:
-- Render Web Service (`trauto-web`) running FastAPI
-- Render Background Worker (`trauto-worker`) running the unattended paper loop
-- Render Managed Postgres (`trauto-postgres`) for persistence
-
-Deployment commands:
-
-```bash
-# build (both services)
-pip install -r requirements.txt
-
-# web
-bash scripts/start_web.sh
-
-# worker
-bash scripts/start_worker.sh
-```
-
-Migration flow:
-- `python -m src.persistence.migrate` creates/updates DB tables (create-all MVP flow).
-- Startup scripts run migrations automatically when `RUN_MIGRATIONS_ON_STARTUP=true`.
-
-Persistence coverage:
-- orders
-- fills
-- positions
-- log events
-- run history
-- strategy config
-- worker heartbeat
-- global kill-switch state
-
-### Required Environment Variables
-
-Minimum for Render:
-- `APP_ENV=production`
-- `DATABASE_URL` (Render-managed Postgres connection string)
-- `WORKER_NAME` (for heartbeat and worker identity)
-- `PAPER_TRADING` (`false` by default)
-- `WORKER_ENABLE_TRADING` (`false` by default)
-- `WORKER_DRY_RUN` (`true` by default)
-- `LIVE_TRADING=false` (must remain false)
-- `CORS_ALLOWED_ORIGINS=https://trauto.onrender.com` (comma-separated list supported)
-- `AUTH_SESSION_SECRET` (32+ random chars)
-- `AUTH_PASSWORD_PEPPER` (32+ random chars)
-
-Startup validation behavior:
-- in `APP_ENV=production` or with `STRICT_ENV_VALIDATION=true`, missing required env vars fail fast with a clear startup error.
-- full variable matrix: [`docs/required-env-vars.md`](docs/required-env-vars.md)
-
-Recommended:
-- `RUN_MIGRATIONS_ON_STARTUP=true`
-- `STRICT_ENV_VALIDATION=true`
-- `WORKER_POLL_SECONDS=60`
-- `WORKER_SYMBOL=SPY`
-- `WORKER_UNIVERSE_MODE=static`
-- `WORKER_MAX_CANDIDATES=10`
-- `WORKER_TIMEFRAME=1d`
-- `WORKER_STRATEGY=moving_average_crossover`
-- `WORKER_STRATEGY_PARAMS_JSON={}`
-- `WORKER_DRY_RUN=true`
-- `WORKER_SYMBOLS=SPY,QQQ`
-- `WORKER_ALLOW_MULTI_STRATEGY_PER_SYMBOL=false`
-- `MIN_PRICE=1.0`
-- `MIN_AVG_VOLUME=100000`
-- `MIN_RELATIVE_VOLUME=0.0`
-- `ENFORCE_RELATIVE_VOLUME_FILTER=false`
-- `MAX_SPREAD_PCT=1.0`
-
-### Worker and Web Separation
-
-- Web service responsibilities:
-  - API endpoints
-  - health/status checks
-  - strategy config updates
-  - kill switch controls
-- Worker responsibilities:
-  - continuous signal evaluation loop
-  - risk-validated paper orders only
-  - durable persistence of execution artifacts
-  - heartbeat and run-history updates
-- Frontend remains presentation-only and does not contain trading logic.
-
-### Paper-Trading Safety Defaults
-
-- `PAPER_TRADING=false` by default.
-- `WORKER_DRY_RUN=true` by default.
-- Worker order submission is blocked unless:
-  - `WORKER_ENABLE_TRADING=true`
-  - `PAPER_TRADING=true`
-  - `WORKER_DRY_RUN=false`
-- Worker always respects global kill switch.
-- Any `LIVE_TRADING=true` setting raises a startup validation error.
-
-### Pre-Paper-Trading Validation Checklist
-
-1. Run worker in dry-run mode and confirm cycle logs look correct.
-2. Verify `/api/worker/execution-status` reports:
-   - `dry_run_enabled=true`
-   - expected scanned/shortlisted symbols
-   - expected selected strategy behavior
-   - explicit no-trade reasons when no order is placed
-3. Verify source-separated analytics:
-   - `source=backtest` contains only backtest analytics
-   - `source=paper` is empty until real paper fills exist
-4. Validate risk controls and manual kill switch behavior.
-5. Enable paper order submission intentionally:
-   - `WORKER_ENABLE_TRADING=true`
-   - `PAPER_TRADING=true`
-   - `WORKER_DRY_RUN=false`
-6. Recheck `/healthz`, `/api/system/status`, and `/api/risk/status` after toggling.
-
-### 30-Day Unattended Runbook
-
-1. Provision Render services using `render.yaml`.
-2. Confirm web health: `GET /healthz` returns `status=ok` and `database=ok`.
-3. Confirm system status: `GET /api/system/status` shows worker heartbeat.
-4. Start with dry-run validation:
-   - set `WORKER_ENABLE_TRADING=true`
-   - keep `PAPER_TRADING=false`
-   - keep `WORKER_DRY_RUN=true`
-5. Enable paper mode intentionally after dry-run validation:
-   - set `PAPER_TRADING=true`
-   - set `WORKER_DRY_RUN=false`
-6. Monitor daily:
-   - run history in `/api/system/status`
-   - risk endpoint `GET /api/risk/status`
-   - log events persisted in `log_events`
-7. If risk anomaly occurs:
-   - trigger `POST /api/system/kill-switch` with `{"enabled": true}`
-   - verify worker heartbeat status changes to paused
-8. For deployments or config changes:
-   - keep worker enabled only after web health is green and migrations complete
-9. At day 30:
-   - export run history, orders, fills, and log events for review
-   - disable worker trading if extended monitoring is not required
-
-Deployment checklist:
-- See [`docs/deployment-checklist.md`](docs/deployment-checklist.md).
-
-## Hetzner Deployment (Polymarket-Unblocked, Helsinki)
-
-Render's US-based IPs are geo-blocked by Polymarket. Deploy to Hetzner Cloud
-in Helsinki (Finland) to get an unblocked European IP.
-
-### 1. Create the server
-
-1. Sign up at [hetzner.com](https://www.hetzner.com/cloud)
-2. **New Server** → Location: **Helsinki (hel1)** → Image: **Ubuntu 22.04** → Type: **CX22** (2 vCPU, 4 GB RAM, ~€4/mo)
-3. Add your SSH public key, click **Create**
-
-### 2. First-time setup
-
-SSH in as root and run the setup script:
-
-```bash
-ssh root@<SERVER_IP>
-
-curl -fsSL https://raw.githubusercontent.com/EP36/Trauto/main/deploy/setup.sh | bash
-```
-
-This will:
-- Install Python 3.11, pip, git, screen
-- Clone the repo to `/opt/trauto`
-- Create a Python venv at `/opt/trauto/.venv` and install all deps
-- Create `/etc/trauto/env` with placeholder env vars
-- Install and enable `trauto-worker` and `trauto-web` systemd services
-
-### 3. Configure environment
-
-```bash
-nano /etc/trauto/env
-```
-
-Fill in at minimum:
-
-```
-DATABASE_URL=postgresql://...         # Hetzner Managed Postgres or Render Postgres external URL
+# --- Polymarket ---
 POLY_API_KEY=...
 POLY_API_SECRET=...
 POLY_PASSPHRASE=...
 POLY_PRIVATE_KEY=0x...
-AUTH_SESSION_SECRET=...               # 32+ random chars
+POLY_WALLET=0x...
+POLY_DRY_RUN=true          # set false to place real Polymarket orders
+
+# --- Hyperliquid funding arb ---
+HL_PRIVATE_KEY=0x...
+HL_WALLET=0x...
+HL_MIN_FUNDING_RATE=0.0015  # 0.15%/hr minimum to flag
+HL_MAX_POSITION_USD=50
+HL_DRY_RUN=true             # set false to place real HL orders
+HL_SCAN_INTERVAL_SEC=60
+
+# --- Coinbase basis arb ---
+COINBASE_API_KEY=organizations/xxx/apiKeys/xxx
+COINBASE_API_SECRET=<EC private key PEM>
+MIN_BASIS_PCT=1.0           # minimum annualized basis % to trigger
+BASIS_DRY_RUN=true          # set false to place real CB orders
+
+# --- Auth ---
+AUTH_SESSION_SECRET=...     # 32+ random chars
 AUTH_PASSWORD_PEPPER=...
-POLY_TRADING_MODE=dry_run             # change to live when ready
-POLY_DRY_RUN=true
+
+# --- Database ---
+DATABASE_URL=postgresql://...
 ```
 
-### 4. Start services
+---
+
+## Roadmap
+
+### Near-term
+- [ ] **April 28** — Migrate Polymarket integration to CLOB v2 API
+- [ ] Alerting (Telegram / webhook) when an opportunity clears threshold
+- [ ] Dashboard widget showing live `capital_rank` scores from allocator
+
+### Cross-venue capital unification (not yet implemented)
+
+The current allocator ranks opportunities but does not rebalance wallets. To unlock true capital efficiency across venues, the following would need to be added:
+
+1. **Withdrawal trigger** — when a venue's best opportunity score is significantly below the global top score (configurable gap, e.g. `∆score > 0.15`), initiate a partial or full withdrawal from the lower-scoring venue.
+2. **Bridge executor** — a module that calls the appropriate bridge (Polygon → Arbitrum for HL, or HL withdrawal → Arbitrum → Coinbase) and waits for confirmation before marking funds as available.
+3. **Deposit acknowledger** — polls the destination venue API to confirm the deposit landed before allowing the allocator to size new trades there.
+4. **Position unwind gating** — locked Polymarket collateral can only be withdrawn after positions are closed; the rebalancer needs to know the difference between *free capital* and *locked collateral*.
+
+Example flow (not live):
+```
+Polymarket best:   50% annualized  → score 0.42
+HL funding best:  200% annualized  → score 0.81
+∆ = 0.39 > threshold → trigger withdrawal from Polymarket
+  1. Close/wait for Polymarket positions to expire
+  2. Withdraw USDC.e from Polygon wallet
+  3. Bridge to Arbitrum
+  4. Deposit into HL vault
+  5. Allocator now sizes HL trades with larger capital
+```
+
+---
+
+## VPS Operations (Hetzner Helsinki)
 
 ```bash
-systemctl start trauto-worker trauto-web
-
-# Verify
+# Check service status
 systemctl status trauto-worker trauto-web
 
-# Tail logs
+# Tail live logs
 journalctl -u trauto-worker -f
-journalctl -u trauto-web -f
+
+# Deploy updates
+bash /opt/trauto/deploy/update.sh
+
+# Edit config
+nano /etc/trauto/env
+systemctl restart trauto-worker
 ```
 
 On startup the worker logs its outbound IP:
 ```
 outbound_ip=65.21.x.x region=hetzner-helsinki
 ```
-
 Verify this IP is not blocked by Polymarket before enabling live trading.
 
-### 5. Deploy updates
+---
 
-```bash
-ssh root@<SERVER_IP> bash /opt/trauto/deploy/update.sh
+## Safety Defaults
+
+All execution flags default to **dry-run / disabled**. To place real orders you must explicitly set in `/etc/trauto/env`:
+
+| Flag | Default | Enable live |
+|------|---------|-------------|
+| `POLY_DRY_RUN` | `true` | `false` |
+| `HL_DRY_RUN` | `true` | `false` |
+| `BASIS_DRY_RUN` | `true` | `false` |
+| `WORKER_DRY_RUN` | `true` | `false` |
+| `LIVE_TRADING` | `false` | ⚠️ raises startup error — not supported |
+
+---
+
+## Project Structure
+
+```
+src/
+  backtest/          ← historical backtesting engine
+  capital/
+    allocator.py     ← cross-strategy opportunity scorer
+  strategies/        ← MA crossover, RSI, VWAP, breakout
+  risk/              ← position limits, drawdown kill switch
+  api.py             ← FastAPI web service
+funding_arb/
+  monitor.py         ← funding + basis scan loop
+  executor.py        ← HL order placement
+  coinbase_client.py ← Coinbase Advanced Trade integration
+polymarket/          ← CLOB v2 arb logic
+apps/web/            ← Next.js dashboard
+deploy/
+  setup.sh           ← first-time VPS provisioning
+  update.sh          ← rolling deploy
+tests/
+requirements.txt
+.env.example
 ```
 
-This pulls the latest code, installs any new deps, and restarts both services.
+---
 
-### Systemd service files
+## Legacy: Equity Paper-Trading Strategies
 
-| File | Purpose |
-|------|---------|
-| `deploy/trauto-worker.service` | Background scanner/execution loop |
-| `deploy/trauto-web.service` | FastAPI web dashboard |
-| `deploy/setup.sh` | First-time server provisioning |
-| `deploy/update.sh` | Rolling code update + service restart |
+The original README documented equity paper-trading strategies (MA crossover, RSI, VWAP, breakout) running against Alpaca or synthetic data. That system remains available under `src/strategies/` and `src/backtest/` for backtesting and paper-trading research, but **it is not the active production workflow**. The active production workflow is the three crypto arb strategies documented above.
 
-### Docker (optional)
-
-A `Dockerfile` is included if you prefer container-based deployment:
-
-```bash
-docker build -t trauto .
-docker run --env-file /etc/trauto/env trauto
-```
-
-## Frontend (Dashboard Shell)
-
-The frontend lives in `apps/web` and is API-first.
-Demo/mock values are disabled by default and only load when explicitly enabled.
-
-```bash
-cd apps/web
-npm install
-cp .env.example .env.local
-npm run dev
-```
-
-### Recommended Frontend Deployment: Render Static Site
-
-`apps/web` supports static export and can be deployed as a Render Static Site.
-
-Render settings:
-- Root Directory: `apps/web`
-- Build Command: `npm ci && npm run build`
-- Publish Directory: `out`
-
-Required frontend env var:
-- `NEXT_PUBLIC_API_BASE_URL`:
-  - local example: `http://127.0.0.1:8000`
-  - Render example: `https://<your-backend-service>.onrender.com`
-
-Optional frontend env var:
-- `NEXT_PUBLIC_DEMO_MODE=false` (recommended):
-  - keep `false` (or unset) in production so UI shows persisted backend data only
-  - set `true` only for explicit demo/development scenarios where synthetic UI data is desired
-
-Backtests page behavior:
-- In normal mode (`NEXT_PUBLIC_DEMO_MODE=false`), backtest results come only from backend `POST /api/backtests/run`.
-- When backend execution/data fails, the page shows an error state (no fake results).
-- Demo backtest results are available only when `NEXT_PUBLIC_DEMO_MODE=true`.
-
-Notes:
-- The UI calls the backend from the browser, so backend CORS must allow your Static Site origin.
-- Backend CORS is environment-driven via `CORS_ALLOWED_ORIGINS` (for example: `https://trauto.onrender.com`).
-- Do not use `*` in production/staging CORS config; startup validation rejects wildcard origins.
-- If you prefer no cross-origin browser calls, deploy frontend and backend behind a single origin with a proxy setup.
-
-Routes:
-- `/login`
-- `/dashboard`
-- `/analytics`
-- `/backtests`
-- `/strategies`
-- `/risk`
-- `/trades`
-- `/settings`
-
-Frontend auth behavior:
-- Dashboard/control routes require a valid backend session.
-- Unauthenticated or expired sessions redirect to `/login`.
-- UI route protection is convenience only; backend authorization is the enforcement boundary.
-
-### Frontend Theme Support
-
-- Theme modes: `light`, `dark`, `system`.
-- The active preference is stored in browser `localStorage` under `trauto-theme-preference`.
-- On first load:
-  - saved preference is applied if present
-  - otherwise system color-scheme preference is used
-- A pre-hydration script in the root layout applies the theme before React mounts to avoid theme flash.
-- Theme preference is managed from `Settings` → `Appearance`.
-- Account password changes are managed from `Settings` → `Account Security` and call `POST /api/auth/password`.
-
-Key files:
-- `apps/web/lib/theme.ts`
-- `apps/web/components/theme/theme-provider.tsx`
-- `apps/web/app/settings/page.tsx`
-- `apps/web/lib/auth/routes.ts`
-- `apps/web/app/layout.tsx`
-- `apps/web/app/globals.css`
-- `apps/web/components/navigation/top-nav.tsx`
-
-## Notes
-
-- The system is intentionally simple but production-oriented in structure.
-- Risk management and execution are explicit modules so they can be replaced with live integrations later.
-- `.env` broker values are placeholders; the sample runner remains paper-only.
-- Data ingestion uses a provider interface with local parquet caching to avoid provider lock-in.
-
-## Observability
-
-- Runtime logs stream to console and `logs/system.log`.
-- Backtest/data/execution/risk flows log structured events with a per-run `run_id`.
-- Backtest completion logs include: symbol, signal count, trade count, final equity, and max drawdown.
-
-## Walk-Forward Testing
-
-The backtest package includes a simple walk-forward runner (`src.backtest.walk_forward.WalkForwardRunner`) for:
-- rolling train/test windows
-- grid search on train windows
-- out-of-sample evaluation on the following test windows
-
-Overfitting caution:
-- walk-forward results can still overfit if the parameter grid is too wide or repeatedly tuned.
-- treat out-of-sample metrics as sanity checks, not deployment-grade proof.
-- keep parameter grids small, test realistic costs/slippage, and prefer stable performance over peak metrics.
-
-## Known Risks
-
-- Backtest realism is limited:
-  - no market impact model
-  - simplified fill assumptions
-  - no partial-fill depth/latency model
-- Data provider layer defaults to synthetic/local patterns unless a real provider is implemented and configured.
-- Real historical backtest mode is available via `DATA_PROVIDER=alpaca` and Alpaca credentials.
-- Frontend demo data is controlled by `NEXT_PUBLIC_DEMO_MODE`; keep it false in production.
-- Auth model is intentionally single-user admin for now:
-  - sufficient for one-operator deployment
-  - does not yet include multi-user tenancy/ownership boundaries
-- Frontend dependency maintenance:
-  - keep `apps/web` dependencies patched regularly, especially Next.js security advisories.
-- Worker loop assumptions are intentionally simple:
-  - one-cycle-at-a-time signal evaluation
-  - synthetic provider defaults unless replaced
-  - no broker latency or partial-fill simulation
-- Migration strategy is create-all for MVP:
-  - safe for initial deployment
-  - not a replacement for versioned migrations in larger production systems
+For the full original paper-trading documentation (API endpoints, backtest engine, Render deployment), see [`ARCHITECTURE.md`](ARCHITECTURE.md).
