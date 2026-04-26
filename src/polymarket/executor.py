@@ -114,7 +114,7 @@ def _place_order(
     py_client = _PyClobClient(
         host=config.clob_base_url,
         key=config.private_key,
-        chain=137,  # Polygon mainnet
+        chain_id=137,  # Polygon mainnet
         creds=ApiCreds(
             api_key=config.api_key,
             api_secret=config.api_secret,

@@ -169,7 +169,7 @@ class MarketMaker:
         from py_clob_client_v2.client import ClobClient
         from py_clob_client_v2.clob_types import ApiCreds
         return ClobClient(
-            CLOB_URL, key=self.config.private_key, chain=137,
+            CLOB_URL, key=self.config.private_key, chain_id=137,
             creds=ApiCreds(api_key=self.config.api_key,
                            api_secret=self.config.api_secret,
                            api_passphrase=self.config.passphrase),
