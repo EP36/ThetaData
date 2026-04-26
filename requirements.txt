@@ -15,3 +15,4 @@ py-clob-client>=0.7
 web3>=6.0,<8.0
 eth-account>=0.11,<1.0
 psycopg2-binary>=2.9
+coinbase-advanced-py>=1.7

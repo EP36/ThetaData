@@ -290,6 +290,210 @@ def place_spot_long(
         )
 
 
+def open_basis_trade(
+    private_key: str,
+    wallet: str,
+    asset: str,
+    basis_pct: float,
+    pos_size_usd: float,
+    dry_run: bool = True,
+) -> bool:
+    """Enter a basis arb trade: SHORT perp on HL + BUY spot on Coinbase (contango).
+
+    Direction:
+      basis_pct > 0 (perp > spot, contango): short perp on HL + buy spot on Coinbase
+      basis_pct < 0 (perp < spot, backwardation): long perp only (Coinbase spot short
+        not available in NY; perp-only leg logged as warning)
+      basis_pct == 0: skip
+
+    Returns True if both legs filled (or dry_run), False otherwise.
+    """
+    LOGGER.info(
+        "coinbase_basis_trade_opening asset=%s basis_pct=%.4f pos_usd=%.2f dry_run=%s",
+        asset, basis_pct, pos_size_usd, dry_run,
+    )
+
+    if basis_pct == 0:
+        LOGGER.info("coinbase_basis_trade_skipped reason=basis_pct_zero asset=%s", asset)
+        return False
+
+    if dry_run:
+        perp_side = "short" if basis_pct > 0 else "long"
+        spot_side = "buy" if basis_pct > 0 else "none (backwardation — NY spot short unavailable)"
+        LOGGER.info(
+            "coinbase_basis_dryrun asset=%s basis_pct=%.4f perp_side=%s spot_side=%s pos_usd=%.2f",
+            asset, basis_pct, perp_side, spot_side, pos_size_usd,
+        )
+        return True
+
+    if basis_pct > 0:
+        # Contango: short perp on HL first, then buy spot on Coinbase
+        perp_result = place_perp_short(private_key, wallet, asset, pos_size_usd, dry_run=False)
+        if not perp_result.success:
+            LOGGER.error(
+                "coinbase_basis_trade_perp_failed asset=%s error=%s",
+                asset, perp_result.error,
+            )
+            return False
+
+        # Spot leg on Coinbase
+        try:
+            from funding_arb.coinbase_client import execute_spot_market_buy
+            spot_result = execute_spot_market_buy(asset, pos_size_usd)
+            spot_filled = True
+            spot_order_id = spot_result.get("order_id", "")
+        except Exception as exc:
+            LOGGER.critical(
+                "coinbase_basis_partial_fill asset=%s perp_filled=%.4f spot_failed=%s "
+                "— attempting to close HL perp leg",
+                asset, perp_result.size, exc,
+            )
+            # Attempt to close the HL perp leg to avoid unhedged exposure
+            try:
+                _close_perp_short(private_key, wallet, asset, perp_result.size)
+            except Exception as close_exc:
+                LOGGER.critical(
+                    "coinbase_basis_UNHEDGED_POSITION asset=%s perp_size=%.4f "
+                    "close_attempt_failed=%s — manual intervention required",
+                    asset, perp_result.size, close_exc,
+                )
+            return False
+
+        LOGGER.info(
+            "coinbase_basis_trade_opened asset=%s basis_pct=%.4f perp_side=short "
+            "perp_order_id=%s spot_order_id=%s spot_filled=%s pos_usd=%.2f",
+            asset, basis_pct, perp_result.order_id, spot_order_id, spot_filled, pos_size_usd,
+        )
+        return True
+
+    else:
+        # Backwardation: long perp only — spot short not available in NY
+        LOGGER.warning(
+            "coinbase_basis_backwardation_perp_only asset=%s basis_pct=%.4f "
+            "reason=spot_short_unavailable_in_NY",
+            asset, basis_pct,
+        )
+        perp_result = place_perp_short(private_key, wallet, asset, pos_size_usd, dry_run=False)
+        if not perp_result.success:
+            LOGGER.error(
+                "coinbase_basis_trade_perp_failed asset=%s error=%s",
+                asset, perp_result.error,
+            )
+            return False
+        LOGGER.info(
+            "coinbase_basis_trade_opened asset=%s basis_pct=%.4f perp_side=long "
+            "perp_order_id=%s spot_filled=false pos_usd=%.2f",
+            asset, basis_pct, perp_result.order_id, pos_size_usd,
+        )
+        return True
+
+
+def _close_perp_short(
+    private_key: str,
+    wallet: str,
+    asset: str,
+    size: float,
+) -> None:
+    """Close an open perp short by placing a market buy (reduceOnly)."""
+    mark_px = get_mark_price(asset)
+    if mark_px is None or mark_px <= 0:
+        raise RuntimeError(f"mark_price_unavailable for {asset}")
+    asset_idx = get_asset_index(asset)
+    if asset_idx is None:
+        raise RuntimeError(f"asset_index_not_found for {asset}")
+    limit_px = round(mark_px * (1 + SLIPPAGE), 6)
+    action = {
+        "type": "order",
+        "orders": [{
+            "a": asset_idx,
+            "b": True,          # True = buy (close short)
+            "p": str(limit_px),
+            "s": str(round(size, 6)),
+            "r": True,          # reduceOnly
+            "t": {"limit": {"tif": "Ioc"}},
+        }],
+        "grouping": "na",
+    }
+    result = _hl_exchange_post(private_key, wallet, action)
+    LOGGER.info("hl_perp_short_closed asset=%s size=%.4f result=%s", asset, size, result)
+
+
+def close_basis_trade(
+    private_key: str,
+    wallet: str,
+    asset: str,
+    basis_pct: float,
+    perp_side: str,
+    spot_size: float,
+    dry_run: bool = True,
+) -> bool:
+    """Close an open basis trade.
+
+    perp_side: "short" | "long" — determines which direction to close the perp
+    spot_size: base asset size held on Coinbase (0 if backwardation / no spot leg)
+
+    Returns True if both legs closed successfully.
+    """
+    LOGGER.info(
+        "coinbase_basis_trade_closing asset=%s perp_side=%s spot_size=%.6f dry_run=%s",
+        asset, perp_side, spot_size, dry_run,
+    )
+
+    if dry_run:
+        LOGGER.info(
+            "coinbase_basis_close_dryrun asset=%s perp_side=%s spot_size=%.6f",
+            asset, perp_side, spot_size,
+        )
+        return True
+
+    success = True
+
+    # Close HL perp leg
+    try:
+        mark_px = get_mark_price(asset)
+        if mark_px is None or mark_px <= 0:
+            raise RuntimeError("mark_price_unavailable")
+        asset_idx = get_asset_index(asset)
+        if asset_idx is None:
+            raise RuntimeError(f"asset_index_not_found for {asset}")
+        is_buy   = (perp_side == "short")   # closing a short = buy
+        limit_px = round(mark_px * (1 + SLIPPAGE if is_buy else 1 - SLIPPAGE), 6)
+        close_size = round(mark_px and mark_px > 0 and spot_size or 0, 6)
+        # Use mark price to estimate contracts; caller should supply contracts not USD
+        action = {
+            "type": "order",
+            "orders": [{
+                "a": asset_idx,
+                "b": is_buy,
+                "p": str(limit_px),
+                "s": "0",           # 0 = close entire position on HL
+                "r": True,
+                "t": {"limit": {"tif": "Ioc"}},
+            }],
+            "grouping": "na",
+        }
+        result = _hl_exchange_post(private_key, wallet, action)
+        LOGGER.info("hl_basis_perp_closed asset=%s perp_side=%s result=%s", asset, perp_side, result)
+    except Exception as exc:
+        LOGGER.error("hl_basis_perp_close_failed asset=%s error=%s", asset, exc)
+        success = False
+
+    # Close Coinbase spot leg
+    if spot_size > 0:
+        try:
+            from funding_arb.coinbase_client import execute_spot_market_sell
+            execute_spot_market_sell(asset, spot_size)
+        except Exception as exc:
+            LOGGER.error("coinbase_basis_spot_close_failed asset=%s error=%s", asset, exc)
+            success = False
+
+    LOGGER.info(
+        "coinbase_basis_trade_closed asset=%s perp_side=%s spot_size=%.6f success=%s",
+        asset, perp_side, spot_size, success,
+    )
+    return success
+
+
 def enter_arb(
     private_key: str,
     wallet: str,

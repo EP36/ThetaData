@@ -34,10 +34,14 @@ logging.basicConfig(
 LOGGER = logging.getLogger("theta.funding_arb")
 
 # Env vars (set in /etc/trauto/env):
-#   HL_MIN_FUNDING_RATE  float  default=0.0015  (0.15%/hr minimum to flag)
-#   HL_MAX_POSITION_USD  float  default=50      (position size when executing)
-#   HL_DRY_RUN           bool   default=true    (set false to enable execution)
-#   HL_SCAN_INTERVAL_SEC int    default=60      (seconds between scans)
+#   HL_MIN_FUNDING_RATE   float  default=0.0015  (0.15%/hr minimum to flag)
+#   HL_MAX_POSITION_USD   float  default=50      (position size when executing)
+#   HL_DRY_RUN            bool   default=true    (set false to enable HL execution)
+#   HL_SCAN_INTERVAL_SEC  int    default=60      (seconds between scans)
+#   COINBASE_API_KEY      str    (organizations/xxx/apiKeys/xxx)
+#   COINBASE_API_SECRET   str    (EC private key PEM)
+#   BASIS_DRY_RUN         bool   default=true    (set false to enable basis execution)
+#   MIN_BASIS_PCT         float  default=1.0     (minimum annual % to trigger basis trade)
 
 HL_BASE_URL       = "https://api.hyperliquid.xyz"
 MAKER_FEE_SPOT    = 0.00040
@@ -107,14 +111,8 @@ def seconds_to_next_funding() -> int:
     return 3600 - (now.minute * 60 + now.second)
 
 
-def calculate_basis_vs_spot(asset: str, mark_px: float) -> dict[str, float]:
-    """Compare perp mark price vs spot price (stub: uses mark as proxy for spot).
-
-    Returns basis in $ and % terms. A positive basis means perp > spot (contango),
-    which independently confirms positive funding is likely to persist.
-
-    TODO: replace spot_px with a real spot feed (Binance/Coinbase REST) once wired.
-    """
+def _hl_spot_price(asset: str) -> float:
+    """Fetch spot price from Hyperliquid spotMetaAndAssetCtxs as fallback."""
     try:
         resp = httpx.post(
             f"{HL_BASE_URL}/info",
@@ -123,28 +121,129 @@ def calculate_basis_vs_spot(asset: str, mark_px: float) -> dict[str, float]:
         )
         resp.raise_for_status()
         data = resp.json()
-        # data[0] = spotMeta, data[1] = list of assetCtxs
         spot_meta, spot_ctxs = data[0], data[1]
-        spot_px = None
         for token in spot_meta.get("tokens", []):
             if token.get("name") == asset:
                 idx = token.get("index")
                 if idx is not None and idx < len(spot_ctxs):
-                    spot_px = float(spot_ctxs[idx].get("midPx") or 0)
+                    px = float(spot_ctxs[idx].get("midPx") or 0)
+                    return px
                 break
-        if not spot_px:
-            return {"basis_usd": 0.0, "basis_pct": 0.0, "mark_px": mark_px, "spot_px": 0.0}
-        basis_usd = mark_px - spot_px
-        basis_pct = (basis_usd / spot_px) * 100.0 if spot_px > 0 else 0.0
-        return {
-            "basis_usd": round(basis_usd, 4),
-            "basis_pct": round(basis_pct, 4),
-            "mark_px":   mark_px,
-            "spot_px":   spot_px,
-        }
     except Exception as exc:
-        LOGGER.debug("basis_fetch_failed asset=%s error=%s", asset, exc)
-        return {"basis_usd": 0.0, "basis_pct": 0.0, "mark_px": mark_px, "spot_px": 0.0}
+        LOGGER.debug("hl_spot_price_failed asset=%s error=%s", asset, exc)
+    return 0.0
+
+
+def calculate_basis_vs_spot(asset: str, mark_px: float) -> dict[str, Any]:
+    """Compare perp mark price vs real Coinbase spot price (HL proxy as fallback).
+
+    Returns basis in $ and % terms. A positive basis (contango) means perp > spot,
+    which independently confirms positive funding is likely to persist.
+
+    Fields: basis_usd, basis_pct, mark_px, spot_px, spot_source
+    """
+    spot_px     = 0.0
+    spot_source = "none"
+
+    # Primary: Coinbase real spot feed
+    try:
+        from funding_arb.coinbase_client import get_coinbase_client, get_spot_mid
+        cb = get_coinbase_client()
+        if cb is not None:
+            px = get_spot_mid(asset)
+            if px > 0:
+                spot_px     = px
+                spot_source = "coinbase"
+    except Exception as exc:
+        LOGGER.debug("coinbase_spot_lookup_failed asset=%s error=%s", asset, exc)
+
+    # Fallback: Hyperliquid spot proxy
+    if spot_px <= 0:
+        px = _hl_spot_price(asset)
+        if px > 0:
+            spot_px     = px
+            spot_source = "hyperliquid_proxy"
+
+    if spot_px <= 0:
+        return {
+            "basis_usd":  0.0,
+            "basis_pct":  0.0,
+            "mark_px":    mark_px,
+            "spot_px":    0.0,
+            "spot_source": "none",
+        }
+
+    basis_usd = mark_px - spot_px
+    basis_pct = (basis_usd / spot_px) * 100.0
+    return {
+        "basis_usd":   round(basis_usd, 4),
+        "basis_pct":   round(basis_pct, 4),
+        "mark_px":     mark_px,
+        "spot_px":     spot_px,
+        "spot_source": spot_source,
+    }
+
+
+def compare_carry(
+    asset: str,
+    funding_rate_pct: float,
+    mark_px: float,
+    pos_size_usd: float,
+) -> dict[str, Any]:
+    """Compare funding arb vs basis arb and return the better strategy.
+
+    funding_rate_pct: current hourly funding rate as a percentage (e.g. 0.15 for 0.15%/hr)
+
+    Returns:
+        strategy:            "funding" | "basis" | "no_trade"
+        funding_annual_pct:  annualized funding return %
+        basis_annual_pct:    annualized basis return % (basis_pct * 52 weekly proxy)
+        basis_pct:           raw spot-perp basis %
+        spot_source:         "coinbase" | "hyperliquid_proxy" | "none"
+        reason:              human-readable explanation
+    """
+    basis_info      = calculate_basis_vs_spot(asset, mark_px)
+    basis_pct       = basis_info["basis_pct"]
+    spot_source     = basis_info["spot_source"]
+    funding_annual  = funding_rate_pct * 3 * 365      # 3 funding periods/day * 365
+    basis_annual    = basis_pct * 52                  # weekly proxy: 52 weeks/year
+
+    MIN_ANNUAL_PCT = float(os.getenv("MIN_BASIS_PCT", "1.0"))
+
+    if funding_annual >= basis_annual and funding_annual > MIN_ANNUAL_PCT:
+        strategy = "funding"
+        reason   = (
+            f"funding_annual={funding_annual:.2f}% > basis_annual={basis_annual:.2f}% "
+            f"and > {MIN_ANNUAL_PCT}% threshold"
+        )
+    elif basis_annual > funding_annual and basis_annual > MIN_ANNUAL_PCT:
+        strategy = "basis"
+        reason   = (
+            f"basis_annual={basis_annual:.2f}% > funding_annual={funding_annual:.2f}% "
+            f"and > {MIN_ANNUAL_PCT}% threshold"
+        )
+    else:
+        strategy = "no_trade"
+        reason   = (
+            f"neither strategy meets {MIN_ANNUAL_PCT}% threshold "
+            f"(funding_annual={funding_annual:.2f}% basis_annual={basis_annual:.2f}%)"
+        )
+
+    result: dict[str, Any] = {
+        "strategy":           strategy,
+        "funding_annual_pct": round(funding_annual, 4),
+        "basis_annual_pct":   round(basis_annual, 4),
+        "basis_pct":          round(basis_pct, 4),
+        "spot_source":        spot_source,
+        "reason":             reason,
+    }
+
+    LOGGER.info(
+        "fundingarb_carry_comparison asset=%s strategy=%s "
+        "funding_annual=%.2f basis_annual=%.2f basis_pct=%.4f spot_source=%s",
+        asset, strategy, funding_annual, basis_annual, basis_pct, spot_source,
+    )
+    return result
 
 
 def calc_profit(rate: float, position_usd: float) -> dict[str, float]:
@@ -196,34 +295,58 @@ def scan_once(config: dict[str, str]) -> None:
 
         if good:
             opps += 1
-            basis = calculate_basis_vs_spot(asset, r["mark_px"])
+            carry = compare_carry(asset, cur_rate * 100, r["mark_px"], pos_usd)
             LOGGER.info(
                 "funding_arb_OPPORTUNITY asset=%s rate=%.4f%% net_usd=$%.4f "
-                "basis_pct=%.4f%% basis_usd=%.2f spot_px=%.2f mark_px=%.2f "
+                "basis_pct=%.4f%% spot_source=%s carry_strategy=%s "
                 "time_to_funding_sec=%d — %s",
                 asset, cur_rate * 100, profit["net_usd"],
-                basis["basis_pct"], basis["basis_usd"], basis["spot_px"], basis["mark_px"],
+                carry["basis_pct"], carry["spot_source"], carry["strategy"],
                 secs_left,
                 "ENTER NOW (within 15min window)" if secs_left <= 900 else "monitor",
+            )
+            LOGGER.info(
+                "fundingarb_carry_selected asset=%s strategy=%s "
+                "funding_annual=%.2f basis_annual=%.2f reason=%s",
+                asset, carry["strategy"],
+                carry["funding_annual_pct"], carry["basis_annual_pct"],
+                carry["reason"],
             )
 
             if secs_left <= 900:  # only enter within 15min of funding
                 private_key = config.get("HL_PRIVATE_KEY", "").strip()
                 wallet      = config.get("HL_WALLET", "").strip()
+                basis_dry_run = config.get("BASIS_DRY_RUN", "true").lower() != "false"
 
-                if not private_key or not wallet:
-                    LOGGER.warning(
-                        "funding_arb_execution_skipped reason=missing_credentials "
-                        "set HL_PRIVATE_KEY and HL_WALLET in /etc/trauto/env"
-                    )
-                else:
-                    from funding_arb.executor import enter_arb
-                    enter_arb(
+                if carry["strategy"] == "funding":
+                    if not private_key or not wallet:
+                        LOGGER.warning(
+                            "funding_arb_execution_skipped reason=missing_credentials "
+                            "set HL_PRIVATE_KEY and HL_WALLET in /etc/trauto/env"
+                        )
+                    else:
+                        from funding_arb.executor import enter_arb
+                        enter_arb(
+                            private_key=private_key,
+                            wallet=wallet,
+                            asset=asset,
+                            size_usd=pos_usd,
+                            dry_run=dry_run,
+                        )
+                elif carry["strategy"] == "basis":
+                    from funding_arb.executor import open_basis_trade
+                    open_basis_trade(
                         private_key=private_key,
                         wallet=wallet,
                         asset=asset,
-                        size_usd=pos_usd,
-                        dry_run=dry_run,
+                        basis_pct=carry["basis_pct"],
+                        pos_size_usd=pos_usd,
+                        dry_run=basis_dry_run,
+                    )
+                else:
+                    LOGGER.info(
+                        "funding_arb_no_trade_taken asset=%s reason=%s",
+                        asset, carry["reason"],
                     )
 
     if opps == 0:
