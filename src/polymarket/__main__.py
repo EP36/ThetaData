@@ -215,3 +215,4 @@ def main() -> None:
 if __name__ == "__main__":
     main()
 from src.polymarket.client import _debug_clob_collateral
+from src.polymarket.client import _debug_clob_collateral
