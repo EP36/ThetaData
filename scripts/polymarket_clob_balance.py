@@ -34,7 +34,7 @@ def main():
         signature_type=1,
         funder=FUNDER,
     )
-    client.set_api_creds(client.create_or_derive_api_creds())
+    client.set_api_creds(client.create_or_derive_api_key())
 
     info = client.get_account_info()
 
