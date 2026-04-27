@@ -4,53 +4,63 @@ import sys
 from decimal import Decimal
 
 from py_clob_client_v2 import ClobClient
+from py_clob_client_v2.clob_types import BalanceAllowanceParams, AssetType
 
 HOST = os.getenv("POLY_CLOB_HOST", "https://clob.polymarket.com")
-CHAIN_ID = int(os.getenv("POLY_CHAIN_ID", "137"))
-
+CHAIN = int(os.getenv("POLY_CHAIN", "137"))
 PRIVATE_KEY = os.getenv("POLY_PRIVATE_KEY") or os.getenv("POLYGON_PRIVATE_KEY")
-FUNDER = os.getenv("POLY_WALLET_ADDRESS")  # address that actually holds pUSD
-
+FUNDER = os.getenv("POLY_WALLET_ADDRESS")
+SIGNATURE_TYPE = int(os.getenv("POLY_SIGNATURE_TYPE", "1"))
 DECIMALS = 6
 
 
-def fmt_units(v: int) -> str:
-    return f"{Decimal(v) / (Decimal(10) ** DECIMALS):,.6f}"
+def fmt_units(v: int | str) -> str:
+    value = int(v)
+    return f"{Decimal(value) / (Decimal(10) ** DECIMALS):,.6f}"
 
 
 def main():
     if not PRIVATE_KEY:
-        raise SystemExit("Set POLY_PRIVATE_KEY (or POLYGON_PRIVATE_KEY) in env.")
-
+        raise SystemExit("Missing POLY_PRIVATE_KEY / POLYGON_PRIVATE_KEY")
     if not FUNDER:
-        raise SystemExit("Set POLY_WALLET_ADDRESS to your Polymarket wallet / funder address.")
+        raise SystemExit("Missing POLY_WALLET_ADDRESS")
 
     pk = PRIVATE_KEY if PRIVATE_KEY.startswith("0x") else "0x" + PRIVATE_KEY
 
     client = ClobClient(
         host=HOST,
         key=pk,
-        chain_id=CHAIN_ID,
-        signature_type=1,
+        chain=CHAIN,
+        signature_type=SIGNATURE_TYPE,
         funder=FUNDER,
     )
-    client.set_api_creds(client.create_or_derive_api_key())
 
-    info = client.get_account_info()
+    # Prefer derive of existing creds; only create if derive isn't available in your installed version
+    if hasattr(client, "derive_api_key"):
+        creds = client.derive_api_key()
+    elif hasattr(client, "create_or_derive_api_key"):
+        creds = client.create_or_derive_api_key()
+    else:
+        raise SystemExit("No supported API-key derivation method found on installed py_clob_client_v2")
 
-    print("Raw account info:")
-    print(info)
+    client.set_api_creds(creds)
 
-    free_collateral = int(info.get("freeCollateral", 0))
-    used_collateral = int(info.get("usedCollateral", 0))
-    total_collateral = free_collateral + used_collateral
-    allowance = int(info.get("allowance", 0))
+    bal = client.get_balance()
+    ba = client.get_balance_allowance(
+        BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
+    )
 
-    print("\nCLOB collateral state (pUSD units):")
-    print(f"  Free collateral : {fmt_units(free_collateral)}")
-    print(f"  Used collateral : {fmt_units(used_collateral)}")
-    print(f"  Total collateral: {fmt_units(total_collateral)}")
-    print(f"  Allowance       : {fmt_units(allowance)}")
+    print("Raw get_balance():")
+    print(bal)
+    print("\nRaw get_balance_allowance():")
+    print(ba)
+
+    balance = int(ba.get("balance", 0))
+    allowance = int(ba.get("allowance", 0))
+
+    print("\nCLOB collateral state:")
+    print(f"  Balance   : {fmt_units(balance)} pUSD")
+    print(f"  Allowance : {fmt_units(allowance)} pUSD")
 
 
 if __name__ == "__main__":
