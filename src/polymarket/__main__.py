@@ -101,6 +101,14 @@ def main() -> None:
     configure_logging()
     config = PolymarketConfig.from_env()
     _assert_wallet_key_match(config)
+
+    # Startup CLOB collateral diagnostics — always run for observability
+    try:
+        from src.polymarket.executor import _get_clob_free_collateral
+        _get_clob_free_collateral(config)
+    except Exception as exc:
+        LOGGER.warning("polymarket_startup_diagnostics_failed error=%s", exc)
+
     LOGGER.info(
         "polymarket_runtime_mode active_trading_mode=%s active_venue=%s "
         "execution_adapter=polymarket_clob paper_trading=%s dry_run=%s "

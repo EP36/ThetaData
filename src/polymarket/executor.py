@@ -19,6 +19,7 @@ from src.polymarket.risk import RiskGuard
 LOGGER = logging.getLogger("theta.polymarket.executor")
 
 _EXECUTABLE_STRATEGIES = {"orderbook_spread", "correlated_markets", "underround", "resolution_carry"}
+_MIN_FREE_COLLATERAL = 0.05  # skip order if CLOB free collateral is below this USD amount
 
 _POLYGON_RPC_URL = "https://polygon-rpc.com"
 _MIN_POL_GAS = 0.005  # minimum POL required to cover on-chain transaction gas
@@ -73,6 +74,90 @@ def _check_pol_gas(private_key: str) -> bool:
     return True
 
 
+def _derive_funder(config: PolymarketConfig) -> str:
+    """Return the wallet address to use as CLOB funder.
+
+    Uses config.poly_wallet_address if set, otherwise derives from private key.
+    Returns "" if derivation fails so callers can proceed with funder=None.
+    """
+    if config.poly_wallet_address:
+        return config.poly_wallet_address
+    try:
+        from eth_account import Account  # type: ignore[import]
+        return Account.from_key(config.private_key).address
+    except Exception as exc:
+        LOGGER.warning("funder_derivation_failed error=%s — CLOB may see wrong balance", exc)
+        return ""
+
+
+def _get_clob_free_collateral(config: PolymarketConfig) -> float:
+    """Query CLOB for the free (unallocated) pUSD collateral balance.
+
+    Returns 0.0 on any error so callers can gate safely without crashing.
+    The CLOB API returns balances in 6-decimal micro-pUSD units (same as USDC).
+    """
+    try:
+        from py_clob_client_v2.client import ClobClient as _PyClobClient  # type: ignore[import]
+        from py_clob_client_v2.clob_types import ApiCreds  # type: ignore[import]
+    except ImportError:
+        LOGGER.debug("clob_balance_check_skipped reason=py_clob_client_v2_not_installed")
+        return 0.0
+
+    funder = _derive_funder(config)
+    try:
+        py_client = _PyClobClient(
+            host=config.clob_base_url,
+            key=config.private_key,
+            chain=137,
+            funder=funder or None,
+            creds=ApiCreds(
+                api_key=config.api_key,
+                api_secret=config.api_secret,
+                api_passphrase=config.passphrase,
+            ),
+        )
+        raw = py_client.get_balance()
+        # raw is micro-pUSD (6 decimals): e.g. 21_000_000 = $21.00
+        if isinstance(raw, dict):
+            raw_val = float(raw.get("balance", raw.get("free", raw.get("available", 0))))
+        else:
+            raw_val = float(raw)
+        free_collateral = raw_val / 1_000_000.0
+        LOGGER.info(
+            "polymarket_clob_diagnostics free_collateral=%.4f funder=%s",
+            free_collateral,
+            (funder[:10] + "...") if funder else "unknown",
+        )
+        return free_collateral
+    except Exception as exc:
+        LOGGER.warning("polymarket_clob_balance_check_failed error=%s", exc)
+        return 0.0
+
+
+def _clamp_order_size(requested_usdc: float, config: PolymarketConfig) -> float:
+    """Return the order size clamped to the live CLOB free collateral.
+
+    Returns 0.0 (and logs polymarket_skip_insufficient_collateral) when the
+    CLOB free balance is below _MIN_FREE_COLLATERAL, preventing API failures.
+    """
+    free_collateral = _get_clob_free_collateral(config)
+    if free_collateral < _MIN_FREE_COLLATERAL:
+        LOGGER.warning(
+            "polymarket_skip_insufficient_collateral free_collateral=%.6f "
+            "requested_usdc=%.2f min_required=%.2f",
+            free_collateral, requested_usdc, _MIN_FREE_COLLATERAL,
+        )
+        return 0.0
+    clamped = min(requested_usdc, free_collateral * config.poly_safety_fraction)
+    if clamped < requested_usdc:
+        LOGGER.info(
+            "polymarket_order_size_clamped requested=%.2f clamped=%.2f "
+            "free_collateral=%.4f safety_fraction=%.2f",
+            requested_usdc, clamped, free_collateral, config.poly_safety_fraction,
+        )
+    return clamped
+
+
 @dataclass(frozen=True, slots=True)
 class ExecutionResult:
     """Outcome of a single execute() call."""
@@ -111,10 +196,12 @@ def _place_order(
             "Install it with: pip install py-clob-client-v2"
         ) from exc
 
+    funder = _derive_funder(config)
     py_client = _PyClobClient(
         host=config.clob_base_url,
         key=config.private_key,
-        chain_id=137,  # Polygon mainnet
+        chain=137,  # Polygon mainnet (py_clob_client_v2 uses 'chain', not 'chain_id')
+        funder=funder or None,
         creds=ApiCreds(
             api_key=config.api_key,
             api_secret=config.api_secret,
@@ -207,7 +294,10 @@ def _execute_orderbook_spread(
         )
 
     # Split size proportionally between legs (each leg gets USDC proportional to its ask)
-    n_shares = config.max_trade_usdc / total_cost_per_share
+    trade_usdc = _clamp_order_size(config.max_trade_usdc, config)
+    if trade_usdc <= 0:
+        return ExecutionResult(success=False, error="insufficient_clob_collateral")
+    n_shares = trade_usdc / total_cost_per_share
     yes_usdc = n_shares * opportunity.entry_price_yes
     no_usdc = n_shares * opportunity.entry_price_no
     total_usdc = yes_usdc + no_usdc
@@ -371,7 +461,9 @@ def _execute_correlated_markets(
             success=False, error="buy_price_out_of_valid_range"
         )
 
-    size_usdc = config.max_trade_usdc
+    size_usdc = _clamp_order_size(config.max_trade_usdc, config)
+    if size_usdc <= 0:
+        return ExecutionResult(success=False, error="insufficient_clob_collateral")
 
     sell_order_id: str = ""
     sell_fill: float = 0.0
@@ -499,7 +591,9 @@ def _execute_underround(
     if total_cost_per_share <= 0:
         return ExecutionResult(success=False, error="entry_prices_missing_or_zero")
 
-    size_usdc = min(config.underround_max_trade_usdc, config.max_trade_usdc)
+    size_usdc = _clamp_order_size(min(config.underround_max_trade_usdc, config.max_trade_usdc), config)
+    if size_usdc <= 0:
+        return ExecutionResult(success=False, error="insufficient_clob_collateral")
     n_shares = size_usdc / total_cost_per_share
     yes_usdc = n_shares * opportunity.entry_price_yes
     no_usdc  = n_shares * opportunity.entry_price_no
@@ -617,7 +711,9 @@ def _execute_resolution_carry(
             success=False, error=f"res_carry_invalid_price buy_price={buy_price:.4f}"
         )
 
-    size_usdc = min(config.res_carry_max_trade_usdc, config.max_trade_usdc)
+    size_usdc = _clamp_order_size(min(config.res_carry_max_trade_usdc, config.max_trade_usdc), config)
+    if size_usdc <= 0:
+        return ExecutionResult(success=False, error="insufficient_clob_collateral")
 
     try:
         resp = _place_order(

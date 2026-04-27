@@ -102,6 +102,9 @@ class PolymarketConfig:
     res_carry_min_annualized_edge_pct: float = 50.0
     res_carry_max_trade_usdc: float = 1.00
     res_carry_max_positions: int = 10
+    # --- CLOB collateral sizing ---
+    poly_wallet_address: str = ""    # wallet address tied to pUSD; auto-derived if blank
+    poly_safety_fraction: float = 0.5  # max fraction of free CLOB collateral per trade
 
     def __post_init__(self) -> None:
         if not self.api_key.strip():
@@ -252,4 +255,6 @@ class PolymarketConfig:
             res_carry_min_annualized_edge_pct=float(os.getenv("POLY_RES_CARRY_MIN_ANNUALIZED_EDGE_PCT", "50.0")),
             res_carry_max_trade_usdc=float(os.getenv("POLY_RES_CARRY_MAX_TRADE_USDC", "1.00")),
             res_carry_max_positions=int(os.getenv("POLY_RES_CARRY_MAX_POSITIONS", "10")),
+            poly_wallet_address=_clean_credential(os.getenv("POLY_WALLET_ADDRESS", "")),
+            poly_safety_fraction=float(os.getenv("POLY_SAFETY_FRACTION", "0.5")),
         )

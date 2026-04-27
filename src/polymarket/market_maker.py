@@ -168,8 +168,16 @@ class MarketMaker:
     def _make_client(self) -> Any:
         from py_clob_client_v2.client import ClobClient
         from py_clob_client_v2.clob_types import ApiCreds
+        funder = getattr(self.config, "poly_wallet_address", "") or None
+        if not funder:
+            try:
+                from eth_account import Account  # type: ignore[import]
+                funder = Account.from_key(self.config.private_key).address
+            except Exception:
+                pass
         return ClobClient(
-            CLOB_URL, key=self.config.private_key, chain_id=137,
+            CLOB_URL, key=self.config.private_key, chain=137,
+            funder=funder,
             creds=ApiCreds(api_key=self.config.api_key,
                            api_secret=self.config.api_secret,
                            api_passphrase=self.config.passphrase),

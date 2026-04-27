@@ -200,7 +200,10 @@ def test_execute_live_both_legs_records_open_position(tmp_path: Path) -> None:
     yes_resp = _mock_order_response("ord-yes-1", 0.40)
     no_resp = _mock_order_response("ord-no-1", 0.40)
 
-    with patch("src.polymarket.executor._place_order", side_effect=[yes_resp, no_resp]):
+    with (
+        patch("src.polymarket.executor._get_clob_free_collateral", return_value=100.0),
+        patch("src.polymarket.executor._place_order", side_effect=[yes_resp, no_resp]),
+    ):
         result = execute(_make_opp(), config=config, risk_guard=guard, ledger=ledger)
 
     assert result.success is True
@@ -219,12 +222,15 @@ def test_execute_live_records_correct_fill_price(tmp_path: Path) -> None:
     ledger = _ledger(tmp_path)
     guard = RiskGuard(config=config, ledger=ledger)
 
-    with patch(
-        "src.polymarket.executor._place_order",
-        side_effect=[
-            _mock_order_response("yes-ord", 0.39),
-            _mock_order_response("no-ord", 0.41),
-        ],
+    with (
+        patch("src.polymarket.executor._get_clob_free_collateral", return_value=100.0),
+        patch(
+            "src.polymarket.executor._place_order",
+            side_effect=[
+                _mock_order_response("yes-ord", 0.39),
+                _mock_order_response("no-ord", 0.41),
+            ],
+        ),
     ):
         result = execute(_make_opp(), config=config, risk_guard=guard, ledger=ledger)
 
@@ -242,9 +248,12 @@ def test_execute_live_records_unhedged_when_no_leg_fails(tmp_path: Path) -> None
 
     yes_resp = _mock_order_response("yes-ord", 0.40)
 
-    with patch(
-        "src.polymarket.executor._place_order",
-        side_effect=[yes_resp, RuntimeError("NO leg network timeout")],
+    with (
+        patch("src.polymarket.executor._get_clob_free_collateral", return_value=100.0),
+        patch(
+            "src.polymarket.executor._place_order",
+            side_effect=[yes_resp, RuntimeError("NO leg network timeout")],
+        ),
     ):
         result = execute(_make_opp(), config=config, risk_guard=guard, ledger=ledger)
 
@@ -266,14 +275,18 @@ def test_execute_live_unhedged_position_has_correct_size(tmp_path: Path) -> None
 
     yes_resp = _mock_order_response("yes-ord", 0.40)
 
-    with patch(
-        "src.polymarket.executor._place_order",
-        side_effect=[yes_resp, RuntimeError("timeout")],
+    with (
+        patch("src.polymarket.executor._get_clob_free_collateral", return_value=1000.0),
+        patch(
+            "src.polymarket.executor._place_order",
+            side_effect=[yes_resp, RuntimeError("timeout")],
+        ),
     ):
         execute(opp, config=config, risk_guard=guard, ledger=ledger)
 
     pos = ledger.load()[0]
     # YES leg should be ~half the total (100 out of 200 USDC when both asks are equal)
+    # collateral=1000.0 so clamp (min(200, 500)=200) doesn't reduce size
     assert pos.size_usdc == pytest.approx(100.0, abs=1.0)
 
 
@@ -283,9 +296,12 @@ def test_execute_live_no_leg_first_fails_no_unhedged_recorded(tmp_path: Path) ->
     ledger = _ledger(tmp_path)
     guard = RiskGuard(config=config, ledger=ledger)
 
-    with patch(
-        "src.polymarket.executor._place_order",
-        side_effect=[RuntimeError("YES leg rejected")],
+    with (
+        patch("src.polymarket.executor._get_clob_free_collateral", return_value=100.0),
+        patch(
+            "src.polymarket.executor._place_order",
+            side_effect=[RuntimeError("YES leg rejected")],
+        ),
     ):
         result = execute(_make_opp(), config=config, risk_guard=guard, ledger=ledger)
 
@@ -385,6 +401,7 @@ def test_execute_live_proceeds_when_pol_gas_ok(tmp_path: Path) -> None:
 
     with (
         patch("src.polymarket.executor._check_pol_gas", return_value=True),
+        patch("src.polymarket.executor._get_clob_free_collateral", return_value=100.0),
         patch("src.polymarket.executor._place_order", side_effect=[yes_resp, no_resp]),
     ):
         result = execute(_make_opp(), config=config, risk_guard=guard, ledger=ledger)
