@@ -140,7 +140,7 @@ def _debug_clob_collateral(config: PolymarketConfig) -> None:
         return
 
     try:
-        funder = _derive_funder(config)
+        funder = config.poly_wallet_address
         py_client = _PyClobClient(
             host=config.clob_base_url,
             key=config.private_key,
