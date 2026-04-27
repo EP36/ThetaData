@@ -208,16 +208,31 @@ def _place_order(
         ) from exc
 
     funder = _derive_funder(config)
+    # CLOB login mode: EOA signer may trade through a proxy wallet when
+    # signature_type is 1 or 2 and funder is the proxy wallet address.
     py_client = _PyClobClient(
         host=config.clob_base_url,
         key=config.private_key,
-        chain_id=137,  # Polygon mainnet (py_clob_client_v2 uses 'chain', not 'chain_id')
+        chain_id=137,
+        signature_type=config.poly_signature_type,
         funder=funder or None,
-        creds=ApiCreds(
+    )
+    has_explicit_creds = bool(config.api_key and config.api_secret and config.passphrase)
+    if has_explicit_creds:
+        api_creds = ApiCreds(
             api_key=config.api_key,
             api_secret=config.api_secret,
             api_passphrase=config.passphrase,
-        ),
+        )
+    else:
+        api_creds = py_client.create_or_derive_api_creds()
+    py_client.set_api_creds(api_creds)
+    LOGGER.info(
+        "polymarket_clob_trading_client_initialized funder=%s "
+        "signature_type=%s has_explicit_creds=%s",
+        (funder[:10] + "...") if funder else "none",
+        config.poly_signature_type,
+        has_explicit_creds,
     )
 
     py_side = BUY if side.upper() == "BUY" else SELL

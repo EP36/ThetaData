@@ -36,6 +36,7 @@ def test_config_default_values(monkeypatch: pytest.MonkeyPatch) -> None:
     assert cfg.timeout_seconds == 15.0
     assert cfg.clob_base_url == "https://clob.polymarket.com"
     assert "kalshi" in cfg.kalshi_base_url
+    assert cfg.poly_signature_type == 0
 
 
 def test_config_override_interval_and_edge(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -47,6 +48,25 @@ def test_config_override_interval_and_edge(monkeypatch: pytest.MonkeyPatch) -> N
 
     assert cfg.scan_interval_sec == 60
     assert cfg.min_edge_pct == 3.0
+
+
+def test_config_loads_poly_signature_type(monkeypatch: pytest.MonkeyPatch) -> None:
+    _set_required(monkeypatch)
+    monkeypatch.setenv("POLY_SIGNATURE_TYPE", "2")
+
+    cfg = PolymarketConfig.from_env()
+
+    assert cfg.poly_signature_type == 2
+
+
+def test_config_rejects_invalid_poly_signature_type(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_required(monkeypatch)
+    monkeypatch.setenv("POLY_SIGNATURE_TYPE", "3")
+
+    with pytest.raises(ValueError, match="poly_signature_type"):
+        PolymarketConfig.from_env()
 
 
 def test_config_raises_missing_api_key(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -105,6 +105,7 @@ class PolymarketConfig:
     # --- CLOB collateral sizing ---
     poly_wallet_address: str = ""    # wallet address tied to pUSD; auto-derived if blank
     poly_safety_fraction: float = 0.5  # max fraction of free CLOB collateral per trade
+    poly_signature_type: int = 0     # 0=EOA, 1=Magic/email proxy, 2=browser-wallet proxy
 
     def __post_init__(self) -> None:
         if not self.api_key.strip():
@@ -123,6 +124,8 @@ class PolymarketConfig:
             raise ValueError("max_retries must be non-negative")
         if self.timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be positive")
+        if self.poly_signature_type not in (0, 1, 2):
+            raise ValueError("poly_signature_type must be 0, 1, or 2")
         if self.max_trade_usdc <= 0:
             raise ValueError("max_trade_usdc must be positive")
         if self.max_positions <= 0:
@@ -257,4 +260,5 @@ class PolymarketConfig:
             res_carry_max_positions=int(os.getenv("POLY_RES_CARRY_MAX_POSITIONS", "10")),
             poly_wallet_address=_clean_credential(os.getenv("POLY_WALLET_ADDRESS", "")),
             poly_safety_fraction=float(os.getenv("POLY_SAFETY_FRACTION", "0.5")),
+            poly_signature_type=int(os.getenv("POLY_SIGNATURE_TYPE", "0")),
         )

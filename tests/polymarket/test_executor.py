@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+import types
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -75,6 +77,65 @@ def _ledger(tmp_path: Path) -> PositionsLedger:
 def _guard(tmp_path: Path, config: PolymarketConfig | None = None) -> RiskGuard:
     cfg = config or _make_config()
     return RiskGuard(config=cfg, ledger=_ledger(tmp_path))
+
+
+def _install_fake_py_clob(monkeypatch: pytest.MonkeyPatch) -> type:
+    class FakeApiCreds:
+        def __init__(self, api_key: str, api_secret: str, api_passphrase: str) -> None:
+            self.api_key = api_key
+            self.api_secret = api_secret
+            self.api_passphrase = api_passphrase
+
+    class FakeOrderArgs:
+        def __init__(self, **kwargs: Any) -> None:
+            self.kwargs = kwargs
+
+    class FakeOrderType:
+        GTC = "GTC"
+
+    class FakeClobClient:
+        instances: list["FakeClobClient"] = []
+
+        def __init__(self, **kwargs: Any) -> None:
+            self.kwargs = kwargs
+            self.creds: Any = None
+            self.derived = False
+            FakeClobClient.instances.append(self)
+
+        def create_or_derive_api_creds(self) -> FakeApiCreds:
+            self.derived = True
+            return FakeApiCreds("derived-key", "derived-secret", "derived-pass")
+
+        def set_api_creds(self, creds: FakeApiCreds) -> None:
+            self.creds = creds
+
+        def create_order(self, args: FakeOrderArgs) -> dict[str, Any]:
+            self.order_args = args.kwargs
+            return {"signed": True}
+
+        def post_order(self, signed: dict[str, Any], order_type: str) -> dict[str, Any]:
+            return {"orderID": "fake-order", "signed": signed, "order_type": order_type}
+
+    client_mod = types.ModuleType("py_clob_client_v2.client")
+    client_mod.ClobClient = FakeClobClient
+    clob_types_mod = types.ModuleType("py_clob_client_v2.clob_types")
+    clob_types_mod.ApiCreds = FakeApiCreds
+    clob_types_mod.OrderArgs = FakeOrderArgs
+    clob_types_mod.OrderType = FakeOrderType
+    constants_mod = types.ModuleType("py_clob_client_v2.order_builder.constants")
+    constants_mod.BUY = "BUY"
+    constants_mod.SELL = "SELL"
+
+    monkeypatch.setitem(sys.modules, "py_clob_client_v2", types.ModuleType("py_clob_client_v2"))
+    monkeypatch.setitem(sys.modules, "py_clob_client_v2.client", client_mod)
+    monkeypatch.setitem(sys.modules, "py_clob_client_v2.clob_types", clob_types_mod)
+    monkeypatch.setitem(
+        sys.modules,
+        "py_clob_client_v2.order_builder",
+        types.ModuleType("py_clob_client_v2.order_builder"),
+    )
+    monkeypatch.setitem(sys.modules, "py_clob_client_v2.order_builder.constants", constants_mod)
+    return FakeClobClient
 
 
 # ---------------------------------------------------------------------------
@@ -425,6 +486,54 @@ def test_execute_dry_run_skips_pol_gas_check(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # _place_order import guard
 # ---------------------------------------------------------------------------
+
+def test_place_order_initializes_proxy_signature_and_explicit_creds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_client = _install_fake_py_clob(monkeypatch)
+    config = _make_config(
+        poly_wallet_address="0x0b3a9b2175a68eceff72d2a28ce9de598f23de76",
+        poly_signature_type=2,
+    )
+
+    resp = _place_order(config, token_id="t", size_usdc=10.0, price=0.5, side="BUY")
+
+    client = fake_client.instances[0]
+    assert resp["orderID"] == "fake-order"
+    assert client.kwargs == {
+        "host": "https://clob.polymarket.com",
+        "key": "pk",
+        "chain_id": 137,
+        "signature_type": 2,
+        "funder": "0x0b3a9b2175a68eceff72d2a28ce9de598f23de76",
+    }
+    assert client.creds.api_key == "k"
+    assert client.creds.api_secret == "s"
+    assert client.creds.api_passphrase == "p"
+    assert client.derived is False
+    assert client.order_args["side"] == "BUY"
+
+
+def test_place_order_derives_api_creds_when_config_creds_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_client = _install_fake_py_clob(monkeypatch)
+    config = _make_config(
+        poly_wallet_address="0x0b3a9b2175a68eceff72d2a28ce9de598f23de76",
+        poly_signature_type=1,
+    )
+    config.api_key = ""
+    config.api_secret = ""
+    config.passphrase = ""
+
+    _place_order(config, token_id="t", size_usdc=10.0, price=0.5, side="SELL")
+
+    client = fake_client.instances[0]
+    assert client.kwargs["signature_type"] == 1
+    assert client.derived is True
+    assert client.creds.api_key == "derived-key"
+    assert client.order_args["side"] == "SELL"
+
 
 def test_place_order_raises_runtime_error_when_py_clob_missing() -> None:
     """_place_order should raise RuntimeError with a helpful message if the
