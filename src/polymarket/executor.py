@@ -117,18 +117,23 @@ def _get_clob_free_collateral(config: PolymarketConfig) -> float:
             ),
         )
         raw = py_client.get_balance()
-        # raw is micro-pUSD (6 decimals): e.g. 21_000_000 = $21.00
-        if isinstance(raw, dict):
-            raw_val = float(raw.get("balance", raw.get("free", raw.get("available", 0))))
-        else:
-            raw_val = float(raw)
-        free_collateral = raw_val / 1_000_000.0
+        # # raw is micro-pUSD (6 decimals): e.g. 21_000_000 = $21.00
+        # if isinstance(raw, dict):
+        #     raw_val = float(raw.get("balance", raw.get("free", raw.get("available", 0))))
+        # else:
+        #     raw_val = float(raw)
+        # free_collateral = raw_val / 1_000_000.0
+        # LOGGER.info(
+        #     "polymarket_clob_diagnostics free_collateral=%.4f funder=%s",
+        #     free_collateral,
+        #     (funder[:10] + "...") if funder else "unknown",
+        # )
+        # return free_collateral
         LOGGER.info(
-            "polymarket_clob_diagnostics free_collateral=%.4f funder=%s",
-            free_collateral,
+            "polymarket_clob_client_initialized funder=%s",
             (funder[:10] + "...") if funder else "unknown",
         )
-        return free_collateral
+        return 0.0
     except Exception as exc:
         LOGGER.warning("polymarket_clob_balance_check_failed error=%s", exc)
         return 0.0

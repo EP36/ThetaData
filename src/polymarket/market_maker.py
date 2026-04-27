@@ -166,8 +166,8 @@ class MarketMaker:
         self._last_refresh: float = 0.0
 
     def _make_client(self) -> Any:
-        from py_clob_client_v2.client import ClobClient
-        from py_clob_client_v2.clob_types import ApiCreds
+        from py_clob_client_v2.client import ClobClient # type: ignore[import]
+        from py_clob_client_v2.clob_types import ApiCreds # type: ignore[import]
         funder = getattr(self.config, "poly_wallet_address", "") or None
         if not funder:
             try:
