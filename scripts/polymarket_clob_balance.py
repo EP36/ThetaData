@@ -3,7 +3,7 @@ import os
 import sys
 from decimal import Decimal
 
-from py_clob_client_v2 import ClobClientV2
+from py_clob_client_v2 import ClobClient
 
 HOST = os.getenv("POLY_CLOB_HOST", "https://clob.polymarket.com")
 CHAIN_ID = int(os.getenv("POLY_CHAIN_ID", "137"))
@@ -27,7 +27,7 @@ def main():
 
     pk = PRIVATE_KEY if PRIVATE_KEY.startswith("0x") else "0x" + PRIVATE_KEY
 
-    client = ClobClientV2(
+    client = ClobClient(
         host=HOST,
         key=pk,
         chain_id=CHAIN_ID,
