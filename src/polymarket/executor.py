@@ -108,7 +108,7 @@ def _get_clob_free_collateral(config: PolymarketConfig) -> float:
         py_client = _PyClobClient(
             host=config.clob_base_url,
             key=config.private_key,
-            chain=137,
+            chain_id=137,
             funder=funder or None,
             creds=ApiCreds(
                 api_key=config.api_key,
@@ -200,7 +200,7 @@ def _place_order(
     py_client = _PyClobClient(
         host=config.clob_base_url,
         key=config.private_key,
-        chain=137,  # Polygon mainnet (py_clob_client_v2 uses 'chain', not 'chain_id')
+        chain_id=137,  # Polygon mainnet (py_clob_client_v2 uses 'chain', not 'chain_id')
         funder=funder or None,
         creds=ApiCreds(
             api_key=config.api_key,

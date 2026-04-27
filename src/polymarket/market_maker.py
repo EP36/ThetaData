@@ -176,7 +176,7 @@ class MarketMaker:
             except Exception:
                 pass
         return ClobClient(
-            CLOB_URL, key=self.config.private_key, chain=137,
+            CLOB_URL, key=self.config.private_key, chain_id=137,
             funder=funder,
             creds=ApiCreds(api_key=self.config.api_key,
                            api_secret=self.config.api_secret,
