@@ -30,7 +30,7 @@ def main():
     client = ClobClient(
         host=HOST,
         key=pk,
-        chain=CHAIN,
+        chain_id=CHAIN,
         signature_type=SIGNATURE_TYPE,
         funder=FUNDER,
     )
