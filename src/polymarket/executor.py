@@ -116,7 +116,7 @@ def _get_clob_free_collateral(config: PolymarketConfig) -> float:
                 api_passphrase=config.passphrase,
             ),
         )
-        raw = py_client.get_balance()
+        # raw = py_client.get_balance()
         # # raw is micro-pUSD (6 decimals): e.g. 21_000_000 = $21.00
         # if isinstance(raw, dict):
         #     raw_val = float(raw.get("balance", raw.get("free", raw.get("available", 0))))
