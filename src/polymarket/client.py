@@ -127,3 +127,57 @@ class ClobClient:
     def fetch_market_detail(self, condition_id: str) -> dict[str, Any]:
         """Fetch full market detail including resolution status and end date."""
         return self._get(f"/markets/{condition_id}")
+
+def _debug_clob_collateral(config: PolymarketConfig) -> None:
+    """Log CLOB collateral balance/allowance for the current signer+funder."""
+    try:
+        from py_clob_client_v2.client import ClobClient as _PyClobClient  # type: ignore[import]
+        from py_clob_client_v2.clob_types import (  # type: ignore[import]
+            ApiCreds,
+            BalanceAllowanceParams,
+            AssetType,
+        )
+    except ImportError:
+        LOGGER.warning("py-clob-client-v2 not installed; cannot debug CLOB collateral")
+        return
+
+    funder = _derive_funder(config)
+    py_client = _PyClobClient(
+        host=config.clob_base_url,
+        key=config.private_key,
+        chain_id=137,
+        signature_type=config.poly_signature_type,
+        funder=funder or None,
+    )
+
+    if config.api_key and config.api_secret and config.passphrase:
+        creds = ApiCreds(
+            api_key=config.api_key,
+            api_secret=config.api_secret,
+            api_passphrase=config.passphrase,
+        )
+        py_client.set_api_creds(creds)
+        has_explicit = True
+    else:
+        creds = py_client.create_or_derive_api_creds()
+        py_client.set_api_creds(creds)
+        has_explicit = False
+
+    try:
+        result = py_client.get_balance_allowance(
+            BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
+        )
+        balance_usdc = int(result["balance"]) / 1e6
+        allowance_usdc = int(result["allowance"]) / 1e6
+        LOGGER.info(
+            "polymarket_clob_collateral_debug funder=%s signature_type=%s "
+            "has_explicit_creds=%s balance_usdc=%.4f allowance_usdc=%.4f raw=%s",
+            (funder[:10] + "...") if funder else "none",
+            getattr(config, "poly_signature_type", None),
+            has_explicit,
+            balance_usdc,
+            allowance_usdc,
+            result,
+        )
+    except Exception as exc:
+        LOGGER.error("polymarket_clob_collateral_debug_failed error=%s", exc)
