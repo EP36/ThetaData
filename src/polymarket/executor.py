@@ -142,23 +142,29 @@ def _get_clob_free_collateral(config: PolymarketConfig) -> float:
 def _clamp_order_size(requested_usdc: float, config: PolymarketConfig) -> float:
     """Return the order size clamped to the live CLOB free collateral.
 
-    Returns 0.0 (and logs polymarket_skip_insufficient_collateral) when the
-    CLOB free balance is below _MIN_FREE_COLLATERAL, preventing API failures.
+    TEMP: For current py_clob_client_v2, we bypass the free-collateral check
+    and rely on CLOB 400 errors if balance/allowance is insufficient.
     """
     free_collateral = _get_clob_free_collateral(config)
-    if free_collateral < _MIN_FREE_COLLATERAL:
+
+    # TEMPORARY BYPASS: don't block on our preflight check
+    if free_collateral <= 0:
         LOGGER.warning(
-            "polymarket_skip_insufficient_collateral free_collateral=%.6f "
-            "requested_usdc=%.2f min_required=%.2f",
-            free_collateral, requested_usdc, _MIN_FREE_COLLATERAL,
+            "polymarket_collateral_check_bypassed free_collateral=%.6f requested_usdc=%.2f",
+            free_collateral,
+            requested_usdc,
         )
-        return 0.0
+        return requested_usdc
+
     clamped = min(requested_usdc, free_collateral * config.poly_safety_fraction)
     if clamped < requested_usdc:
         LOGGER.info(
             "polymarket_order_size_clamped requested=%.2f clamped=%.2f "
             "free_collateral=%.4f safety_fraction=%.2f",
-            requested_usdc, clamped, free_collateral, config.poly_safety_fraction,
+            requested_usdc,
+            clamped,
+            free_collateral,
+            config.poly_safety_fraction,
         )
     return clamped
 
