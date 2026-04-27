@@ -91,6 +91,7 @@ def _assert_wallet_key_match(config: PolymarketConfig) -> None:
         )
 
     LOGGER.info("polymarket_wallet_verified address=%s", derived[:10] + "...")
+    _debug_clob_collateral(config)
 
 def _run_ai_analysis_cycle() -> None:
     """Run the Phase 7 AI analysis (schedule-aware, idempotent)."""
