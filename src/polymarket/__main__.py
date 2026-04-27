@@ -53,13 +53,17 @@ def _run_tuning_cycle(config: PolymarketConfig) -> None:
 
 
 def _assert_wallet_key_match(config: PolymarketConfig) -> None:
-    """Raise RuntimeError if POLY_WALLET_ADDRESS doesn't match POLY_PRIVATE_KEY.
+    """Raise RuntimeError if POLY_WALLET doesn't match POLY_PRIVATE_KEY.
 
-    Skipped silently when POLY_WALLET_ADDRESS is unset or eth_account is missing.
+    For proxy wallets, POLY_WALLET_ADDRESS (the proxy/funder) is expected to
+    differ from the signer EOA, so we only check POLY_WALLET here.
+
+    Skipped silently when POLY_WALLET is unset or eth_account is missing.
     Called once on startup, before the scan loop begins.
     """
-    configured_address = os.getenv("POLY_WALLET_ADDRESS", "").strip()
-    if not configured_address:
+    # Use the signer EOA for this sanity check, not the proxy wallet.
+    configured_signer = os.getenv("POLY_WALLET", "").strip()
+    if not configured_signer:
         return
 
     try:
@@ -71,17 +75,22 @@ def _assert_wallet_key_match(config: PolymarketConfig) -> None:
     try:
         derived: str = Account.from_key(config.private_key).address
     except Exception as exc:
-        LOGGER.warning("wallet_key_check_skipped reason=key_derivation_failed error=%s", exc)
+        LOGGER.warning(
+            "wallet_key_check_skipped reason=key_derivation_failed error=%s", exc
+        )
         return
 
-    if derived.lower() != configured_address.lower():
+    if derived.lower() != configured_signer.lower():
         raise RuntimeError(
-            f"POLY_WALLET_ADDRESS ({configured_address}) does not match the address "
-            f"derived from POLY_PRIVATE_KEY ({derived[:10]}...) — "
-            "check your .env configuration before going live"
+            "POLY_WALLET ({configured}) does not match the address "
+            "derived from POLY_PRIVATE_KEY ({derived_prefix}...) — check your "
+            ".env configuration before going live".format(
+                configured=configured_signer,
+                derived_prefix=derived[:10],
+            )
         )
-    LOGGER.info("polymarket_wallet_verified address=%s", derived[:10] + "...")
 
+    LOGGER.info("polymarket_wallet_verified address=%s", derived[:10] + "...")
 
 def _run_ai_analysis_cycle() -> None:
     """Run the Phase 7 AI analysis (schedule-aware, idempotent)."""
