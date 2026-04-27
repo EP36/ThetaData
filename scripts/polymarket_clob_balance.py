@@ -3,15 +3,13 @@ import os
 import sys
 from decimal import Decimal
 
-from py_clob_client.client_v2 import ClobClient
+from py_clob_client_v2 import ClobClientV2
 
 HOST = os.getenv("POLY_CLOB_HOST", "https://clob.polymarket.com")
 CHAIN_ID = int(os.getenv("POLY_CHAIN_ID", "137"))
 
-# These should match what Trauto uses for Polymarket
 PRIVATE_KEY = os.getenv("POLY_PRIVATE_KEY") or os.getenv("POLYGON_PRIVATE_KEY")
 FUNDER = os.getenv("POLY_WALLET_ADDRESS")  # address that actually holds pUSD
-
 
 DECIMALS = 6
 
@@ -25,30 +23,28 @@ def main():
         raise SystemExit("Set POLY_PRIVATE_KEY (or POLYGON_PRIVATE_KEY) in env.")
 
     if not FUNDER:
-        raise SystemExit("Set POLY_WALLET_ADDRESS to your Polymarket wallet address.")
+        raise SystemExit("Set POLY_WALLET_ADDRESS to your Polymarket wallet / funder address.")
 
-    # Normalize 0x prefix
     pk = PRIVATE_KEY if PRIVATE_KEY.startswith("0x") else "0x" + PRIVATE_KEY
 
-    client = ClobClient(
-        HOST,
+    client = ClobClientV2(
+        host=HOST,
         key=pk,
         chain_id=CHAIN_ID,
-        signature_type=1,  # magic/email-style signatures
+        signature_type=1,
         funder=FUNDER,
     )
     client.set_api_creds(client.create_or_derive_api_creds())
 
-    info = client.get_account_info(GetAccountInfoParams())
-    # Shape is defined in py_clob_client docs; typically includes freeCollateral, allowance, balances, etc.
+    info = client.get_account_info()
+
     print("Raw account info:")
     print(info)
 
-    free_collateral = info.get("freeCollateral", 0)
-    used_collateral = info.get("usedCollateral", 0)
+    free_collateral = int(info.get("freeCollateral", 0))
+    used_collateral = int(info.get("usedCollateral", 0))
     total_collateral = free_collateral + used_collateral
-
-    allowance = info.get("allowance", 0)
+    allowance = int(info.get("allowance", 0))
 
     print("\nCLOB collateral state (pUSD units):")
     print(f"  Free collateral : {fmt_units(free_collateral)}")
