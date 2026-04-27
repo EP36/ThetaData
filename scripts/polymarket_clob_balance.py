@@ -3,8 +3,7 @@ import os
 import sys
 from decimal import Decimal
 
-from py_clob_client.client import ClobClient
-from py_clob_client.clob_types import GetAccountInfoParams
+from py_clob_client.client_v2 import ClobClient
 
 HOST = os.getenv("POLY_CLOB_HOST", "https://clob.polymarket.com")
 CHAIN_ID = int(os.getenv("POLY_CHAIN_ID", "137"))
