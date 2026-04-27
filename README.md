@@ -1,8 +1,30 @@
-# Trauto — Multi-Strategy Crypto Arb Bot
+# Trauto — Unified Algorithmic Trading Platform
 
-> **Status (April 2026):** Worker running live on Hetzner Helsinki (`ubuntu-4gb-hel1-1`). All 3 strategies are scanning; no errors in logs. Opportunities are being ranked but thresholds have not been crossed yet.
+> **Status (April 2026):** Worker running live on Hetzner Helsinki (`ubuntu-4gb-hel1-1`). All three crypto arb strategies are scanning; no errors in logs. Opportunities are being ranked but thresholds have not been crossed yet.
 
-Trauto is a modular Python 3.12 arbitrage bot that runs three independent carry/arb strategies on a single VPS and uses a composite scoring model to rank opportunities. **Capital does not move automatically between venues today** — rebalancing across wallets is on the roadmap.
+Trauto is a modular **Python 3.12** algorithmic trading platform that runs three independent carry/arb strategies on a single VPS and uses a composite scoring model to rank opportunities. A new `trauto/` package (Phase 7) is being migrated in alongside the original `src/` engine — both coexist until the migration is complete.
+
+> **Capital does not move automatically between venues.** Cross-venue rebalancing is on the roadmap — see [Roadmap](#roadmap).
+
+---
+
+## Table of Contents
+
+- [Architecture Overview](#architecture-overview)
+- [Live Strategies](#live-strategies)
+  - [1. Polymarket Arbitrage](#1-polymarket-arbitrage-polymarket)
+  - [2. Hyperliquid Funding-Rate Arb](#2-hyperliquid-funding-rate-arb-funding_arbmonitorpy)
+  - [3. Coinbase Spot + HL Perp Basis Arb](#3-coinbase-spot--hl-perp-basis-arb-funding_arbcoinbase_clientpy)
+- [Capital Flow Map](#capital-flow-map)
+- [Capital Allocator](#capital-allocator-srccapitalallocatorpy)
+- [What to Deposit Where](#what-to-deposit-where)
+- [Configuration](#configuration-etctrautoenv)
+- [Project Structure](#project-structure)
+- [Phase 7 — Unified Engine](#phase-7--unified-engine-trauto)
+- [Legacy Equity Strategies](#legacy-equity-paper-trading-strategies)
+- [VPS Operations](#vps-operations-hetzner-helsinki)
+- [Safety Defaults](#safety-defaults)
+- [Roadmap](#roadmap)
 
 ---
 
@@ -21,16 +43,17 @@ Trauto is a modular Python 3.12 arbitrage bot that runs three independent carry/
 ├── src/
 │   └── capital/
 │       └── allocator.py   ← composite opportunity scorer (read-only)
+├── trauto/                ← Phase 7 unified engine (migration in progress)
 └── /etc/trauto/env        ← all secrets & config (not in repo)
 ```
 
-### Worker boot order
+### Worker Boot Order
 
 1. `trauto-worker` starts, reads `/etc/trauto/env`
 2. Three strategy threads start in parallel:
    - Polymarket arbitrage monitor
    - Hyperliquid funding-rate monitor (`funding_arb/monitor.py`)
-   - Coinbase spot → HL perp basis monitor (via `coinbase_client.py`)
+   - Coinbase spot → HL perp basis monitor (`coinbase_client.py`)
 3. Each cycle calls `CapitalAllocator.rank()` to score live opportunities
 4. Orders are placed only when an opportunity clears the configured threshold **and** the relevant `DRY_RUN` flag is `false`
 
@@ -120,7 +143,7 @@ Trauto is a modular Python 3.12 arbitrage bot that runs three independent carry/
                     (strat 3 perp leg)
 ```
 
-### Key constraint: capital is venue-siloed
+### Key Constraint: Capital Is Venue-Siloed
 
 Capital deposited to Polygon **cannot** fill a Hyperliquid opportunity without a manual bridge + withdraw. The `CapitalAllocator` ranks opportunities by composite score but **does not move capital between venues**. If HL funding arb is returning 200 % annualized and Polymarket is returning 50 %, Trauto will *prefer* the HL opportunity when sizing new trades — but Polymarket collateral locked in existing positions stays there.
 
@@ -166,6 +189,8 @@ The HL vault is shared between strategies 2 and 3. The monitor compares `funding
 
 ## Configuration (`/etc/trauto/env`)
 
+All secrets and runtime config live in `/etc/trauto/env` on the VPS — never committed to the repo. Copy `.env.example` for a full annotated template.
+
 ```bash
 # --- Polymarket ---
 POLY_API_KEY=...
@@ -199,33 +224,74 @@ DATABASE_URL=postgresql://...
 
 ---
 
-## Roadmap
+## Project Structure
 
-### Near-term
-- [ ] **April 28** — Migrate Polymarket integration to CLOB v2 API
-- [ ] Alerting (Telegram / webhook) when an opportunity clears threshold
-- [ ] Dashboard widget showing live `capital_rank` scores from allocator
-
-### Cross-venue capital unification (not yet implemented)
-
-The current allocator ranks opportunities but does not rebalance wallets. To unlock true capital efficiency across venues, the following would need to be added:
-
-1. **Withdrawal trigger** — when a venue's best opportunity score is significantly below the global top score (configurable gap, e.g. `∆score > 0.15`), initiate a partial or full withdrawal from the lower-scoring venue.
-2. **Bridge executor** — a module that calls the appropriate bridge (Polygon → Arbitrum for HL, or HL withdrawal → Arbitrum → Coinbase) and waits for confirmation before marking funds as available.
-3. **Deposit acknowledger** — polls the destination venue API to confirm the deposit landed before allowing the allocator to size new trades there.
-4. **Position unwind gating** — locked Polymarket collateral can only be withdrawn after positions are closed; the rebalancer needs to know the difference between *free capital* and *locked collateral*.
-
-Example flow (not live):
 ```
-Polymarket best:   50% annualized  → score 0.42
-HL funding best:  200% annualized  → score 0.81
-∆ = 0.39 > threshold → trigger withdrawal from Polymarket
-  1. Close/wait for Polymarket positions to expire
-  2. Withdraw USDC.e from Polygon wallet
-  3. Bridge to Arbitrum
-  4. Deposit into HL vault
-  5. Allocator now sizes HL trades with larger capital
+src/
+  backtest/          ← historical backtesting engine
+  capital/
+    allocator.py     ← cross-strategy opportunity scorer
+  strategies/        ← MA crossover, RSI, VWAP, breakout (equity)
+  risk/              ← position limits, drawdown kill switch
+  api.py             ← FastAPI web service
+trauto/              ← Phase 7 unified engine (migration in progress)
+  config/            ← layered config loader (default.json + env vars)
+  core/              ← async engine, unified executor, GlobalRiskManager
+  brokers/           ← BrokerInterface ABC + Alpaca / Polymarket impls
+  strategies/        ← BaseStrategy + Alpaca & Polymarket wrappers
+  signals/           ← BtcSignals, tuner hot-reload
+  backtester/        ← BacktestRunner (delegates to src.backtest)
+  dashboard/         ← FastAPI router (/api/engine/*, /api/strategies/*)
+funding_arb/
+  monitor.py         ← funding + basis scan loop
+  executor.py        ← HL order placement
+  coinbase_client.py ← Coinbase Advanced Trade integration
+polymarket/          ← CLOB v2 arb logic
+apps/web/            ← Next.js dashboard
+deploy/
+  setup.sh           ← first-time VPS provisioning
+  update.sh          ← rolling deploy
+data/
+  engine_state.json  ← emergency stop persistence
+  strategy_config.json ← per-strategy enabled/allocation/schedule
+tests/
+requirements.txt
+.env.example
 ```
+
+---
+
+## Phase 7 — Unified Engine (`trauto/`)
+
+The `trauto/` package is being migrated in **alongside** `src/` — old tests still run; nothing is deleted until the migration is complete.
+
+| Layer | Package | Entry point |
+|-------|---------|-------------|
+| Engine | `trauto.core.engine` | `TradingEngine.start()` |
+| Config | `trauto.config` | `config.get("key")` |
+| Brokers | `trauto.brokers` | `BrokerInterface` |
+| Strategies | `trauto.strategies` | `BaseStrategy` |
+| Risk | `trauto.core.risk` | `GlobalRiskManager` |
+| Signals | `trauto.signals` | `BtcSignals` |
+| Backtester | `trauto.backtester` | `BacktestRunner` |
+| Dashboard API | `trauto.dashboard.api` | FastAPI router |
+
+**Key design decisions:**
+- **Async throughout** — `asyncio` engine; blocking broker calls wrapped in `asyncio.to_thread()`. Tick loop targets 100 ms (10 ticks/sec).
+- **Dry-run default** — `engine.dry_run=true` in `config/default.json`; must be explicitly disabled.
+- **Emergency stop** — persisted to `data/engine_state.json` before any stop completes; cleared only via `POST /api/engine/start`.
+- **Circuit breaker** — trips after 3 consecutive broker errors; auto-resumes after cooldown; 3 trips/hour → `manual_resume_required`.
+- **Config layering** — `default.json` → `config/local.json` → env vars (env wins).
+
+For the full architecture spec and go-live checklist, see [`ARCHITECTURE.md`](ARCHITECTURE.md).
+
+---
+
+## Legacy: Equity Paper-Trading Strategies
+
+The original codebase includes equity paper-trading strategies (MA crossover, RSI, VWAP, breakout) running against Alpaca or synthetic data. These live under `src/strategies/` and `src/backtest/` and are available for backtesting and research, but **are not the active production workflow**.
+
+For the full original paper-trading documentation (API endpoints, backtest engine, Render deployment), see [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
 ---
 
@@ -256,7 +322,7 @@ Verify this IP is not blocked by Polymarket before enabling live trading.
 
 ## Safety Defaults
 
-All execution flags default to **dry-run / disabled**. To place real orders you must explicitly set in `/etc/trauto/env`:
+All execution flags default to **dry-run / disabled**. To place real orders you must explicitly set the following in `/etc/trauto/env`:
 
 | Flag | Default | Enable live |
 |------|---------|-------------|
@@ -268,34 +334,31 @@ All execution flags default to **dry-run / disabled**. To place real orders you 
 
 ---
 
-## Project Structure
+## Roadmap
 
+### Near-term
+- [ ] **April 28** — Migrate Polymarket integration to CLOB v2 API
+- [ ] Alerting (Telegram / webhook) when an opportunity clears threshold
+- [ ] Dashboard widget showing live `capital_rank` scores from allocator
+- [ ] Complete Phase 7 migration: retire `src/` legacy modules after `trauto/` tests go green
+
+### Cross-venue capital unification (not yet implemented)
+
+The current allocator ranks opportunities but does not rebalance wallets. To unlock true capital efficiency across venues, the following would need to be added:
+
+1. **Withdrawal trigger** — when a venue's best opportunity score is significantly below the global top score (configurable gap, e.g. `∆score > 0.15`), initiate a partial or full withdrawal from the lower-scoring venue.
+2. **Bridge executor** — calls the appropriate bridge (Polygon → Arbitrum for HL, or HL withdrawal → Arbitrum → Coinbase) and waits for confirmation before marking funds as available.
+3. **Deposit acknowledger** — polls the destination venue API to confirm the deposit landed before allowing the allocator to size new trades there.
+4. **Position unwind gating** — locked Polymarket collateral can only be withdrawn after positions are closed; the rebalancer needs to distinguish *free capital* from *locked collateral*.
+
+**Example flow (not live):**
 ```
-src/
-  backtest/          ← historical backtesting engine
-  capital/
-    allocator.py     ← cross-strategy opportunity scorer
-  strategies/        ← MA crossover, RSI, VWAP, breakout
-  risk/              ← position limits, drawdown kill switch
-  api.py             ← FastAPI web service
-funding_arb/
-  monitor.py         ← funding + basis scan loop
-  executor.py        ← HL order placement
-  coinbase_client.py ← Coinbase Advanced Trade integration
-polymarket/          ← CLOB v2 arb logic
-apps/web/            ← Next.js dashboard
-deploy/
-  setup.sh           ← first-time VPS provisioning
-  update.sh          ← rolling deploy
-tests/
-requirements.txt
-.env.example
+Polymarket best:   50% annualized  → score 0.42
+HL funding best:  200% annualized  → score 0.81
+∆ = 0.39 > threshold → trigger withdrawal from Polymarket
+  1. Close/wait for Polymarket positions to expire
+  2. Withdraw USDC.e from Polygon wallet
+  3. Bridge to Arbitrum
+  4. Deposit into HL vault
+  5. Allocator now sizes HL trades with larger capital
 ```
-
----
-
-## Legacy: Equity Paper-Trading Strategies
-
-The original README documented equity paper-trading strategies (MA crossover, RSI, VWAP, breakout) running against Alpaca or synthetic data. That system remains available under `src/strategies/` and `src/backtest/` for backtesting and paper-trading research, but **it is not the active production workflow**. The active production workflow is the three crypto arb strategies documented above.
-
-For the full original paper-trading documentation (API endpoints, backtest engine, Render deployment), see [`ARCHITECTURE.md`](ARCHITECTURE.md).
