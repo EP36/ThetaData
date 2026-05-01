@@ -194,20 +194,39 @@ def execute_spot_market_sell(asset: str, base_size: float) -> dict[str, Any]:
         raise
 
 
-def get_spot_balance(asset: str) -> float:
-    """Return available balance for asset in Coinbase account. 0.0 on error."""
+def get_spot_balance(currency: str = "USD") -> float:
+    """Return available spot balance for a given currency from Coinbase Advanced Trade."""
     cb = get_coinbase_client()
     if cb is None:
         return 0.0
+
+    target = (currency or "").upper()
+
     try:
-        resp = cb.get_accounts()
-        accounts = getattr(resp, "accounts", []) or []
-        for acct in accounts:
-            if getattr(acct, "currency", None) == asset:
-                avail = getattr(acct, "available_balance", None)
-                if avail is not None:
-                    return float(getattr(avail, "value", 0) or 0)
-        return 0.0
+        resp = cb.list_accounts()
+        accounts = getattr(resp, "accounts", None) or []
     except Exception as exc:
-        LOGGER.debug("coinbase_balance_failed asset=%s error=%s", asset, exc)
+        LOGGER.warning("coinbase_list_accounts_failed currency=%s error=%s", target, exc)
         return 0.0
+
+    for acct in accounts:
+        acct_currency = str(getattr(acct, "currency", "") or "").upper()
+        if acct_currency != target:
+            continue
+
+        available = getattr(acct, "available_balance", None)
+        value = getattr(available, "value", None)
+
+        try:
+            bal = float(value) if value is not None else 0.0
+        except (TypeError, ValueError):
+            bal = 0.0
+
+        LOGGER.info(
+            "coinbase_spot_balance currency=%s balance=%.8f",
+            target, bal,
+        )
+        return bal
+
+    LOGGER.info("coinbase_spot_balance currency=%s balance=0.00000000 reason=not_found", target)
+    return 0.0
