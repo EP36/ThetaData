@@ -7,8 +7,9 @@ Never modifies Alpaca files or any other broker integration.
 from __future__ import annotations
 
 import logging
+import os
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from src.polymarket.config import PolymarketConfig
@@ -23,6 +24,38 @@ _MIN_FREE_COLLATERAL = 0.05  # skip order if CLOB free collateral is below this 
 
 _POLYGON_RPC_URL = "https://polygon-rpc.com"
 _MIN_POL_GAS = 0.005  # minimum POL required to cover on-chain transaction gas
+
+# Per-process cache: set to True once L1 derive-based preflight succeeds.
+# Static L2 creds bypass this entirely (no network call needed).
+_l1_preflight_passed: bool = False
+
+
+# ---------------------------------------------------------------------------
+# Static L2 credentials (preferred over L1 derivation)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True, slots=True)
+class _StaticL2Creds:
+    """L2 API credentials supplied as static env vars, bypassing L1 key derivation."""
+    key: str
+    secret: str
+    passphrase: str
+
+
+def load_static_l2_creds() -> _StaticL2Creds | None:
+    """Return static L2 creds if POLY_L2_API_KEY, POLY_L2_API_SECRET, and
+    POLY_L2_API_PASSPHRASE are all set and non-empty; otherwise return None.
+
+    When present, the executor skips all /auth/api-key and /auth/derive-api-key
+    calls and passes these credentials directly to ClobClient.set_api_creds().
+    Set all three in /etc/trauto/env before restarting the worker.
+    """
+    key = os.getenv("POLY_L2_API_KEY", "").strip()
+    secret = os.getenv("POLY_L2_API_SECRET", "").strip()
+    passphrase = os.getenv("POLY_L2_API_PASSPHRASE", "").strip()
+    if key and secret and passphrase:
+        return _StaticL2Creds(key=key, secret=secret, passphrase=passphrase)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -104,18 +137,20 @@ def _get_clob_free_collateral(config: PolymarketConfig) -> float:
         return 0.0
 
     funder = _derive_funder(config)
+    static_creds = load_static_l2_creds()
     try:
         py_client = _PyClobClient(
             host=config.clob_base_url,
             key=config.private_key,
             chain_id=137,
             funder=funder or None,
-            creds=ApiCreds(
-                api_key=config.api_key,
-                api_secret=config.api_secret,
-                api_passphrase=config.passphrase,
-            ),
         )
+        if static_creds is not None:
+            py_client.set_api_creds(ApiCreds(
+                api_key=static_creds.key,
+                api_secret=static_creds.secret,
+                api_passphrase=static_creds.passphrase,
+            ))
         # raw = py_client.get_balance()
         # # raw is micro-pUSD (6 decimals): e.g. 21_000_000 = $21.00
         # if isinstance(raw, dict):
@@ -170,20 +205,39 @@ def _clamp_order_size(requested_usdc: float, config: PolymarketConfig) -> float:
 
 
 def _auth_preflight(config: PolymarketConfig) -> bool:
-    """Run a cheap L2-authenticated call to verify credentials before placing orders.
+    """Verify L2 credentials before any live order placement.
 
-    Mirrors scripts/polymarket_clob_balance.py exactly: derives creds via
-    derive_api_key() then calls get_balance_allowance() as a cheap auth probe.
+    Fast path (L2_STATIC): if POLY_L2_API_* are all set, skips all network
+    calls — just logs and returns True immediately.
 
-    Returns True on success (or if py_clob_client_v2 is not installed — fail open).
-    Returns False only when Polymarket explicitly rejects the credentials.
-    Does NOT raise — callers can gate on the bool.
+    Slow path (L1_DERIVE): derives L2 creds from the L1 private key and
+    calls get_balance_allowance() as a cheap auth probe. Result is cached
+    per-process so /auth/derive-api-key is only hit once per worker restart.
+
+    Returns True on success; False only when Polymarket explicitly rejects creds.
+    Does NOT raise — callers gate on the bool.
     """
+    global _l1_preflight_passed
+
+    # --- Fast path: static L2 creds present, no network call needed ---
+    if load_static_l2_creds() is not None:
+        LOGGER.info("polymarket_auth_preflight status=ok method=L2_STATIC")
+        return True
+
+    # --- Slow path: L1 key derivation ---
+    # Cache successful result per-process to avoid hitting /auth/derive-api-key
+    # on every scan tick (runs every 15 s by default).
+    if _l1_preflight_passed:
+        return True
+
     try:
         from py_clob_client_v2.client import ClobClient as _PyClobClient  # type: ignore[import]
         from py_clob_client_v2.clob_types import BalanceAllowanceParams, AssetType  # type: ignore[import]
     except ImportError:
-        LOGGER.warning("polymarket_auth_preflight status=skip reason=py_clob_client_v2_not_installed")
+        LOGGER.warning(
+            "polymarket_auth_preflight status=skip method=L1_DERIVE "
+            "reason=py_clob_client_v2_not_installed"
+        )
         return True  # library missing is not an auth failure; fail open
 
     funder = _derive_funder(config)
@@ -192,7 +246,8 @@ def _auth_preflight(config: PolymarketConfig) -> bool:
         pk = "0x" + pk
 
     LOGGER.info(
-        "polymarket_auth_preflight attempting funder=%s signature_type=%d chain_id=137",
+        "polymarket_auth_preflight attempting method=L1_DERIVE "
+        "funder=%s signature_type=%d chain_id=137",
         (funder[:10] + "...") if funder else "none",
         config.poly_signature_type,
     )
@@ -204,41 +259,40 @@ def _auth_preflight(config: PolymarketConfig) -> bool:
             signature_type=config.poly_signature_type,
             funder=funder or None,
         )
-        # Derive credentials dynamically — same flow as polymarket_clob_balance.py
         if hasattr(client, "derive_api_key"):
             creds = client.derive_api_key()
         elif hasattr(client, "create_or_derive_api_key"):
             creds = client.create_or_derive_api_key()
         else:
             LOGGER.warning(
-                "polymarket_auth_preflight status=skip reason=no_derive_method "
-                "hint=upgrade_py_clob_client_v2"
+                "polymarket_auth_preflight status=skip method=L1_DERIVE "
+                "reason=no_derive_method hint=set_POLY_L2_API_KEY_instead"
             )
             return True  # can't verify; fail open
 
         client.set_api_creds(creds)
-
         result = client.get_balance_allowance(
             BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
         )
         balance_usdc = int(result.get("balance", 0)) / 1_000_000.0
         allowance_usdc = int(result.get("allowance", 0)) / 1_000_000.0
         LOGGER.info(
-            "polymarket_auth_preflight status=ok funder=%s signature_type=%d "
-            "balance_usdc=%.4f allowance_usdc=%.4f",
+            "polymarket_auth_preflight status=ok method=L1_DERIVE "
+            "funder=%s signature_type=%d balance_usdc=%.4f allowance_usdc=%.4f",
             (funder[:10] + "...") if funder else "none",
             config.poly_signature_type,
             balance_usdc,
             allowance_usdc,
         )
+        _l1_preflight_passed = True
         return True
     except Exception as exc:
         _status = getattr(exc, "status_code", None)
         _body = getattr(exc, "error_msg", str(exc))
         LOGGER.error(
-            "polymarket_auth_preflight status=fail http_status=%s error_message=%r "
-            "funder=%s signature_type=%d "
-            "hint=verify_POLY_SIGNATURE_TYPE_and_API_keys_in_/etc/trauto/env",
+            "polymarket_auth_preflight status=fail method=L1_DERIVE "
+            "http_status=%s error_message=%r funder=%s signature_type=%d "
+            "hint=set_POLY_L2_API_KEY_POLY_L2_API_SECRET_POLY_L2_API_PASSPHRASE_to_bypass_derive",
             _status,
             _body,
             (funder[:10] + "...") if funder else "none",
@@ -298,36 +352,34 @@ def _place_order(
         signature_type=config.poly_signature_type,
         funder=funder or None,
     )
-    # Derive credentials dynamically (same as scripts/polymarket_clob_balance.py).
-    # This ensures the API key matches the current signer+funder+signature_type context
-    # regardless of what is stored in POLY_API_KEY/POLY_API_SECRET env vars.
-    # Falls back to static env credentials only if derivation is unavailable.
-    if hasattr(py_client, "derive_api_key"):
+
+    static_creds = load_static_l2_creds()
+    if static_creds is not None:
+        # L2_STATIC: use pre-configured creds — no /auth/* calls made
+        api_creds = ApiCreds(
+            api_key=static_creds.key,
+            api_secret=static_creds.secret,
+            api_passphrase=static_creds.passphrase,
+        )
+        creds_mode = "L2_STATIC"
+    elif hasattr(py_client, "derive_api_key"):
         api_creds = py_client.derive_api_key()
-        creds_source = "derived"
+        creds_mode = "L1_DERIVE"
     elif hasattr(py_client, "create_or_derive_api_key"):
         api_creds = py_client.create_or_derive_api_key()
-        creds_source = "derived"
-    elif config.api_key and config.api_secret and config.passphrase:
-        api_creds = ApiCreds(
-            api_key=config.api_key,
-            api_secret=config.api_secret,
-            api_passphrase=config.passphrase,
-        )
-        creds_source = "static_env"
+        creds_mode = "L1_DERIVE"
     else:
         raise RuntimeError(
-            "polymarket: no API-key derivation method found on installed "
-            "py_clob_client_v2 and POLY_API_KEY/POLY_API_SECRET/POLY_PASSPHRASE "
-            "are not all set"
+            "polymarket: py_clob_client_v2 has no key-derivation method and "
+            "POLY_L2_API_KEY/POLY_L2_API_SECRET/POLY_L2_API_PASSPHRASE are not set. "
+            "Set those three env vars in /etc/trauto/env and restart the worker."
         )
     py_client.set_api_creds(api_creds)
     LOGGER.info(
-        "polymarket_client_init funder=%s signature_type=%d "
-        "creds_source=%s chain_id=137",
+        "polymarket_client_init mode=%s funder=%s signature_type=%d chain_id=137",
+        creds_mode,
         (funder[:10] + "...") if funder else "none",
         config.poly_signature_type,
-        creds_source,
     )
 
     py_side = BUY if side.upper() == "BUY" else SELL

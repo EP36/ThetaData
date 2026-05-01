@@ -11,7 +11,14 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.polymarket.config import PolymarketConfig
-from src.polymarket.executor import ExecutionResult, _check_pol_gas, _place_order, execute
+from src.polymarket.executor import (
+    ExecutionResult,
+    _auth_preflight,
+    _check_pol_gas,
+    _place_order,
+    execute,
+    load_static_l2_creds,
+)
 from src.polymarket.opportunities import Opportunity
 from src.polymarket.positions import PositionsLedger, new_position
 from src.polymarket.risk import RiskGuard
@@ -491,6 +498,10 @@ def test_place_order_initializes_proxy_signature_and_explicit_creds(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fake_client = _install_fake_py_clob(monkeypatch)
+    # Ensure static L2 creds are absent so derive_api_key() is exercised
+    monkeypatch.delenv("POLY_L2_API_KEY", raising=False)
+    monkeypatch.delenv("POLY_L2_API_SECRET", raising=False)
+    monkeypatch.delenv("POLY_L2_API_PASSPHRASE", raising=False)
     config = _make_config(
         poly_wallet_address="0x0b3a9b2175a68eceff72d2a28ce9de598f23de76",
         poly_signature_type=2,
@@ -517,6 +528,10 @@ def test_place_order_derives_api_creds_when_config_creds_absent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fake_client = _install_fake_py_clob(monkeypatch)
+    # Ensure static L2 creds are absent so derive_api_key() is exercised
+    monkeypatch.delenv("POLY_L2_API_KEY", raising=False)
+    monkeypatch.delenv("POLY_L2_API_SECRET", raising=False)
+    monkeypatch.delenv("POLY_L2_API_PASSPHRASE", raising=False)
     config = _make_config(
         poly_wallet_address="0x0b3a9b2175a68eceff72d2a28ce9de598f23de76",
         poly_signature_type=1,
@@ -549,3 +564,82 @@ def test_place_order_raises_runtime_error_when_py_clob_missing() -> None:
     with patch("builtins.__import__", side_effect=mock_import):
         with pytest.raises(RuntimeError, match="py-clob-client-v2"):
             _place_order(config, token_id="t", size_usdc=100.0, price=0.5, side="BUY")
+
+
+# ---------------------------------------------------------------------------
+# Static L2 credentials path (POLY_L2_API_*)
+# ---------------------------------------------------------------------------
+
+def test_load_static_l2_creds_returns_none_when_vars_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("POLY_L2_API_KEY", raising=False)
+    monkeypatch.delenv("POLY_L2_API_SECRET", raising=False)
+    monkeypatch.delenv("POLY_L2_API_PASSPHRASE", raising=False)
+    assert load_static_l2_creds() is None
+
+
+def test_load_static_l2_creds_returns_none_when_any_var_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("POLY_L2_API_KEY", "k")
+    monkeypatch.setenv("POLY_L2_API_SECRET", "s")
+    monkeypatch.delenv("POLY_L2_API_PASSPHRASE", raising=False)
+    assert load_static_l2_creds() is None
+
+
+def test_load_static_l2_creds_returns_creds_when_all_vars_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("POLY_L2_API_KEY", "mykey")
+    monkeypatch.setenv("POLY_L2_API_SECRET", "mysecret")
+    monkeypatch.setenv("POLY_L2_API_PASSPHRASE", "mypass")
+    creds = load_static_l2_creds()
+    assert creds is not None
+    assert creds.key == "mykey"
+    assert creds.secret == "mysecret"
+    assert creds.passphrase == "mypass"
+
+
+def test_place_order_uses_static_l2_creds_skips_derive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When POLY_L2_API_* are set, creds come from env — derive_api_key() must NOT be called."""
+    fake_client = _install_fake_py_clob(monkeypatch)
+    monkeypatch.setenv("POLY_L2_API_KEY", "static-key")
+    monkeypatch.setenv("POLY_L2_API_SECRET", "static-secret")
+    monkeypatch.setenv("POLY_L2_API_PASSPHRASE", "static-pass")
+
+    config = _make_config(
+        poly_wallet_address="0x0b3a9b2175a68eceff72d2a28ce9de598f23de76",
+        poly_signature_type=1,
+    )
+
+    resp = _place_order(config, token_id="t", size_usdc=10.0, price=0.5, side="BUY")
+
+    client = fake_client.instances[0]
+    assert resp["orderID"] == "fake-order"
+    # derive_api_key() must NOT have been called
+    assert client.derived is False
+    # creds come from the POLY_L2_API_* env vars
+    assert client.creds.api_key == "static-key"
+    assert client.creds.api_secret == "static-secret"
+    assert client.creds.api_passphrase == "static-pass"
+
+
+def test_auth_preflight_ok_without_network_when_static_creds_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_auth_preflight should return True immediately when static L2 creds are present,
+    without importing or calling py_clob_client_v2 at all."""
+    monkeypatch.setenv("POLY_L2_API_KEY", "k")
+    monkeypatch.setenv("POLY_L2_API_SECRET", "s")
+    monkeypatch.setenv("POLY_L2_API_PASSPHRASE", "p")
+
+    config = _make_config()
+
+    # Patch py_clob_client_v2 out entirely to confirm it is not touched
+    with patch.dict("sys.modules", {"py_clob_client_v2": None}):
+        result = _auth_preflight(config)
+
+    assert result is True
