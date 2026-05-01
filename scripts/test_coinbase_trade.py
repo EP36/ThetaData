@@ -1,22 +1,35 @@
 #!/usr/bin/env python3
-"""One-shot Coinbase spot test trade.
+"""One-shot Coinbase spot test trade using the theta execution stack.
 
-Places a single small market buy (default: ETH, $2 notional) and exits.
-Reads credentials from /etc/trauto/env or environment variables.
+This script is the integration point between the new theta/ modules and
+the server's /etc/trauto/env config.  It handles env loading, arg parsing,
+safety checks, and final output — all business logic lives in theta/.
 
 Usage:
     source .venv/bin/activate
-    python -m scripts.test_coinbase_trade                      # ETH buy, $2
-    python -m scripts.test_coinbase_trade --asset BTC          # BTC buy, $2
-    python -m scripts.test_coinbase_trade --asset ETH --size 5 # ETH buy, $5
-    python -m scripts.test_coinbase_trade --dry-run            # price check only, no order
 
-Required env vars in /etc/trauto/env:
+    # Dry run (fetches price + evaluates edge, no order):
+    python -m scripts.test_coinbase_trade --dry-run
+
+    # Live buy ETH-USD, $2, with an explicit edge signal of 200 bps:
+    python -m scripts.test_coinbase_trade --asset ETH --size 2 --edge-bps 200
+
+    # Skip the edge check entirely (for connectivity testing only):
+    python -m scripts.test_coinbase_trade --asset ETH --size 2 --force
+
+    # Different quote currency (ETH-USDC):
+    python -m scripts.test_coinbase_trade --asset ETH --quote USDC --size 2 --force
+
+Required env vars (in /etc/trauto/env or shell env):
     COINBASE_API_KEY    — organizations/xxx/apiKeys/xxx
-    COINBASE_API_SECRET — EC private key PEM string (full multi-line value)
+    COINBASE_API_SECRET — EC private key PEM string
 
-Product: {ASSET}-USDC on Coinbase Advanced Trade.
-Safety: notional size is hard-capped at $10.
+Optional env vars (all have safe defaults):
+    CB_TAKER_FEE_BPS, CB_SLIPPAGE_BUFFER_BPS, MIN_EDGE_BPS
+    MIN_NOTIONAL_USD, MAX_NOTIONAL_USD, MAX_DAILY_NOTIONAL_USD
+    DEFAULT_QUOTE, TRADE_LOG_DIR
+
+Safety: notional size is hard-capped at $25 in this script.
 """
 from __future__ import annotations
 
@@ -30,165 +43,240 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
-LOGGER = logging.getLogger("theta.test_coinbase_trade")
+LOGGER = logging.getLogger("theta.scripts.test_coinbase_trade")
 
-MAX_NOTIONAL_USD = 10.0
-DEFAULT_ASSET    = "ETH"
-DEFAULT_SIZE_USD = 2.0
+_SCRIPT_MAX_NOTIONAL_USD = 25.0
 
 
-def _load_env() -> None:
-    """Inject /etc/trauto/env into os.environ so coinbase_client picks them up."""
+def _load_env_file() -> None:
+    """Inject /etc/trauto/env into os.environ (shell env takes precedence)."""
     try:
-        with open("/etc/trauto/env") as f:
-            for line in f:
+        with open("/etc/trauto/env") as fh:
+            for line in fh:
                 line = line.strip()
                 if "=" in line and not line.startswith("#"):
                     k, v = line.split("=", 1)
                     k, v = k.strip(), v.strip()
-                    # Don't override values already set in the shell environment
                     if k not in os.environ:
                         os.environ[k] = v
     except FileNotFoundError:
-        LOGGER.debug("test_coinbase_trade /etc/trauto/env not found; using os.environ only")
+        LOGGER.debug("no /etc/trauto/env found; using shell environment only")
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="One-shot Coinbase spot test trade")
-    parser.add_argument("--asset",   default=DEFAULT_ASSET,
-                        help="Spot asset to buy (default: ETH; product will be ASSET-USDC)")
-    parser.add_argument("--size",    type=float, default=DEFAULT_SIZE_USD,
-                        help=f"Notional USDC size (default: {DEFAULT_SIZE_USD}, max: {MAX_NOTIONAL_USD})")
-    parser.add_argument("--dry-run", action="store_true",
-                        help="Fetch mid price and check balances, but do not place an order")
+    parser = argparse.ArgumentParser(
+        description="One-shot Coinbase spot test trade",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--asset", default="ETH",
+        help="Base currency to trade (default: ETH). Product will be ASSET-QUOTE.",
+    )
+    parser.add_argument(
+        "--quote", default=None,
+        help="Quote currency (default: USD from config, NOT USDC). "
+             "ETH-USD is the primary liquidity venue.",
+    )
+    parser.add_argument(
+        "--size", type=float, default=2.0,
+        help=f"Notional USD size (default: 2.0, script cap: {_SCRIPT_MAX_NOTIONAL_USD})",
+    )
+    parser.add_argument(
+        "--edge-bps", type=float, default=0.0,
+        dest="edge_bps",
+        help="Expected alpha in basis points (default: 0). "
+             "The hurdle is ~130–150 bps with default fee params. "
+             "Pass a value above the hurdle to allow a live order.",
+    )
+    parser.add_argument(
+        "--force", action="store_true",
+        help="Bypass the edge check (for connectivity testing only). "
+             "Uses min_edge_bps=0 so the hurdle equals round-trip cost only.",
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true",
+        dest="dry_run",
+        help="Fetch price, evaluate edge, log details, but do NOT place an order.",
+    )
     args = parser.parse_args()
 
-    # --- Safety cap ---
-    if args.size > MAX_NOTIONAL_USD:
+    # Load /etc/trauto/env before anything reads os.environ
+    _load_env_file()
+
+    # Script-level hard cap (independent of config)
+    if args.size > _SCRIPT_MAX_NOTIONAL_USD:
         LOGGER.error(
-            "test_coinbase_trade_rejected size_usd=%.2f max_notional=%.2f reason=size_exceeds_cap",
-            args.size, MAX_NOTIONAL_USD,
+            "script_cap_exceeded size=%.2f cap=%.2f "
+            "reason=modify_SCRIPT_MAX_NOTIONAL_USD_if_intentional",
+            args.size, _SCRIPT_MAX_NOTIONAL_USD,
         )
         return 1
 
-    # Load /etc/trauto/env into os.environ before importing the client
-    _load_env()
-
-    # --- Verify credentials are present before importing client ---
-    api_key    = os.environ.get("COINBASE_API_KEY", "").strip()
-    api_secret = os.environ.get("COINBASE_API_SECRET", "").strip()
-
-    if not api_key:
+    # Credential check before importing anything that might fail noisily
+    if not os.environ.get("COINBASE_API_KEY", "").strip():
         LOGGER.error(
-            "test_coinbase_trade_aborted reason=missing_COINBASE_API_KEY "
-            "hint=set_COINBASE_API_KEY_in_/etc/trauto/env"
+            "aborted reason=missing_COINBASE_API_KEY "
+            "hint=add_to_/etc/trauto/env"
         )
         return 1
-    if not api_secret:
+    if not os.environ.get("COINBASE_API_SECRET", "").strip():
         LOGGER.error(
-            "test_coinbase_trade_aborted reason=missing_COINBASE_API_SECRET "
-            "hint=set_COINBASE_API_SECRET_in_/etc/trauto/env"
+            "aborted reason=missing_COINBASE_API_SECRET "
+            "hint=add_to_/etc/trauto/env"
         )
         return 1
 
-    LOGGER.info(
-        "test_coinbase_trade_starting asset=%s size_usd=%.2f dry_run=%s "
-        "api_key=%s",
-        args.asset, args.size, args.dry_run,
-        api_key[:20] + "...",
-    )
-
-    # --- Import client (late, after env is populated) ---
+    # Late imports — env is populated by now
     try:
-        from funding_arb.coinbase_client import (
-            get_coinbase_client,
-            get_spot_mid,
-            get_spot_balance,
-            execute_spot_market_buy,
-        )
+        from theta.config.basis import BasisConfig
+        from theta.marketdata.coinbase import get_spot_mid_price, get_quote_balance, MarketDataError
+        from theta.execution.coinbase import should_trade_spot, place_market_order, ExecutionError
     except ImportError as exc:
-        LOGGER.error("test_coinbase_trade_aborted reason=import_failed error=%s", exc)
+        LOGGER.error("import_failed error=%s", exc)
         return 1
 
-    # --- Verify client initialises ---
-    cb = get_coinbase_client()
-    if cb is None:
-        LOGGER.error(
-            "test_coinbase_trade_aborted reason=client_init_failed "
-            "hint=check_COINBASE_API_KEY_and_COINBASE_API_SECRET_format"
+    # Build config — reads CB_TAKER_FEE_BPS, MIN_EDGE_BPS, etc. from env
+    cfg = BasisConfig.from_env()
+    if args.force:
+        cfg = BasisConfig(
+            cb_taker_fee_bps=cfg.cb_taker_fee_bps,
+            slippage_buffer_bps=cfg.slippage_buffer_bps,
+            min_edge_bps=0.0,         # zero margin so round-trip cost is the only hurdle
+            min_notional_usd=cfg.min_notional_usd,
+            max_notional_usd=_SCRIPT_MAX_NOTIONAL_USD,
+            default_quote=cfg.default_quote,
+            log_dir=cfg.log_dir,
         )
-        return 1
 
-    # --- Balance and mid-price preflight ---
-    usdc_balance = get_spot_balance("USDC")
-    mid          = get_spot_mid(args.asset)
+    quote = args.quote or cfg.default_quote
+    product_id = f"{args.asset}-{quote}"
 
     LOGGER.info(
-        "test_coinbase_trade_preflight asset=%s product=%s-USDC "
-        "mid_price=%.4f usdc_balance=%.2f size_usd=%.2f",
-        args.asset, args.asset, mid, usdc_balance, args.size,
+        "test_coinbase_trade_starting asset=%s quote=%s "
+        "product=%s size=%.2f edge_bps=%.1f "
+        "dry_run=%s force=%s "
+        "hurdle=%.1fbps [fees=%.1fbps×2 slip=%.1fbps×2 margin=%.1fbps]",
+        args.asset, quote, product_id, args.size, args.edge_bps,
+        args.dry_run, args.force,
+        cfg.hurdle_bps, cfg.cb_taker_fee_bps,
+        cfg.slippage_buffer_bps, cfg.min_edge_bps,
     )
 
-    if mid <= 0:
-        LOGGER.error(
-            "test_coinbase_trade_aborted reason=mid_price_unavailable asset=%s "
-            "hint=check_asset_name_is_valid_Coinbase_product",
-            args.asset,
-        )
-        return 1
-
-    if usdc_balance < args.size:
-        LOGGER.error(
-            "test_coinbase_trade_aborted reason=insufficient_usdc_balance "
-            "available=%.2f required=%.2f asset=%s",
-            usdc_balance, args.size, args.asset,
-        )
-        return 1
-
-    if args.dry_run:
-        implied_qty = args.size / mid
-        LOGGER.info(
-            "test_coinbase_trade_DRY_RUN asset=%s mid_price=%.4f size_usd=%.2f "
-            "implied_qty=%.6f usdc_balance=%.2f — no order sent",
-            args.asset, mid, args.size, implied_qty, usdc_balance,
+    # --- Edge / risk gate ---
+    trade_ok, reason = should_trade_spot(
+        asset=args.asset,
+        notional_usd=args.size,
+        expected_edge_bps=args.edge_bps,
+        config=cfg,
+    )
+    LOGGER.info(
+        "edge_check result=%s reason=%s",
+        "PASS" if trade_ok else "FAIL", reason,
+    )
+    if not trade_ok and not args.dry_run:
+        LOGGER.warning(
+            "trade_blocked reason=%s "
+            "hint=pass_--edge-bps_above_%.0f_or_use_--force_for_testing",
+            reason, cfg.hurdle_bps,
         )
         print(
+            f"\n✗ Trade blocked: {reason}\n"
+            f"  Hurdle is {cfg.hurdle_bps:.0f} bps. "
+            f"Pass --edge-bps {cfg.hurdle_bps:.0f} or higher to trade, "
+            f"or --force to bypass the margin check.\n"
+        )
+        return 1
+
+    # --- Market data preflight ---
+    try:
+        mid_price = get_spot_mid_price(args.asset, quote)
+    except MarketDataError as exc:
+        LOGGER.error("mid_price_failed product=%s error=%s", product_id, exc)
+        print(f"\n✗ Market data error: {exc}\n")
+        return 1
+
+    balance = get_quote_balance(quote)
+    implied_qty = args.size / mid_price if mid_price > 0 else 0.0
+    exp_fee = args.size * cfg.cb_taker_fee_bps / 10_000.0
+    exp_slip = args.size * cfg.slippage_buffer_bps / 10_000.0
+
+    LOGGER.info(
+        "preflight_ok product=%s mid=%.6f balance_%s=%.2f "
+        "size=%.2f implied_qty=%.6f "
+        "exp_fee=%.4f exp_slippage=%.4f",
+        product_id, mid_price, quote, balance,
+        args.size, implied_qty, exp_fee, exp_slip,
+    )
+
+    if balance < args.size and not args.dry_run:
+        LOGGER.error(
+            "aborted reason=insufficient_%s_balance "
+            "available=%.2f required=%.2f",
+            quote, balance, args.size,
+        )
+        print(
+            f"\n✗ Insufficient {quote} balance: "
+            f"${balance:.2f} available, ${args.size:.2f} required\n"
+        )
+        return 1
+
+    # --- Dry run summary ---
+    if args.dry_run:
+        print(
             f"\nDRY RUN — no order sent\n"
-            f"  product     : {args.asset}-USDC\n"
-            f"  mid price   : ${mid:,.4f}\n"
-            f"  size (USDC) : ${args.size:.2f}\n"
-            f"  implied qty : {implied_qty:.6f} {args.asset}\n"
-            f"  USDC balance: ${usdc_balance:.2f}\n"
+            f"  product        : {product_id}\n"
+            f"  mid price      : ${mid_price:,.6f}\n"
+            f"  size ({quote})       : ${args.size:.2f}\n"
+            f"  implied qty    : {implied_qty:.6f} {args.asset}\n"
+            f"  {quote} balance    : ${balance:.2f}\n"
+            f"  expected fee   : ${exp_fee:.4f}  ({cfg.cb_taker_fee_bps:.0f} bps)\n"
+            f"  expected slip  : ${exp_slip:.4f}  ({cfg.slippage_buffer_bps:.0f} bps)\n"
+            f"  edge provided  : {args.edge_bps:.1f} bps\n"
+            f"  hurdle         : {cfg.hurdle_bps:.1f} bps\n"
+            f"  edge_check     : {'PASS' if trade_ok else 'FAIL — but dry_run requested'}\n"
+        )
+        # Still produce a telemetry record so dry runs are visible in trades.jsonl
+        from theta.execution.coinbase import place_market_order
+        place_market_order(
+            asset=args.asset,
+            side="buy",
+            notional_usd=args.size,
+            quote=quote,
+            expected_edge_bps=args.edge_bps,
+            config=cfg,
+            dry_run=True,
         )
         return 0
 
-    # --- Place market buy ---
+    # --- Live order ---
     try:
-        result = execute_spot_market_buy(args.asset, args.size)
-    except Exception as exc:
-        LOGGER.error(
-            "test_coinbase_trade_FAILED asset=%s size_usd=%.2f error=%s",
-            args.asset, args.size, exc,
+        record = place_market_order(
+            asset=args.asset,
+            side="buy",
+            notional_usd=args.size,
+            quote=quote,
+            expected_edge_bps=args.edge_bps,
+            config=cfg,
+            dry_run=False,
         )
+    except ExecutionError as exc:
+        LOGGER.error("order_failed error=%s", exc)
         print(f"\n✗ Order failed: {exc}\n")
         return 1
 
-    order_id        = result.get("order_id", "")
-    client_order_id = result.get("client_order_id", "")
-
-    LOGGER.info(
-        "test_coinbase_trade_SUCCESS asset=%s size_usd=%.2f "
-        "order_id=%s client_order_id=%s",
-        args.asset, args.size, order_id, client_order_id,
-    )
     print(
-        f"\n✓ Order placed\n"
-        f"  product         : {args.asset}-USDC\n"
-        f"  size (USDC)     : ${args.size:.2f}\n"
-        f"  order_id        : {order_id}\n"
-        f"  client_order_id : {client_order_id}\n"
-        f"\nNote: Coinbase IOC market orders do not return fill details synchronously.\n"
-        f"Check your Coinbase account or use the order_id to poll for fill status.\n"
+        f"\n✓ Order submitted\n"
+        f"  product         : {product_id}\n"
+        f"  side            : {record.side}\n"
+        f"  notional        : ${record.notional_usd:.2f}\n"
+        f"  mid at order    : ${record.mid_price_at_order:,.6f}\n"
+        f"  expected fee    : ${record.expected_fee_usd:.4f}\n"
+        f"  order_id        : {record.order_id}\n"
+        f"  client_order_id : {record.client_order_id}\n"
+        f"  telemetry       : logs/trades.jsonl\n"
+        f"\nNote: Coinbase IOC fills are not returned synchronously.\n"
+        f"Use the order_id to poll /api/v3/brokerage/orders/historical/{{order_id}}\n"
+        f"or check your Coinbase account for actual fill details.\n"
     )
     return 0
 
