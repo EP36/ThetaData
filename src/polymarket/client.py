@@ -182,19 +182,29 @@ def _debug_clob_collateral(config: PolymarketConfig) -> None:
             signature_type=config.poly_signature_type,
         )
         result = py_client.get_balance_allowance(params)
+        LOGGER.info("polymarket_clob_collateral_debug_raw result=%s", result)
 
-        balance_usdc = int(result["balance"]) / 1e6
-        allowance_usdc = int(result["allowance"]) / 1e6
+        raw_balance = result.get("balance", 0)
+        raw_allowance = result.get("allowance", 0)
+
+        try:
+            balance_usdc = int(raw_balance) / 1e6
+        except Exception:
+            balance_usdc = 0.0
+
+        try:
+            allowance_usdc = int(raw_allowance) / 1e6 if raw_allowance not in (None, "", {}) else 0.0
+        except Exception:
+            allowance_usdc = 0.0
+
         LOGGER.info(
             "polymarket_clob_collateral_debug funder=%s signature_type=%s "
-            "has_explicit_creds=%s balance_usdc=%.4f allowance_usdc=%.4f raw=%s",
+            "has_explicit_creds=%s balance_usdc=%.4f allowance_usdc=%.4f",
             (funder[:10] + "...") if funder else "none",
             getattr(config, "poly_signature_type", None),
             has_explicit,
             balance_usdc,
             allowance_usdc,
-            result,
         )
     except Exception as exc:
         LOGGER.error("polymarket_clob_collateral_debug_failed error=%r", exc)
-
