@@ -102,7 +102,7 @@ def _install_fake_py_clob(monkeypatch: pytest.MonkeyPatch) -> type:
             self.derived = False
             FakeClobClient.instances.append(self)
 
-        def create_or_derive_api_creds(self) -> FakeApiCreds:
+        def derive_api_key(self) -> FakeApiCreds:
             self.derived = True
             return FakeApiCreds("derived-key", "derived-secret", "derived-pass")
 
@@ -500,17 +500,16 @@ def test_place_order_initializes_proxy_signature_and_explicit_creds(
 
     client = fake_client.instances[0]
     assert resp["orderID"] == "fake-order"
+    # key gets "0x" prefix normalisation; derive_api_key() is preferred over static creds
     assert client.kwargs == {
         "host": "https://clob.polymarket.com",
-        "key": "pk",
+        "key": "0xpk",
         "chain_id": 137,
         "signature_type": 2,
         "funder": "0x0b3a9b2175a68eceff72d2a28ce9de598f23de76",
     }
-    assert client.creds.api_key == "k"
-    assert client.creds.api_secret == "s"
-    assert client.creds.api_passphrase == "p"
-    assert client.derived is False
+    assert client.derived is True
+    assert client.creds.api_key == "derived-key"
     assert client.order_args["side"] == "BUY"
 
 

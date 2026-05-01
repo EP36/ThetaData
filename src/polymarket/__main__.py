@@ -112,12 +112,14 @@ def main() -> None:
     config = PolymarketConfig.from_env()
     _assert_wallet_key_match(config)
 
-    # Startup CLOB collateral diagnostics — always run for observability
+    # Startup auth preflight — detect credential/signature_type issues immediately.
+    # Logs polymarket_auth_preflight status=ok|fail; does NOT abort startup on fail
+    # so the scan loop still runs and the next journalctl shows the exact error body.
     try:
-        from src.polymarket.executor import _get_clob_free_collateral
-        _get_clob_free_collateral(config)
+        from src.polymarket.executor import _auth_preflight
+        _auth_preflight(config)
     except Exception as exc:
-        LOGGER.warning("polymarket_startup_diagnostics_failed error=%s", exc)
+        LOGGER.warning("polymarket_startup_preflight_error error=%s", exc)
 
     LOGGER.info(
         "polymarket_runtime_mode active_trading_mode=%s active_venue=%s "

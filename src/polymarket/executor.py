@@ -169,6 +169,84 @@ def _clamp_order_size(requested_usdc: float, config: PolymarketConfig) -> float:
     return clamped
 
 
+def _auth_preflight(config: PolymarketConfig) -> bool:
+    """Run a cheap L2-authenticated call to verify credentials before placing orders.
+
+    Mirrors scripts/polymarket_clob_balance.py exactly: derives creds via
+    derive_api_key() then calls get_balance_allowance() as a cheap auth probe.
+
+    Returns True on success (or if py_clob_client_v2 is not installed — fail open).
+    Returns False only when Polymarket explicitly rejects the credentials.
+    Does NOT raise — callers can gate on the bool.
+    """
+    try:
+        from py_clob_client_v2.client import ClobClient as _PyClobClient  # type: ignore[import]
+        from py_clob_client_v2.clob_types import BalanceAllowanceParams, AssetType  # type: ignore[import]
+    except ImportError:
+        LOGGER.warning("polymarket_auth_preflight status=skip reason=py_clob_client_v2_not_installed")
+        return True  # library missing is not an auth failure; fail open
+
+    funder = _derive_funder(config)
+    pk = config.private_key
+    if pk and not pk.startswith("0x"):
+        pk = "0x" + pk
+
+    LOGGER.info(
+        "polymarket_auth_preflight attempting funder=%s signature_type=%d chain_id=137",
+        (funder[:10] + "...") if funder else "none",
+        config.poly_signature_type,
+    )
+    try:
+        client = _PyClobClient(
+            host=config.clob_base_url,
+            key=pk,
+            chain_id=137,
+            signature_type=config.poly_signature_type,
+            funder=funder or None,
+        )
+        # Derive credentials dynamically — same flow as polymarket_clob_balance.py
+        if hasattr(client, "derive_api_key"):
+            creds = client.derive_api_key()
+        elif hasattr(client, "create_or_derive_api_key"):
+            creds = client.create_or_derive_api_key()
+        else:
+            LOGGER.warning(
+                "polymarket_auth_preflight status=skip reason=no_derive_method "
+                "hint=upgrade_py_clob_client_v2"
+            )
+            return True  # can't verify; fail open
+
+        client.set_api_creds(creds)
+
+        result = client.get_balance_allowance(
+            BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
+        )
+        balance_usdc = int(result.get("balance", 0)) / 1_000_000.0
+        allowance_usdc = int(result.get("allowance", 0)) / 1_000_000.0
+        LOGGER.info(
+            "polymarket_auth_preflight status=ok funder=%s signature_type=%d "
+            "balance_usdc=%.4f allowance_usdc=%.4f",
+            (funder[:10] + "...") if funder else "none",
+            config.poly_signature_type,
+            balance_usdc,
+            allowance_usdc,
+        )
+        return True
+    except Exception as exc:
+        _status = getattr(exc, "status_code", None)
+        _body = getattr(exc, "error_msg", str(exc))
+        LOGGER.error(
+            "polymarket_auth_preflight status=fail http_status=%s error_message=%r "
+            "funder=%s signature_type=%d "
+            "hint=verify_POLY_SIGNATURE_TYPE_and_API_keys_in_/etc/trauto/env",
+            _status,
+            _body,
+            (funder[:10] + "...") if funder else "none",
+            config.poly_signature_type,
+        )
+        return False
+
+
 @dataclass(frozen=True, slots=True)
 class ExecutionResult:
     """Outcome of a single execute() call."""
@@ -208,31 +286,48 @@ def _place_order(
         ) from exc
 
     funder = _derive_funder(config)
-    # CLOB login mode: EOA signer may trade through a proxy wallet when
-    # signature_type is 1 or 2 and funder is the proxy wallet address.
+    # Ensure "0x" prefix — some py_clob_client_v2 builds require it for Signer()
+    pk = config.private_key
+    if pk and not pk.startswith("0x"):
+        pk = "0x" + pk
+
     py_client = _PyClobClient(
         host=config.clob_base_url,
-        key=config.private_key,
+        key=pk,
         chain_id=137,
         signature_type=config.poly_signature_type,
         funder=funder or None,
     )
-    has_explicit_creds = bool(config.api_key and config.api_secret and config.passphrase)
-    if has_explicit_creds:
+    # Derive credentials dynamically (same as scripts/polymarket_clob_balance.py).
+    # This ensures the API key matches the current signer+funder+signature_type context
+    # regardless of what is stored in POLY_API_KEY/POLY_API_SECRET env vars.
+    # Falls back to static env credentials only if derivation is unavailable.
+    if hasattr(py_client, "derive_api_key"):
+        api_creds = py_client.derive_api_key()
+        creds_source = "derived"
+    elif hasattr(py_client, "create_or_derive_api_key"):
+        api_creds = py_client.create_or_derive_api_key()
+        creds_source = "derived"
+    elif config.api_key and config.api_secret and config.passphrase:
         api_creds = ApiCreds(
             api_key=config.api_key,
             api_secret=config.api_secret,
             api_passphrase=config.passphrase,
         )
+        creds_source = "static_env"
     else:
-        api_creds = py_client.create_or_derive_api_creds()
+        raise RuntimeError(
+            "polymarket: no API-key derivation method found on installed "
+            "py_clob_client_v2 and POLY_API_KEY/POLY_API_SECRET/POLY_PASSPHRASE "
+            "are not all set"
+        )
     py_client.set_api_creds(api_creds)
     LOGGER.info(
-        "polymarket_clob_trading_client_initialized funder=%s "
-        "signature_type=%s has_explicit_creds=%s",
+        "polymarket_client_init funder=%s signature_type=%d "
+        "creds_source=%s chain_id=137",
         (funder[:10] + "...") if funder else "none",
         config.poly_signature_type,
-        has_explicit_creds,
+        creds_source,
     )
 
     py_side = BUY if side.upper() == "BUY" else SELL
@@ -259,35 +354,40 @@ def _place_order(
                     side=py_side,
                 )
             )
-            LOGGER.debug(
-                "polymarket_order_placing token_id=%s side=%s price=%.4f "
-                "size_usdc=%.2f size_tokens=%.4f",
-                token_id,
-                side,
-                price,
-                size_usdc,
-                size_tokens,
+            LOGGER.info(
+                "polymarket_order_context token_id=%s side=%s price=%.4f "
+                "size_usdc=%.2f size_tokens=%.4f funder=%s signature_type=%d",
+                token_id, side, price, size_usdc, size_tokens,
+                (funder[:10] + "...") if funder else "none",
+                config.poly_signature_type,
             )
             resp: dict[str, Any] = py_client.post_order(signed, OrderType.GTC)
-            LOGGER.debug("polymarket_order_placed token_id=%s response=%s", token_id, resp)
+            LOGGER.info("polymarket_order_placed token_id=%s response=%s", token_id, resp)
             return resp
         except Exception as exc:
+            _status = getattr(exc, "status_code", None)
+            _body = getattr(exc, "error_msg", None)
             err_lower = str(exc).lower()
-            # Non-retryable: auth failure, insufficient funds, invalid params
-            if any(k in err_lower for k in ("auth", "unauthorized", "insufficient", "invalid")):
+            # 401: structured auth-error log, then fail fast (no retry)
+            if _status == 401 or "401" in err_lower or "unauthorized" in err_lower:
                 LOGGER.error(
-                    "polymarket_order_fatal token_id=%s side=%s error=%s",
-                    token_id,
-                    side,
-                    exc,
+                    "polymarket_auth_error status=401 token_id=%s side=%s "
+                    "error_message=%r hint=CHECK_POLY_SIGNATURE_TYPE_AND_API_KEYS",
+                    token_id, side, _body or str(exc),
+                )
+                raise
+            # Other non-retryable errors
+            if any(k in err_lower for k in ("auth", "insufficient", "invalid")):
+                LOGGER.error(
+                    "polymarket_order_fatal token_id=%s side=%s "
+                    "http_status=%s error_message=%r",
+                    token_id, side, _status, _body or str(exc),
                 )
                 raise
             last_exc = exc
             LOGGER.warning(
                 "polymarket_order_error attempt=%d token_id=%s error=%s",
-                attempt,
-                token_id,
-                exc,
+                attempt, token_id, exc,
             )
 
     raise RuntimeError(
@@ -848,6 +948,16 @@ def execute(
             size_usdc=proposed_size,
             error="dry_run",
         )
+
+    # Auth preflight: verify L2 credentials before any live order placement.
+    # Runs once per execute() call in live mode; skipped entirely in dry_run.
+    # Prevents repeated "attempting_execution" cycles when credentials are broken.
+    if not _auth_preflight(config):
+        LOGGER.warning(
+            "polymarket_live_trading_disabled reason=AUTH_401 "
+            "hint=check_POLY_SIGNATURE_TYPE_and_API_keys_in_/etc/trauto/env"
+        )
+        return ExecutionResult(success=False, error="auth_preflight_failed:AUTH_401")
 
     # Live execution (strategy-specific routing)
     if opportunity.strategy == "orderbook_spread":

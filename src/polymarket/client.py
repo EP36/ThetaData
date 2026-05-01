@@ -128,6 +128,21 @@ class ClobClient:
         """Fetch full market detail including resolution status and end date."""
         return self._get(f"/markets/{condition_id}")
 
+def _derive_funder(config: PolymarketConfig) -> str:
+    """Return the wallet address to use as CLOB funder.
+
+    Uses config.poly_wallet_address if set, otherwise derives from private key.
+    Returns "" if derivation fails so callers can proceed with funder=None.
+    """
+    if config.poly_wallet_address:
+        return config.poly_wallet_address
+    try:
+        from eth_account import Account  # type: ignore[import]
+        return Account.from_key(config.private_key).address
+    except Exception as exc:
+        LOGGER.warning("funder_derivation_failed error=%s — CLOB may see wrong balance", exc)
+        return ""
+
 def _debug_clob_collateral(config: PolymarketConfig) -> None:
     """Log CLOB collateral balance/allowance for the current signer+funder."""
     LOGGER.info("polymarket_clob_collateral_debug_entry")
