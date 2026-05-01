@@ -84,8 +84,13 @@ def _hl_exchange_post(
     wallet: str,
     action: dict[str, Any],
     timeout: float = 10.0,
-) -> dict[str, Any]:
-    """POST to /exchange with a signed action."""
+) -> Any:
+    """POST to /exchange with a signed action.
+
+    Returns the parsed JSON body as-is (may be a dict OR a plain string —
+    Hyperliquid returns bare JSON strings such as "Order would immediately match"
+    for certain rejection cases).  Callers must guard with isinstance(result, dict).
+    """
     from eth_account import Account
 
     nonce = _get_nonce()
@@ -108,16 +113,26 @@ def _hl_exchange_post(
     }
 
     resp = httpx.post(f"{HL_BASE_URL}/exchange", json=body, timeout=timeout)
+    LOGGER.info(
+        "hl_exchange_raw_response status=%d body=%s",
+        resp.status_code, resp.text,
+    )
     resp.raise_for_status()
     return resp.json()
 
 
-def _extract_order_id(result: dict[str, Any]) -> str:
-    """Pull the filled order ID from an /exchange response."""
-    statuses = result.get("response", {}).get("data", {}).get("statuses", [])
-    if not statuses:
+def _extract_order_id(result: Any) -> str:
+    """Pull the filled order ID from an /exchange response dict.
+
+    Returns "" for any non-dict response or any missing/unexpected structure.
+    """
+    if not isinstance(result, dict):
         return ""
-    return str(statuses[0].get("filled", {}).get("oid", ""))
+    try:
+        statuses = result["response"]["data"]["statuses"]
+        return str(statuses[0]["filled"]["oid"])
+    except (KeyError, IndexError, TypeError):
+        return ""
 
 
 def get_asset_index(asset: str) -> int | None:
@@ -205,7 +220,18 @@ def place_perp_short(
             "grouping": "na",
         }
 
-        result   = _hl_exchange_post(private_key, wallet, action)
+        result = _hl_exchange_post(private_key, wallet, action)
+        if not isinstance(result, dict):
+            LOGGER.error(
+                "hl_perp_short_unexpected_response asset=%s "
+                "type=%s raw=%r",
+                asset, type(result).__name__, result,
+            )
+            return FillResult(
+                success=False, asset=asset, side="perp_short",
+                size=size, price=limit_px, order_id="",
+                error=f"unexpected_response raw={result!r}",
+            )
         order_id = _extract_order_id(result)
         LOGGER.info("hl_perp_short_placed asset=%s order_id=%s result=%s", asset, order_id, result)
         return FillResult(
@@ -274,7 +300,18 @@ def place_spot_long(
             "grouping": "na",
         }
 
-        result   = _hl_exchange_post(private_key, wallet, action)
+        result = _hl_exchange_post(private_key, wallet, action)
+        if not isinstance(result, dict):
+            LOGGER.error(
+                "hl_spot_long_unexpected_response asset=%s "
+                "type=%s raw=%r",
+                asset, type(result).__name__, result,
+            )
+            return FillResult(
+                success=False, asset=asset, side="spot_long",
+                size=size, price=limit_px, order_id="",
+                error=f"unexpected_response raw={result!r}",
+            )
         order_id = _extract_order_id(result)
         LOGGER.info("hl_spot_long_placed asset=%s order_id=%s result=%s", asset, order_id, result)
         return FillResult(
