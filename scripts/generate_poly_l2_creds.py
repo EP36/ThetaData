@@ -53,7 +53,7 @@ def main() -> None:
     )
 
     # Create or derive L2 API credentials (key/secret/passphrase)
-    creds = client.create_or_derive_api_creds()
+    creds = client.create_or_derive_api_key()
 
     print("\n=== Polymarket L2 API Credentials ===")
     print("API Key      :", creds.api_key)

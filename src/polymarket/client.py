@@ -173,7 +173,7 @@ def _debug_clob_collateral(config: PolymarketConfig) -> None:
             py_client.set_api_creds(creds)
             has_explicit = True
         else:
-            creds = py_client.create_or_derive_api_creds()
+            creds = py_client.create_or_derive_api_key()
             py_client.set_api_creds(creds)
             has_explicit = False
 

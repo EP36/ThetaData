@@ -38,8 +38,8 @@ def main():
     # Prefer derive of existing creds; only create if derive isn't available in your installed version
     if hasattr(client, "derive_api_key"):
         creds = client.derive_api_key()
-    elif hasattr(client, "create_or_derive_api_creds"):
-        creds = client.create_or_derive_api_creds()
+    elif hasattr(client, "create_or_derive_api_key"):
+        creds = client.create_or_derive_api_key()
     else:
         raise SystemExit("No supported API-key derivation method found on installed py_clob_client_v2")
 
