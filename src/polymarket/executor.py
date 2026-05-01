@@ -207,8 +207,8 @@ def _auth_preflight(config: PolymarketConfig) -> bool:
         # Derive credentials dynamically — same flow as polymarket_clob_balance.py
         if hasattr(client, "derive_api_key"):
             creds = client.derive_api_key()
-        elif hasattr(client, "create_or_derive_api_key"):
-            creds = client.create_or_derive_api_key()
+        elif hasattr(client, "create_or_derive_api_creds"):
+            creds = client.create_or_derive_api_creds()
         else:
             LOGGER.warning(
                 "polymarket_auth_preflight status=skip reason=no_derive_method "
@@ -305,8 +305,8 @@ def _place_order(
     if hasattr(py_client, "derive_api_key"):
         api_creds = py_client.derive_api_key()
         creds_source = "derived"
-    elif hasattr(py_client, "create_or_derive_api_key"):
-        api_creds = py_client.create_or_derive_api_key()
+    elif hasattr(py_client, "create_or_derive_api_creds"):
+        api_creds = py_client.create_or_derive_api_creds()
         creds_source = "derived"
     elif config.api_key and config.api_secret and config.passphrase:
         api_creds = ApiCreds(
