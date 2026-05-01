@@ -1,39 +1,61 @@
-#!/usr/bin/env python
-import json
+#!/usr/bin/env python3
+"""Dump Coinbase quote balances as seen by the theta.marketdata layer."""
+
+from __future__ import annotations
+
 import logging
-
-from theta.fundingarb import coinbase as cb_mod  # same module used by test_coinbase_trade
-
-log = logging.getLogger("theta.scripts.dump_coinbase_balances")
+import os
 
 
-def main() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-    )
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+LOGGER = logging.getLogger("theta.scripts.dump_coinbase_balances")
 
-    client = cb_mod.get_client()  # or whatever factory test_coinbase_trade uses
 
-    # Adjust this call to however your client exposes balances.
-    # Common Advanced Trade pattern is something like client.get_accounts() or list_accounts().
-    accounts = client.list_accounts()  # replace with the real method name
+def _load_env_file() -> None:
+    """Inject /etc/trauto/env into os.environ (shell env takes precedence)."""
+    try:
+        with open("/etc/trauto/env") as fh:
+            for line in fh:
+                line = line.strip()
+                if "=" in line and not line.startswith("#"):
+                    k, v = line.split("=", 1)
+                    k, v = k.strip(), v.strip()
+                    if k not in os.environ:
+                        os.environ[k] = v
+    except FileNotFoundError:
+        LOGGER.debug("no /etc/trauto/env found; using shell environment only")
 
-    # Print a compact view for debugging
-    rows = []
-    for acct in accounts:
-        # adapt keys based on your client’s response shape
-        currency = acct.get("currency") or acct.get("asset") or acct.get("balance", {}).get("currency")
-        available = (
-            acct.get("available_balance", {}).get("value")
-            or acct.get("available")
-            or acct.get("balance", {}).get("available")
-            or "0"
-        )
-        rows.append({"currency": currency, "available": available, "raw": acct})
 
-    log.info("coinbase_balances summary=%s", json.dumps(rows, indent=2))
+def main() -> int:
+    _load_env_file()
+
+    if not os.environ.get("COINBASE_API_KEY", "").strip():
+        LOGGER.error("missing COINBASE_API_KEY")
+        return 1
+    if not os.environ.get("COINBASE_API_SECRET", "").strip():
+        LOGGER.error("missing COINBASE_API_SECRET")
+        return 1
+
+    try:
+        from theta.marketdata.coinbase import get_quote_balance
+    except ImportError as exc:
+        LOGGER.error("import_failed error=%s", exc)
+        return 1
+
+    for quote in ("USD", "USDC", "CASH", "EUR"):
+        try:
+            bal = get_quote_balance(quote)
+        except Exception as exc:  # type: ignore[catching-general-exception]
+            LOGGER.warning("balance_fetch_failed quote=%s error=%s", quote, exc)
+            continue
+        LOGGER.info("quote_balance quote=%s balance=%.8f", quote, bal)
+
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
