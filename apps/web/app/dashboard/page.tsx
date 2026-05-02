@@ -13,7 +13,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { StatePanel } from "@/components/ui/state-panel";
 import { getDashboardSummary, getStrategyPanelStatus } from "@/lib/api/client";
 import { getDashboardData } from "@/lib/dashboard/service";
-import type { DashboardSummary, StrategyPanelStatus, TimeSeriesPoint, TradeRow } from "@/lib/types";
+import type { DashboardSummary, ThetaRunnerStatus, TimeSeriesPoint, TradeRow } from "@/lib/types";
 
 const BALANCE_POLL_MS = 60_000;
 
@@ -38,7 +38,8 @@ export default function DashboardPage() {
   const [equity, setEquity] = useState<TimeSeriesPoint[]>([]);
   const [drawdown, setDrawdown] = useState<TimeSeriesPoint[]>([]);
   const [trades, setTrades] = useState<TradeRow[]>([]);
-  const [strategyStatus, setStrategyStatus] = useState<StrategyPanelStatus | null>(null);
+  const [strategyStatus, setStrategyStatus] = useState<ThetaRunnerStatus | null>(null);
+  const [strategyError, setStrategyError] = useState(false);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -46,9 +47,10 @@ export default function DashboardPage() {
 
     async function loadDashboard() {
       setLoading(true);
+      let thetaError = false;
       const [data, strategies] = await Promise.all([
         getDashboardData(),
-        getStrategyPanelStatus().catch(() => null),
+        getStrategyPanelStatus().catch(() => { thetaError = true; return null; }),
       ]);
       if (!cancelled) {
         setSummary(data.summary);
@@ -56,6 +58,7 @@ export default function DashboardPage() {
         setDrawdown(data.drawdownCurve);
         setTrades(data.recentTrades);
         setStrategyStatus(strategies);
+        setStrategyError(thetaError);
         setLoading(false);
       }
     }
@@ -169,11 +172,11 @@ export default function DashboardPage() {
       </div>
 
       <CollapsibleSection
-        title="Strategy Status"
-        description="Live state of the three active trading strategies."
-        defaultOpen={false}
+        title="Theta Strategies"
+        description="Live state of theta strategies: edge evaluation, last execution, and trade stats."
+        defaultOpen
       >
-        <StrategyPanel status={strategyStatus} />
+        <StrategyPanel status={strategyStatus} error={strategyError} />
       </CollapsibleSection>
 
       <CollapsibleSection

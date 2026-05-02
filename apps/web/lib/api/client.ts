@@ -12,7 +12,7 @@ import type {
   SelectionStatusData,
   StrategyAnalyticsData,
   StrategyConfig,
-  StrategyPanelStatus,
+  ThetaRunnerStatus,
   TradeRow,
   WorkerExecutionStatusData
 } from "@/lib/types";
@@ -763,31 +763,92 @@ export async function getAIAnalysisLog(): Promise<AIAnalysisEntry[]> {
   return data.entries ?? [];
 }
 
-export async function getStrategyPanelStatus(): Promise<StrategyPanelStatus> {
-  const payload = await fetchJson<{
-    polymarket_arb: { enabled: boolean; dry_run: boolean; active_positions: number };
-    funding_rate_arb: { enabled: boolean; dry_run: boolean; funding_rate: number | null; next_funding_at: string | null; active_positions: number };
-    market_maker: { enabled: boolean; dry_run: boolean; active_positions: number };
-    fetched_at: string;
-  }>("/api/strategies/status");
+type ApiThetaStrategyRecord = {
+  name: string;
+  display_name: string;
+  exchange: string;
+  enabled: boolean;
+  last_trade_at: string | null;
+  last_edge_bps: number | null;
+  last_notional_usd: number | null;
+  last_status: string | null;
+  last_error: string | null;
+  trade_count: number;
+};
+
+type ApiThetaTradeEntry = {
+  timestamp: string;
+  exchange: string;
+  asset: string;
+  quote: string;
+  side: string;
+  notional_usd: number;
+  expected_edge_bps: number;
+  status: string;
+  error: string | null;
+  order_id: string;
+  client_order_id: string;
+};
+
+type ApiThetaTradeStats = {
+  total: number;
+  submitted: number;
+  dry_run: number;
+  rejected: number;
+  failed: number;
+  total_notional_usd: number;
+};
+
+type ApiThetaRunnerStatus = {
+  strategies: ApiThetaStrategyRecord[];
+  dry_run: boolean;
+  last_trade_at: string | null;
+  total_trade_count: number;
+  trade_stats: ApiThetaTradeStats;
+  recent_trades: ApiThetaTradeEntry[];
+  fetched_at: string;
+};
+
+export async function getStrategyPanelStatus(): Promise<ThetaRunnerStatus> {
+  const payload = await fetchJson<ApiThetaRunnerStatus>("/api/strategies/status");
+  const s = payload.trade_stats;
   return {
-    polymarketArb: {
-      enabled: payload.polymarket_arb.enabled,
-      dryRun: payload.polymarket_arb.dry_run,
-      activePositions: payload.polymarket_arb.active_positions,
+    strategies: payload.strategies.map((strat) => ({
+      name: strat.name,
+      displayName: strat.display_name,
+      exchange: strat.exchange,
+      enabled: strat.enabled,
+      lastTradeAt: strat.last_trade_at,
+      lastEdgeBps: strat.last_edge_bps,
+      lastNotionalUsd: strat.last_notional_usd,
+      lastStatus: strat.last_status,
+      lastError: strat.last_error,
+      tradeCount: strat.trade_count,
+    })),
+    dryRun: payload.dry_run,
+    lastTradeAt: payload.last_trade_at,
+    totalTradeCount: payload.total_trade_count,
+    tradeStats: {
+      total: s.total,
+      submitted: s.submitted,
+      dryRun: s.dry_run,
+      rejected: s.rejected,
+      failed: s.failed,
+      totalNotionalUsd: s.total_notional_usd,
     },
-    fundingRateArb: {
-      enabled: payload.funding_rate_arb.enabled,
-      dryRun: payload.funding_rate_arb.dry_run,
-      fundingRate: payload.funding_rate_arb.funding_rate,
-      nextFundingAt: payload.funding_rate_arb.next_funding_at,
-      activePositions: payload.funding_rate_arb.active_positions,
-    },
-    marketMaker: {
-      enabled: payload.market_maker.enabled,
-      dryRun: payload.market_maker.dry_run,
-      activePositions: payload.market_maker.active_positions,
-    },
+    recentTrades: payload.recent_trades.map((t) => ({
+      timestamp: t.timestamp,
+      exchange: t.exchange,
+      asset: t.asset,
+      quote: t.quote,
+      side: t.side,
+      notionalUsd: t.notional_usd,
+      expectedEdgeBps: t.expected_edge_bps,
+      status: t.status,
+      error: t.error,
+      orderId: t.order_id,
+      clientOrderId: t.client_order_id,
+    })),
     fetchedAt: payload.fetched_at,
   };
 }

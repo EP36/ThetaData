@@ -53,6 +53,68 @@ class StrategyUpdateRequest(BaseModel):
     parameters: Optional[dict[str, Any]] = None
 
 
+class ThetaTradeRecord(BaseModel):
+    """Single theta trade log entry from logs/trades.jsonl."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    timestamp: datetime
+    exchange: str
+    asset: str
+    quote: str
+    side: str
+    notional_usd: float
+    expected_edge_bps: float
+    status: str
+    error: Optional[str] = None
+    order_id: str = ""
+    client_order_id: str = ""
+
+
+class ThetaStrategyRecord(BaseModel):
+    """Per-strategy status derived from trade telemetry."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    display_name: str
+    exchange: str
+    enabled: bool
+    last_trade_at: Optional[datetime] = None
+    last_edge_bps: Optional[float] = None
+    last_notional_usd: Optional[float] = None
+    last_status: Optional[str] = None
+    last_error: Optional[str] = None
+    trade_count: int = 0
+
+
+class ThetaTradeStats(BaseModel):
+    """Aggregate counts across all theta trade log entries."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    total: int = 0
+    submitted: int = 0
+    dry_run: int = 0
+    rejected: int = 0
+    failed: int = 0
+    total_notional_usd: float = 0.0
+
+
+class ThetaRunnerStatusResponse(BaseModel):
+    """Theta strategy runner state derived from trade telemetry."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    strategies: list[ThetaStrategyRecord]
+    dry_run: bool
+    last_trade_at: Optional[datetime] = None
+    total_trade_count: int
+    trade_stats: ThetaTradeStats
+    recent_trades: list[ThetaTradeRecord]
+    fetched_at: datetime
+
+
 class AuthLoginRequest(BaseModel):
     """Login payload for admin authentication."""
 

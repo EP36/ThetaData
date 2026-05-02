@@ -281,32 +281,53 @@ export type WorkerExecutionStatusData = {
   symbols: WorkerSymbolDecision[];
 };
 
-export type PolymarketArbStatus = {
-  enabled: boolean;
-  dryRun: boolean;
-  activePositions: number;
+export type ThetaTradeEntry = {
+  timestamp: string;
+  exchange: string;
+  asset: string;
+  quote: string;
+  side: string;
+  notionalUsd: number;
+  expectedEdgeBps: number;
+  status: string;
+  error: string | null;
+  orderId: string;
+  clientOrderId: string;
 };
 
-export type FundingRateArbStatus = {
+export type ThetaStrategyRecord = {
+  name: string;
+  displayName: string;
+  exchange: string;
   enabled: boolean;
-  dryRun: boolean;
-  fundingRate: number | null;
-  nextFundingAt: string | null;
-  activePositions: number;
+  lastTradeAt: string | null;
+  lastEdgeBps: number | null;
+  lastNotionalUsd: number | null;
+  lastStatus: string | null;
+  lastError: string | null;
+  tradeCount: number;
 };
 
-export type MarketMakerStatus = {
-  enabled: boolean;
-  dryRun: boolean;
-  activePositions: number;
+export type ThetaTradeStats = {
+  total: number;
+  submitted: number;
+  dryRun: number;
+  rejected: number;
+  failed: number;
+  totalNotionalUsd: number;
 };
 
-export type StrategyPanelStatus = {
-  polymarketArb: PolymarketArbStatus;
-  fundingRateArb: FundingRateArbStatus;
-  marketMaker: MarketMakerStatus;
+export type ThetaRunnerStatus = {
+  strategies: ThetaStrategyRecord[];
+  dryRun: boolean;
+  lastTradeAt: string | null;
+  totalTradeCount: number;
+  tradeStats: ThetaTradeStats;
+  recentTrades: ThetaTradeEntry[];
   fetchedAt: string;
 };
+
+export type StrategyPanelStatus = ThetaRunnerStatus;
 
 export type AIProposal = {
   id: number;

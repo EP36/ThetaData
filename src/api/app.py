@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import os
+from collections import defaultdict
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
@@ -37,6 +40,10 @@ from src.api.schemas import (
     StrategyAnalyticsResponse,
     StrategySummary,
     StrategyUpdateRequest,
+    ThetaRunnerStatusResponse,
+    ThetaStrategyRecord,
+    ThetaTradeRecord,
+    ThetaTradeStats,
     TradesResponse,
     LogoutResponse,
     PasswordChangeRequest,
@@ -453,6 +460,136 @@ def get_trades(
 ) -> TradesResponse:
     """Return recent trade records."""
     return _service().trades()
+
+
+@app.get("/api/strategies/status", response_model=ThetaRunnerStatusResponse)
+def get_theta_runner_status(
+    _user: AuthenticatedUser = Depends(require_authenticated_user),
+) -> ThetaRunnerStatusResponse:
+    """Return theta strategy runner state derived from trade telemetry."""
+    now = datetime.now(timezone.utc)
+    log_dir = Path(_deployment_settings().log_dir)
+    trades_file = log_dir / "trades.jsonl"
+
+    raw_trades: list[dict] = []
+    if trades_file.exists():
+        try:
+            with open(trades_file) as fh:
+                for line in fh:
+                    line = line.strip()
+                    if line:
+                        try:
+                            raw_trades.append(json.loads(line))
+                        except json.JSONDecodeError:
+                            pass
+        except Exception as exc:
+            _APP_LOGGER.warning("theta_trades_read_failed path=%s error=%s", trades_file, exc)
+
+    # Group trades by (exchange, asset, quote) → infer strategy name
+    groups: dict[str, list[dict]] = defaultdict(list)
+    for t in raw_trades:
+        exchange = (t.get("exchange") or "unknown").lower()
+        asset = (t.get("asset") or "unknown").upper()
+        quote = (t.get("quote") or "USD").upper()
+        key = f"{exchange}_spot_{asset}_{quote}".lower()
+        groups[key].append(t)
+
+    # Static strategy catalogue — always present even when no trades.
+    # Keys use the same formula as the grouping above: {exchange}_spot_{asset}_{quote}.lower()
+    # "Momentum ETH" and "Funding Arb" will show as idle until they log trades; that is correct.
+    _KNOWN: list[tuple[str, str, str]] = [
+        ("coinbase_spot_eth_usd",     "Coinbase Spot ETH",  "coinbase"),
+        ("coinbase_spot_btc_usd",     "Momentum (ETH/BTC)", "coinbase"),
+        ("hyperliquid_spot_eth_usd",  "Funding Arb (HL)",   "hyperliquid"),
+    ]
+
+    strategy_records: list[ThetaStrategyRecord] = []
+    seen_keys: set[str] = set()
+    for name_key, display_name, exchange in _KNOWN:
+        trades_for = groups.get(name_key, [])
+        last = trades_for[-1] if trades_for else None
+        strategy_records.append(ThetaStrategyRecord(
+            name=name_key,
+            display_name=display_name,
+            exchange=exchange,
+            enabled=True,
+            last_trade_at=last.get("timestamp") if last else None,
+            last_edge_bps=last.get("expected_edge_bps") if last else None,
+            last_notional_usd=last.get("notional_usd") if last else None,
+            last_status=last.get("status") if last else None,
+            last_error=(last.get("error") or None) if last else None,
+            trade_count=len(trades_for),
+        ))
+        seen_keys.add(name_key)
+
+    # Surface any exchange/asset combos from the log not already covered above.
+    for key, trades_for in groups.items():
+        if key in seen_keys:
+            continue
+        last = trades_for[-1]
+        strategy_records.append(ThetaStrategyRecord(
+            name=key,
+            display_name=key.replace("_", " ").title(),
+            exchange=(last.get("exchange") or "unknown").lower(),
+            enabled=True,
+            last_trade_at=last.get("timestamp"),
+            last_edge_bps=last.get("expected_edge_bps"),
+            last_notional_usd=last.get("notional_usd"),
+            last_status=last.get("status"),
+            last_error=(last.get("error") or None),
+            trade_count=len(trades_for),
+        ))
+
+    # Aggregate stats across all log entries.
+    stats = ThetaTradeStats()
+    for t in raw_trades:
+        stats.total += 1
+        s = (t.get("status") or "").lower()
+        if s == "submitted":
+            stats.submitted += 1
+        elif s == "dry_run":
+            stats.dry_run += 1
+        elif s == "rejected":
+            stats.rejected += 1
+        elif s == "failed":
+            stats.failed += 1
+        try:
+            stats.total_notional_usd += float(t.get("notional_usd") or 0)
+        except (TypeError, ValueError):
+            pass
+
+    # Most-recent 10 trades (newest first).
+    recent_trades: list[ThetaTradeRecord] = []
+    for t in reversed(raw_trades[-10:]):
+        try:
+            recent_trades.append(ThetaTradeRecord(
+                timestamp=t["timestamp"],
+                exchange=t.get("exchange", ""),
+                asset=t.get("asset", ""),
+                quote=t.get("quote", "USD"),
+                side=t.get("side", ""),
+                notional_usd=float(t.get("notional_usd") or 0),
+                expected_edge_bps=float(t.get("expected_edge_bps") or 0),
+                status=t.get("status", ""),
+                error=(t.get("error") or None),
+                order_id=t.get("order_id", ""),
+                client_order_id=t.get("client_order_id", ""),
+            ))
+        except Exception:
+            pass
+
+    dry_run = os.getenv("DRY_RUN", "true").lower() not in ("false", "0", "no")
+    last_trade_at = raw_trades[-1].get("timestamp") if raw_trades else None
+
+    return ThetaRunnerStatusResponse(
+        strategies=strategy_records,
+        dry_run=dry_run,
+        last_trade_at=last_trade_at,
+        total_trade_count=len(raw_trades),
+        trade_stats=stats,
+        recent_trades=recent_trades,
+        fetched_at=now,
+    )
 
 
 @app.post("/api/system/kill-switch", response_model=KillSwitchResponse)
