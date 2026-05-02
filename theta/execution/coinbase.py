@@ -257,12 +257,20 @@ def place_market_order(
             f"order_rejected product={product_id} reason={failure}"
         )
 
-    # Extract order_id from success_response
-    order_id = (
-        getattr(resp, "order_id", "")
-        or getattr(getattr(resp, "success_response", None), "order_id", "")
-        or ""
-    )
+    # Extract order_id — SDK may return a typed object or a plain dict.
+    if isinstance(resp, dict):
+        order_id = (
+            resp.get("order_id")
+            or (resp.get("success_response") or {}).get("order_id")
+            or ""
+        )
+    else:
+        order_id = (
+            getattr(resp, "order_id", "")
+            or getattr(getattr(resp, "success_response", None), "order_id", "")
+            or ""
+        )
+    order_id = order_id or ""
 
     LOGGER.info(
         "coinbase_order_placed product=%s side=%s notional=%.2f "
