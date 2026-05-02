@@ -65,12 +65,16 @@ class CoinbaseSpotEdgeStrategy:
 
     def evaluate_opportunity(self, now: datetime) -> Optional[PlannedTrade]:
         edge_bps = self._resolve_edge_bps()
+        LOGGER.info(
+            "%s evaluate edge=%.1fbps hurdle=%.1fbps asset=%s quote=%s",
+            self.name, edge_bps, self._cfg.hurdle_bps, self._asset, self._quote,
+        )
 
         # Quick pre-filter before any I/O.
         if edge_bps < self._cfg.hurdle_bps:
-            LOGGER.debug(
-                "%s evaluate edge=%.1fbps hurdle=%.1fbps result=below_hurdle",
-                self.name, edge_bps, self._cfg.hurdle_bps,
+            LOGGER.info(
+              "%s evaluate result=no_trade reason=edge_below_hurdle expected=%.1fbps hurdle=%.1fbps",
+              self.name, edge_bps, self._cfg.hurdle_bps,
             )
             return None
 
