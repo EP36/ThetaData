@@ -190,6 +190,12 @@ def main() -> int:
         print()
         return 0
 
+    from theta.config.basis import BasisConfig
+    from theta.orchestration.status_writer import write_runner_status
+
+    cfg = BasisConfig.from_env()
+    mode = "dry_run" if args.dry_run else "live"
+
     risk = _build_risk_limits()
     runner = StrategyRunner(strategies=strategies, risk=risk)
 
@@ -200,24 +206,49 @@ def main() -> int:
         args.dry_run, args.inject_edge_bps,
     )
 
+    iterations_completed = 0
+
     for i in range(1, args.iterations + 1):
         LOGGER.info("iteration %d/%d", i, args.iterations)
+        tick_error: str | None = None
+        result = None
         try:
             result = runner.run_once(dry_run=args.dry_run)
         except Exception as exc:
             LOGGER.error("runner_tick_error iteration=%d error=%s", i, exc)
-            result = None
+            tick_error = str(exc)
 
-        if result is None:
-            LOGGER.info("iteration %d result=no_trade", i)
+        iterations_completed += 1
+
+        # Derive last_result label from outcome.
+        if tick_error is not None:
+            last_result = "error"
+        elif result is None:
+            last_result = "no_opportunity"
+        elif args.dry_run:
+            last_result = "dry_run_would_execute" if result.success else "failed"
         else:
-            status = "dry_run_would_execute" if args.dry_run else (
-                "success" if result.success else "failed"
-            )
+            last_result = "executed" if result.success else "failed"
+
+        selected = result.strategy_name if result is not None else None
+
+        write_runner_status(
+            cfg.log_dir,
+            mode=mode,
+            strategies_evaluated=runner.strategy_names,
+            iterations_completed=iterations_completed,
+            selected_strategy=selected,
+            last_result=last_result,
+            last_error=tick_error or (result.error if result and not result.success else None),
+        )
+
+        if result is None and tick_error is None:
+            LOGGER.info("iteration %d result=no_trade", i)
+        elif result is not None:
             LOGGER.info(
                 "iteration %d result=%s strategy=%s "
                 "order_id=%s client_order_id=%s",
-                i, status, result.strategy_name,
+                i, last_result, result.strategy_name,
                 result.order_id, result.client_order_id,
             )
 

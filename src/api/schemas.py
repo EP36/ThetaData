@@ -101,13 +101,36 @@ class ThetaTradeStats(BaseModel):
     total_notional_usd: float = 0.0
 
 
-class ThetaRunnerStatusResponse(BaseModel):
-    """Theta strategy runner state derived from trade telemetry."""
+class ThetaRunnerHeartbeat(BaseModel):
+    """Live runner process state from logs/theta_runner_status.json.
+
+    available=False means the heartbeat file has not been written yet —
+    the runner has not been started or has never completed a tick.
+    stale=True means the file exists but is older than STALE_THRESHOLD_SECONDS.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
+    available: bool
+    stale: bool = False
+    last_tick_at: Optional[datetime] = None
+    mode: Optional[str] = None            # "dry_run" | "live"
+    strategies_evaluated: list[str] = Field(default_factory=list)
+    iterations_completed: int = 0
+    selected_strategy: Optional[str] = None
+    last_result: Optional[str] = None     # "no_opportunity" | "dry_run_would_execute" | "executed" | "failed" | "error"
+    last_error: Optional[str] = None
+    written_at: Optional[datetime] = None
+
+
+class ThetaRunnerStatusResponse(BaseModel):
+    """Theta strategy runner state: live heartbeat + historical trade telemetry."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    runner_status: ThetaRunnerHeartbeat
     strategies: list[ThetaStrategyRecord]
-    dry_run: bool
+    dry_run: bool                          # derived: heartbeat.mode=="dry_run" when available, else env var
     last_trade_at: Optional[datetime] = None
     total_trade_count: int
     trade_stats: ThetaTradeStats

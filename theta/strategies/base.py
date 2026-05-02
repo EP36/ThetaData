@@ -45,6 +45,8 @@ class ExecutionResult:
     realized_edge_bps: float = 0.0       # 0 until fill is confirmed via polling
     dry_run: bool = False
     error: str = ""
+    product_id: str = ""                 # backfilled by runner from PlannedTrade
+    side: str = ""                       # backfilled by runner from PlannedTrade
 
 
 # ---------------------------------------------------------------------------

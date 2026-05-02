@@ -1,0 +1,20 @@
+[Unit]
+Description=Trauto Theta Strategy Runner
+After=network.target trauto-worker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/trauto
+EnvironmentFile=/etc/trauto/env
+Environment=PATH=/opt/trauto/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/opt/trauto/.venv/bin/python -m theta.orchestration.runner_worker
+Restart=always
+RestartSec=15
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=theta-runner
+
+[Install]
+WantedBy=multi-user.target

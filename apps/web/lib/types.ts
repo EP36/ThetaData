@@ -317,7 +317,21 @@ export type ThetaTradeStats = {
   totalNotionalUsd: number;
 };
 
+export type ThetaRunnerHeartbeat = {
+  available: boolean;
+  stale: boolean;
+  lastTickAt: string | null;
+  mode: string | null;           // "dry_run" | "live"
+  strategiesEvaluated: string[];
+  iterationsCompleted: number;
+  selectedStrategy: string | null;
+  lastResult: string | null;
+  lastError: string | null;
+  writtenAt: string | null;
+};
+
 export type ThetaRunnerStatus = {
+  runnerStatus: ThetaRunnerHeartbeat;
   strategies: ThetaStrategyRecord[];
   dryRun: boolean;
   lastTradeAt: string | null;

@@ -12,6 +12,7 @@ import type {
   SelectionStatusData,
   StrategyAnalyticsData,
   StrategyConfig,
+  ThetaRunnerHeartbeat,
   ThetaRunnerStatus,
   TradeRow,
   WorkerExecutionStatusData
@@ -799,7 +800,21 @@ type ApiThetaTradeStats = {
   total_notional_usd: number;
 };
 
+type ApiThetaRunnerHeartbeat = {
+  available: boolean;
+  stale: boolean;
+  last_tick_at: string | null;
+  mode: string | null;
+  strategies_evaluated: string[];
+  iterations_completed: number;
+  selected_strategy: string | null;
+  last_result: string | null;
+  last_error: string | null;
+  written_at: string | null;
+};
+
 type ApiThetaRunnerStatus = {
+  runner_status: ApiThetaRunnerHeartbeat;
   strategies: ApiThetaStrategyRecord[];
   dry_run: boolean;
   last_trade_at: string | null;
@@ -809,10 +824,26 @@ type ApiThetaRunnerStatus = {
   fetched_at: string;
 };
 
+function mapHeartbeat(h: ApiThetaRunnerHeartbeat): ThetaRunnerHeartbeat {
+  return {
+    available: h.available,
+    stale: h.stale,
+    lastTickAt: h.last_tick_at,
+    mode: h.mode,
+    strategiesEvaluated: h.strategies_evaluated ?? [],
+    iterationsCompleted: h.iterations_completed ?? 0,
+    selectedStrategy: h.selected_strategy,
+    lastResult: h.last_result,
+    lastError: h.last_error,
+    writtenAt: h.written_at,
+  };
+}
+
 export async function getStrategyPanelStatus(): Promise<ThetaRunnerStatus> {
   const payload = await fetchJson<ApiThetaRunnerStatus>("/api/strategies/status");
   const s = payload.trade_stats;
   return {
+    runnerStatus: mapHeartbeat(payload.runner_status),
     strategies: payload.strategies.map((strat) => ({
       name: strat.name,
       displayName: strat.display_name,

@@ -185,6 +185,12 @@ class StrategyRunner:
         )
         result = executing_strategy.execute(best, dry_run=dry_run)
 
+        # Backfill product/side from the PlannedTrade if the strategy didn't set them.
+        if not result.product_id:
+            result.product_id = best.product_id
+        if not result.side:
+            result.side = best.side
+
         if result.success:
             if not dry_run:
                 self._daily.record(best.exchange, best.notional_usd)

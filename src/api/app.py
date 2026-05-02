@@ -40,6 +40,7 @@ from src.api.schemas import (
     StrategyAnalyticsResponse,
     StrategySummary,
     StrategyUpdateRequest,
+    ThetaRunnerHeartbeat,
     ThetaRunnerStatusResponse,
     ThetaStrategyRecord,
     ThetaTradeRecord,
@@ -462,11 +463,50 @@ def get_trades(
     return _service().trades()
 
 
+_RUNNER_STATUS_FILE = "theta_runner_status.json"
+_HEARTBEAT_STALE_SECONDS = 300  # 5 minutes
+
+
+def _read_runner_heartbeat(log_dir: Path, now: datetime) -> ThetaRunnerHeartbeat:
+    """Parse logs/theta_runner_status.json; return unavailable on any error."""
+    status_file = log_dir / _RUNNER_STATUS_FILE
+    if not status_file.exists():
+        return ThetaRunnerHeartbeat(available=False)
+    try:
+        with open(status_file) as fh:
+            data = json.load(fh)
+        written_at_raw = data.get("written_at")
+        written_at_dt: datetime | None = None
+        stale = True
+        if written_at_raw:
+            try:
+                written_at_dt = datetime.fromisoformat(written_at_raw)
+                age = (now - written_at_dt).total_seconds()
+                stale = age > _HEARTBEAT_STALE_SECONDS
+            except ValueError:
+                pass
+        return ThetaRunnerHeartbeat(
+            available=True,
+            stale=stale,
+            last_tick_at=data.get("last_tick_at"),
+            mode=data.get("mode") or None,
+            strategies_evaluated=data.get("strategies_evaluated") or [],
+            iterations_completed=int(data.get("iterations_completed") or 0),
+            selected_strategy=data.get("selected_strategy") or None,
+            last_result=data.get("last_result") or None,
+            last_error=data.get("last_error") or None,
+            written_at=written_at_dt,
+        )
+    except Exception as exc:
+        _APP_LOGGER.warning("theta_heartbeat_read_failed path=%s error=%s", status_file, exc)
+        return ThetaRunnerHeartbeat(available=False)
+
+
 @app.get("/api/strategies/status", response_model=ThetaRunnerStatusResponse)
 def get_theta_runner_status(
     _user: AuthenticatedUser = Depends(require_authenticated_user),
 ) -> ThetaRunnerStatusResponse:
-    """Return theta strategy runner state derived from trade telemetry."""
+    """Return theta strategy runner state: live heartbeat + historical trade telemetry."""
     now = datetime.now(timezone.utc)
     log_dir = Path(_deployment_settings().log_dir)
     trades_file = log_dir / "trades.jsonl"
@@ -578,10 +618,18 @@ def get_theta_runner_status(
         except Exception:
             pass
 
-    dry_run = os.getenv("DRY_RUN", "true").lower() not in ("false", "0", "no")
+    heartbeat = _read_runner_heartbeat(log_dir, now)
+
+    # dry_run: prefer live heartbeat mode, fall back to DRY_RUN env var.
+    if heartbeat.available and heartbeat.mode is not None:
+        dry_run = heartbeat.mode == "dry_run"
+    else:
+        dry_run = os.getenv("DRY_RUN", "true").lower() not in ("false", "0", "no")
+
     last_trade_at = raw_trades[-1].get("timestamp") if raw_trades else None
 
     return ThetaRunnerStatusResponse(
+        runner_status=heartbeat,
         strategies=strategy_records,
         dry_run=dry_run,
         last_trade_at=last_trade_at,
