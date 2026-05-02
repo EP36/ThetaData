@@ -180,9 +180,11 @@ def run() -> int:
     risk = _build_risk_limits()
     runner = StrategyRunner(strategies=strategies, risk=risk)
 
+    from pathlib import Path as _Path
+    _abs_log_dir = _Path(cfg.log_dir).resolve()
     LOGGER.info(
-        "runner_worker_ready strategies=%s mode=%s log_dir=%s",
-        runner.strategy_names, mode, cfg.log_dir,
+        "runner_worker_ready strategies=%s mode=%s log_dir=%s abs_log_dir=%s",
+        runner.strategy_names, mode, cfg.log_dir, _abs_log_dir,
     )
 
     iterations_completed = 0

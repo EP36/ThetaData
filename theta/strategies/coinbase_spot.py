@@ -85,11 +85,18 @@ class CoinbaseSpotEdgeStrategy:
         elif edge_bps <= -hurdle:
             return self._evaluate_sell(abs(edge_bps))
         else:
-            LOGGER.info(
-                "%s evaluate edge=%.1fbps hurdle=±%.1fbps result=no_trade "
-                "reason=edge_within_no_trade_band",
-                self.name, edge_bps, hurdle,
-            )
+            if edge_bps < 0:
+                LOGGER.info(
+                    "%s sell_edge_not_met edge=%.1fbps hurdle=±%.1fbps "
+                    "result=no_trade reason=edge_within_no_trade_band",
+                    self.name, edge_bps, hurdle,
+                )
+            else:
+                LOGGER.info(
+                    "%s evaluate edge=%.1fbps hurdle=±%.1fbps result=no_trade "
+                    "reason=edge_within_no_trade_band",
+                    self.name, edge_bps, hurdle,
+                )
             return None
 
     def execute(
@@ -109,6 +116,11 @@ class CoinbaseSpotEdgeStrategy:
                 config=self._cfg,
                 dry_run=dry_run,
             )
+            if planned.side == "sell" and not dry_run:
+                LOGGER.info(
+                    "%s sell_filled order_id=%s notional=%.2f",
+                    self.name, record.order_id, record.notional_usd,
+                )
             return ExecutionResult(
                 success=True,
                 strategy_name=self.name,
@@ -194,8 +206,7 @@ class CoinbaseSpotEdgeStrategy:
             return None
 
         LOGGER.info(
-            "%s evaluate result=sell_opportunity notional=%.2f edge=%.1fbps "
-            "mid=%.4f reason=%s",
+            "%s sell_submitted notional=%.2f edge=%.1fbps mid=%.4f reason=%s",
             self.name, notional, abs_edge_bps, mid_price, reason,
         )
         return PlannedTrade(
@@ -266,8 +277,8 @@ class CoinbaseSpotEdgeStrategy:
 
         if bounded < self._cfg.min_notional_usd:
             LOGGER.info(
-                "%s evaluate result=no_trade reason=base_position_too_small "
-                "base_balance=%.8f value_usd=%.4f min_notional=%.2f",
+                "%s base_balance_below_min base_balance=%.8f value_usd=%.4f "
+                "min_notional=%.2f result=no_trade",
                 self.name, base_balance, base_value_usd, self._cfg.min_notional_usd,
             )
             return 0.0

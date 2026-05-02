@@ -464,13 +464,15 @@ def get_trades(
 
 
 _RUNNER_STATUS_FILE = "theta_runner_status.json"
-_HEARTBEAT_STALE_SECONDS = 300  # 5 minutes
+_HEARTBEAT_STALE_SECONDS = int(os.getenv("THETA_HEARTBEAT_STALE_SECONDS", "300"))
 
 
 def _read_runner_heartbeat(log_dir: Path, now: datetime) -> ThetaRunnerHeartbeat:
     """Parse logs/theta_runner_status.json; return unavailable on any error."""
-    status_file = log_dir / _RUNNER_STATUS_FILE
+    status_file = log_dir.resolve() / _RUNNER_STATUS_FILE
+    _APP_LOGGER.debug("heartbeat_read abs_path=%s", status_file)
     if not status_file.exists():
+        _APP_LOGGER.info("heartbeat_not_found abs_path=%s", status_file)
         return ThetaRunnerHeartbeat(available=False)
     try:
         with open(status_file) as fh:
@@ -508,7 +510,8 @@ def get_theta_runner_status(
 ) -> ThetaRunnerStatusResponse:
     """Return theta strategy runner state: live heartbeat + historical trade telemetry."""
     now = datetime.now(timezone.utc)
-    log_dir = Path(_deployment_settings().log_dir)
+    log_dir = Path(_deployment_settings().log_dir).resolve()
+    _APP_LOGGER.debug("theta_status_log_dir abs_path=%s", log_dir)
     trades_file = log_dir / "trades.jsonl"
 
     raw_trades: list[dict] = []

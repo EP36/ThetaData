@@ -63,9 +63,10 @@ def write_runner_status(
         "last_error": last_error,
         "written_at": now_iso,
     }
-    dest = Path(log_dir) / STATUS_FILENAME
+    dest = Path(log_dir).resolve() / STATUS_FILENAME
     try:
         _atomic_write(dest, payload)
+        LOGGER.info("heartbeat_written abs_path=%s", dest)
     except Exception as exc:
         LOGGER.warning("runner_status_write_failed path=%s error=%s", dest, exc)
 
