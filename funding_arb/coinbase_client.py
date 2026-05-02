@@ -89,13 +89,11 @@ def execute_spot_market_buy(asset: str, quote_size_usd: float) -> dict[str, Any]
     if cb is None:
         raise RuntimeError("coinbase_client_unavailable")
 
-    from coinbase.rest.types.orders_types import OrderConfiguration
-
     product_id      = f"{asset}-USDC"
     client_order_id = f"trauto-basis-{int(time.time())}"
-    order_config    = OrderConfiguration(
-        market_market_ioc={"quote_size": str(round(quote_size_usd, 2))}
-    )
+    order_config    = {
+        "market_market_ioc": {"quote_size": f"{quote_size_usd:.2f}"}
+    }
 
     LOGGER.info(
         "coinbase_spot_buy_placing asset=%s product_id=%s size_usd=%.2f client_oid=%s",
@@ -146,13 +144,11 @@ def execute_spot_market_sell(asset: str, base_size: float) -> dict[str, Any]:
     if cb is None:
         raise RuntimeError("coinbase_client_unavailable")
 
-    from coinbase.rest.types.orders_types import OrderConfiguration
-
     product_id      = f"{asset}-USDC"
     client_order_id = f"trauto-basis-sell-{int(time.time())}"
-    order_config    = OrderConfiguration(
-        market_market_ioc={"base_size": str(round(base_size, 8))}
-    )
+    order_config    = {
+        "market_market_ioc": {"base_size": f"{base_size:.8f}"}
+    }
 
     LOGGER.info(
         "coinbase_spot_sell_placing asset=%s product_id=%s base_size=%.8f client_oid=%s",

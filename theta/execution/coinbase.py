@@ -175,23 +175,16 @@ def place_market_order(
     # --- Live order ---
     cb = _require_client()
 
-    try:
-        from coinbase.rest.types.orders_types import OrderConfiguration
-    except ImportError as exc:
-        raise ExecutionError(
-            "coinbase_sdk_missing — install coinbase-advanced-py"
-        ) from exc
-
     if side == "buy":
-        order_config = OrderConfiguration(
-            market_market_ioc={"quote_size": str(round(notional_usd, 2))}
-        )
+        order_config = {
+            "market_market_ioc": {"quote_size": f"{notional_usd:.2f}"}
+        }
     else:
         # sell: convert notional → base size using current mid_price
         base_size = notional_usd / mid_price
-        order_config = OrderConfiguration(
-            market_market_ioc={"base_size": str(round(base_size, 8))}
-        )
+        order_config = {
+            "market_market_ioc": {"base_size": f"{base_size:.8f}"}
+        }
 
     try:
         resp = cb.create_order(
