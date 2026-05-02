@@ -150,7 +150,9 @@ def get_quote_balance(quote: str = "USD") -> float:
     balance availability without crashing the preflight.
     """
     from funding_arb.coinbase_client import get_spot_balance
-    return get_spot_balance(quote)
+    bal = get_spot_balance(quote)
+    LOGGER.info("coinbase_quote_balance quote=%s balance=%.8f", quote, bal)
+    return bal
 
 
 def validate_product(asset: str, quote: str = "USD") -> str:

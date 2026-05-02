@@ -16,16 +16,26 @@ LOGGER = logging.getLogger("theta.scripts.dump_coinbase_balances")
 
 
 def _load_env_file() -> None:
-    """Inject /etc/trauto/env into os.environ (shell env takes precedence)."""
+    """Inject /etc/trauto/env into os.environ (shell env takes precedence).
+
+    Skips lines that don't look like ENV_VAR=value assignments so that
+    multi-line PEM values (e.g. COINBASE_API_SECRET) don't corrupt the parse.
+    """
+    import re
+    _env_key = re.compile(r'^[A-Z_][A-Z0-9_]*$')
     try:
         with open("/etc/trauto/env") as fh:
             for line in fh:
                 line = line.strip()
-                if "=" in line and not line.startswith("#"):
-                    k, v = line.split("=", 1)
-                    k, v = k.strip(), v.strip()
-                    if k not in os.environ:
-                        os.environ[k] = v
+                if "=" not in line or line.startswith("#"):
+                    continue
+                k, v = line.split("=", 1)
+                k = k.strip()
+                if not _env_key.match(k):
+                    continue
+                v = v.strip()
+                if k not in os.environ:
+                    os.environ[k] = v
     except FileNotFoundError:
         LOGGER.debug("no /etc/trauto/env found; using shell environment only")
 

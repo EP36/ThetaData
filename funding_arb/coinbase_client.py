@@ -203,10 +203,10 @@ def get_spot_balance(currency: str = "USD") -> float:
     target = (currency or "").upper()
 
     try:
-        resp = cb.list_accounts()
+        resp = cb.get_accounts()
         accounts = getattr(resp, "accounts", None) or []
     except Exception as exc:
-        LOGGER.warning("coinbase_list_accounts_failed currency=%s error=%s", target, exc)
+        LOGGER.warning("coinbase_get_accounts_failed currency=%s error=%s", target, exc)
         return 0.0
 
     for acct in accounts:
