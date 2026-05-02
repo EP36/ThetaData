@@ -195,38 +195,76 @@ def execute_spot_market_sell(asset: str, base_size: float) -> dict[str, Any]:
 
 
 def get_spot_balance(currency: str = "USD") -> float:
-    """Return available spot balance for a given currency from Coinbase Advanced Trade."""
+    """Return available spot balance for a given currency from Coinbase Advanced Trade.
+
+    Walks all pages of get_accounts() (default page size is 49) until the
+    matching account is found or the list is exhausted.
+    """
     cb = get_coinbase_client()
     if cb is None:
         return 0.0
 
     target = (currency or "").upper()
+    cursor: str | None = None
+    page = 0
 
-    try:
-        resp = cb.get_accounts()
-        accounts = getattr(resp, "accounts", None) or []
-    except Exception as exc:
-        LOGGER.warning("coinbase_get_accounts_failed currency=%s error=%s", target, exc)
-        return 0.0
-
-    for acct in accounts:
-        acct_currency = str(getattr(acct, "currency", "") or "").upper()
-        if acct_currency != target:
-            continue
-
-        available = getattr(acct, "available_balance", None)
-        value = getattr(available, "value", None)
-
+    while True:
+        page += 1
         try:
-            bal = float(value) if value is not None else 0.0
-        except (TypeError, ValueError):
-            bal = 0.0
+            kwargs: dict = {"limit": 250}
+            if cursor:
+                kwargs["cursor"] = cursor
+            resp = cb.get_accounts(**kwargs)
+        except Exception as exc:
+            LOGGER.warning(
+                "coinbase_get_accounts_failed currency=%s page=%d "
+                "error_type=%s error=%s",
+                target, page, type(exc).__name__, exc,
+            )
+            return 0.0
 
-        LOGGER.info(
-            "coinbase_spot_balance currency=%s balance=%.8f",
-            target, bal,
-        )
-        return bal
+        accounts = getattr(resp, "accounts", None) or []
 
-    LOGGER.info("coinbase_spot_balance currency=%s balance=0.00000000 reason=not_found", target)
+        # Diagnostic: log what currencies exist on first page so problems are visible.
+        if page == 1:
+            found_currencies = [
+                str(getattr(a, "currency", "") or "").upper()
+                for a in accounts
+            ]
+            LOGGER.debug(
+                "coinbase_get_accounts page=1 count=%d currencies=%s",
+                len(accounts), found_currencies,
+            )
+
+        for acct in accounts:
+            acct_currency = str(getattr(acct, "currency", "") or "").upper()
+            if acct_currency != target:
+                continue
+
+            available = getattr(acct, "available_balance", None)
+            value = getattr(available, "value", None)
+            try:
+                bal = float(value) if value is not None else 0.0
+            except (TypeError, ValueError):
+                bal = 0.0
+
+            LOGGER.info(
+                "coinbase_spot_balance currency=%s balance=%.8f page=%d",
+                target, bal, page,
+            )
+            return bal
+
+        # Check for next page
+        has_next = getattr(resp, "has_next", False)
+        if not has_next:
+            break
+        cursor = getattr(resp, "cursor", None) or None
+        if not cursor:
+            break
+
+    LOGGER.warning(
+        "coinbase_spot_balance currency=%s balance=0.00000000 "
+        "reason=not_found pages_checked=%d",
+        target, page,
+    )
     return 0.0

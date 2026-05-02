@@ -56,6 +56,26 @@ def main() -> int:
         LOGGER.error("import_failed error=%s", exc)
         return 1
 
+    # First dump the raw account list so we can see what currencies exist.
+    try:
+        from funding_arb.coinbase_client import get_coinbase_client
+        cb = get_coinbase_client()
+        if cb is not None:
+            resp = cb.get_accounts(limit=250)
+            accounts = getattr(resp, "accounts", None) or []
+            LOGGER.info(
+                "raw_accounts count=%d has_next=%s",
+                len(accounts), getattr(resp, "has_next", "?"),
+            )
+            for acct in accounts:
+                cur = getattr(acct, "currency", "?")
+                avail = getattr(acct, "available_balance", None)
+                val = getattr(avail, "value", "?") if avail else "?"
+                name = getattr(acct, "name", "?")
+                LOGGER.info("  account name=%r currency=%s available=%s", name, cur, val)
+    except Exception as exc:
+        LOGGER.warning("raw_accounts_dump_failed error=%s", exc)
+
     for quote in ("USD", "USDC", "CASH", "EUR"):
         try:
             bal = get_quote_balance(quote)
