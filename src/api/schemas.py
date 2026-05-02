@@ -94,7 +94,7 @@ class ThetaTradeStats(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     total: int = 0
-    submitted: int = 0
+    live: int = 0              # counts status="live" and legacy status="submitted"
     dry_run: int = 0
     rejected: int = 0
     failed: int = 0

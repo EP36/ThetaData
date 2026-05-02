@@ -1,16 +1,28 @@
-"""CoinbaseSpotEdgeStrategy — wraps existing Coinbase spot execution.
+"""CoinbaseSpotEdgeStrategy — symmetric buy / sell on Coinbase spot.
 
-Signal: external edge estimate (from env SPOT_EDGE_BPS or constructor arg).
-Gate:   BasisConfig hurdle (round-trip cost + safety margin, default 150 bps).
+Signal interpretation (SPOT_EDGE_BPS env var or constructor arg):
+  + positive edge ≥  +hurdle  →  BUY  (expect price to rise)
+  + negative edge ≤  -hurdle  →  SELL (expect price to fall / reduce position)
+  + |edge| < hurdle           →  NO TRADE (no-trade band, reduces over-trading)
 
-This is the simplest possible Strategy: a human (or higher-level system)
-provides an expected_edge_bps estimate; the strategy gates it against the
-fee hurdle and checks balance before returning a PlannedTrade.
+Buy sizing:  min(quote_balance, max_notional_usd)
+Sell sizing: min(base_balance × mid_price, max_notional_usd)
 
-Typical use:
-  - Direct testing:  CoinbaseSpotEdgeStrategy(signal_edge_bps=200.0)
-  - Env-driven:      CoinbaseSpotEdgeStrategy()  # reads SPOT_EDGE_BPS
-  - As a building block when another system provides the edge estimate.
+The strategy never sells more than is held, and never places an order whose
+USD-equivalent is below min_notional_usd or above max_notional_usd.
+
+Natural hysteresis:
+  After a buy, the quote balance is depleted → buys stop until USD is
+  replenished.  After a sell, the base balance is depleted → sells stop
+  until ETH is re-acquired.  This prevents rapid alternating round-trips.
+
+Env vars (all optional):
+  SPOT_EDGE_BPS     float  default=0.0   signal in bps (positive=buy, negative=sell)
+  CB_TAKER_FEE_BPS  float  default=60.0
+  MIN_EDGE_BPS      float  default=20.0
+  MIN_NOTIONAL_USD  float  default=1.0
+  MAX_NOTIONAL_USD  float  default=500.0
+  TRADE_LOG_DIR     str    default="logs"
 """
 from __future__ import annotations
 
@@ -27,7 +39,7 @@ LOGGER = logging.getLogger("theta.strategies.coinbase_spot")
 
 
 class CoinbaseSpotEdgeStrategy:
-    """Spot buy on Coinbase when an external edge signal clears the fee hurdle."""
+    """Symmetric spot buy/sell on Coinbase when an external edge signal clears the hurdle."""
 
     def __init__(
         self,
@@ -43,11 +55,12 @@ class CoinbaseSpotEdgeStrategy:
             asset:              Base currency to trade (default ETH).
             quote:              Quote currency (defaults to config.default_quote = USD).
             signal_edge_bps:    Override the expected edge in bps.  If None, reads
-                                SPOT_EDGE_BPS env var (default 0.0).  Set > hurdle
-                                (~150 bps) to generate a trade opportunity.
-            test_notional_usd:  Fallback notional when balance is unavailable
-                                (useful for dry-run smoke tests without credentials).
-                                Only used when the real balance returns 0.
+                                SPOT_EDGE_BPS env var (default 0.0).  Positive values
+                                trigger a buy; negative values trigger a sell.
+                                The magnitude must exceed hurdle_bps (~150 bps) to trade.
+            test_notional_usd:  Fallback buy notional when quote balance is zero
+                                (useful for dry-run smoke tests without real USD).
+                                Only applied for the BUY path.
         """
         self._cfg = config or BasisConfig.from_env()
         self._asset = asset.upper()
@@ -61,66 +74,23 @@ class CoinbaseSpotEdgeStrategy:
 
     @property
     def name(self) -> str:
-        return f"coinbase_spot_{self._asset}_{self._quote}"
+        return f"coinbase_spot_{self._asset}_{self._quote}".lower()
 
     def evaluate_opportunity(self, now: datetime) -> Optional[PlannedTrade]:
         edge_bps = self._resolve_edge_bps()
-        LOGGER.info(
-            "%s evaluate edge=%.1fbps hurdle=%.1fbps asset=%s quote=%s",
-            self.name, edge_bps, self._cfg.hurdle_bps, self._asset, self._quote,
-        )
+        hurdle = self._cfg.hurdle_bps
 
-        # Quick pre-filter before any I/O.
-        if edge_bps < self._cfg.hurdle_bps:
+        if edge_bps >= hurdle:
+            return self._evaluate_buy(edge_bps)
+        elif edge_bps <= -hurdle:
+            return self._evaluate_sell(abs(edge_bps))
+        else:
             LOGGER.info(
-              "%s evaluate result=no_trade reason=edge_below_hurdle expected=%.1fbps hurdle=%.1fbps",
-              self.name, edge_bps, self._cfg.hurdle_bps,
+                "%s evaluate edge=%.1fbps hurdle=±%.1fbps result=no_trade "
+                "reason=edge_within_no_trade_band",
+                self.name, edge_bps, hurdle,
             )
             return None
-
-        # Fetch balance (I/O) — determines notional size.
-        notional = self._resolve_notional()
-        if notional <= 0:
-            if self._test_notional_usd and self._test_notional_usd >= self._cfg.min_notional_usd:
-                notional = min(self._test_notional_usd, self._cfg.max_notional_usd)
-                LOGGER.info(
-                    "%s evaluate balance_unavailable — using test_notional=%.2f",
-                    self.name, notional,
-                )
-            else:
-                LOGGER.info(
-                    "%s evaluate result=no_trade reason=zero_balance_or_client_unavailable",
-                    self.name,
-                )
-                return None
-
-        # Run the fee/risk gate (pure, no I/O).
-        trade_ok, reason = should_trade_spot(
-            asset=self._asset,
-            notional_usd=notional,
-            expected_edge_bps=edge_bps,
-            config=self._cfg,
-        )
-
-        if not trade_ok:
-            LOGGER.info(
-                "%s evaluate result=blocked reason=%s", self.name, reason,
-            )
-            return None
-
-        LOGGER.info(
-            "%s evaluate result=opportunity notional=%.2f edge=%.1fbps reason=%s",
-            self.name, notional, edge_bps, reason,
-        )
-        return PlannedTrade(
-            strategy_name=self.name,
-            exchange="coinbase",
-            product_id=f"{self._asset}-{self._quote}",
-            side="buy",
-            notional_usd=notional,
-            expected_edge_bps=edge_bps,
-            notes=reason,
-        )
 
     def execute(
         self,
@@ -165,6 +135,151 @@ class CoinbaseSpotEdgeStrategy:
             )
 
     # ------------------------------------------------------------------
+    # Internal decision helpers
+    # ------------------------------------------------------------------
+
+    def _evaluate_buy(self, edge_bps: float) -> Optional[PlannedTrade]:
+        notional = self._resolve_buy_notional()
+        if notional <= 0:
+            return None
+
+        trade_ok, reason = should_trade_spot(
+            asset=self._asset,
+            notional_usd=notional,
+            expected_edge_bps=edge_bps,
+            config=self._cfg,
+        )
+        if not trade_ok:
+            LOGGER.info("%s evaluate result=buy_blocked reason=%s", self.name, reason)
+            return None
+
+        LOGGER.info(
+            "%s evaluate result=buy_opportunity notional=%.2f edge=%.1fbps reason=%s",
+            self.name, notional, edge_bps, reason,
+        )
+        return PlannedTrade(
+            strategy_name=self.name,
+            exchange="coinbase",
+            product_id=f"{self._asset}-{self._quote}",
+            side="buy",
+            notional_usd=notional,
+            expected_edge_bps=edge_bps,
+            notes=reason,
+        )
+
+    def _evaluate_sell(self, abs_edge_bps: float) -> Optional[PlannedTrade]:
+        # Need mid_price to convert base balance → USD notional.
+        try:
+            from theta.marketdata.coinbase import get_spot_mid_price
+            mid_price = get_spot_mid_price(self._asset, self._quote)
+        except Exception as exc:
+            LOGGER.warning(
+                "%s evaluate mid_price_unavailable error=%s — cannot size sell",
+                self.name, exc,
+            )
+            return None
+
+        notional = self._resolve_sell_notional(mid_price)
+        if notional <= 0:
+            return None
+
+        trade_ok, reason = should_trade_spot(
+            asset=self._asset,
+            notional_usd=notional,
+            expected_edge_bps=abs_edge_bps,
+            config=self._cfg,
+        )
+        if not trade_ok:
+            LOGGER.info("%s evaluate result=sell_blocked reason=%s", self.name, reason)
+            return None
+
+        LOGGER.info(
+            "%s evaluate result=sell_opportunity notional=%.2f edge=%.1fbps "
+            "mid=%.4f reason=%s",
+            self.name, notional, abs_edge_bps, mid_price, reason,
+        )
+        return PlannedTrade(
+            strategy_name=self.name,
+            exchange="coinbase",
+            product_id=f"{self._asset}-{self._quote}",
+            side="sell",
+            notional_usd=notional,
+            expected_edge_bps=abs_edge_bps,
+            notes=f"sell_signal mid={mid_price:.4f} {reason}",
+        )
+
+    def _resolve_buy_notional(self) -> float:
+        """Return trade-sized notional for a buy, bounded by config and USD balance."""
+        try:
+            from theta.marketdata.coinbase import get_quote_balance
+            balance = get_quote_balance(self._quote)
+        except Exception as exc:
+            LOGGER.warning("%s buy_balance_fetch_failed error=%s", self.name, exc)
+            return 0.0
+
+        if balance <= 0:
+            if (
+                self._test_notional_usd is not None
+                and self._test_notional_usd >= self._cfg.min_notional_usd
+            ):
+                notional = min(self._test_notional_usd, self._cfg.max_notional_usd)
+                LOGGER.info(
+                    "%s evaluate balance_unavailable — using test_notional=%.2f",
+                    self.name, notional,
+                )
+                return notional
+            LOGGER.info(
+                "%s evaluate result=no_trade reason=zero_balance_or_client_unavailable",
+                self.name,
+            )
+            return 0.0
+
+        desired = min(self._cfg.max_notional_usd, balance)
+        if desired < self._cfg.min_notional_usd:
+            LOGGER.info(
+                "%s evaluate result=no_trade reason=balance_below_min "
+                "balance=%.8f min=%.2f",
+                self.name, balance, self._cfg.min_notional_usd,
+            )
+            return 0.0
+        return desired
+
+    def _resolve_sell_notional(self, mid_price: float) -> float:
+        """Return USD-equivalent notional of base asset available to sell."""
+        try:
+            from theta.marketdata.coinbase import get_base_balance
+            base_balance = get_base_balance(self._asset)
+        except Exception as exc:
+            LOGGER.warning("%s sell_balance_fetch_failed error=%s", self.name, exc)
+            return 0.0
+
+        if base_balance <= 0 or mid_price <= 0:
+            LOGGER.info(
+                "%s evaluate result=no_trade reason=zero_base_balance "
+                "base_balance=%.8f mid=%.4f",
+                self.name, base_balance, mid_price,
+            )
+            return 0.0
+
+        base_value_usd = base_balance * mid_price
+        bounded = min(base_value_usd, self._cfg.max_notional_usd)
+
+        if bounded < self._cfg.min_notional_usd:
+            LOGGER.info(
+                "%s evaluate result=no_trade reason=base_position_too_small "
+                "base_balance=%.8f value_usd=%.4f min_notional=%.2f",
+                self.name, base_balance, base_value_usd, self._cfg.min_notional_usd,
+            )
+            return 0.0
+
+        LOGGER.info(
+            "%s evaluate base_position base_balance=%.8f mid=%.4f "
+            "value_usd=%.4f sell_notional=%.2f",
+            self.name, base_balance, mid_price, base_value_usd, bounded,
+        )
+        return bounded
+
+    # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
@@ -172,21 +287,3 @@ class CoinbaseSpotEdgeStrategy:
         if self._signal_edge_bps is not None:
             return self._signal_edge_bps
         return float(os.getenv("SPOT_EDGE_BPS", "0.0"))
-
-    def _resolve_notional(self) -> float:
-        """Return a trade-sized notional bounded by config limits and available balance."""
-        try:
-            from theta.marketdata.coinbase import get_quote_balance
-            balance = get_quote_balance(self._quote)
-        except Exception as exc:
-            LOGGER.warning("%s balance_fetch_failed error=%s", self.name, exc)
-            return 0.0
-
-        if balance <= 0:
-            return 0.0
-
-        # Use the config max as the default trade size, capped by available balance.
-        desired = min(self._cfg.max_notional_usd, balance)
-        if desired < self._cfg.min_notional_usd:
-            return 0.0
-        return desired

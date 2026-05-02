@@ -310,7 +310,7 @@ export type ThetaStrategyRecord = {
 
 export type ThetaTradeStats = {
   total: number;
-  submitted: number;
+  live: number;            // counts status="live" and legacy status="submitted"
   dryRun: number;
   rejected: number;
   failed: number;

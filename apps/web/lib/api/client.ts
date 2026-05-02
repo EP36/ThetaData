@@ -793,7 +793,7 @@ type ApiThetaTradeEntry = {
 
 type ApiThetaTradeStats = {
   total: number;
-  submitted: number;
+  live: number;            // backend counts "live" + legacy "submitted" into this field
   dry_run: number;
   rejected: number;
   failed: number;
@@ -861,7 +861,7 @@ export async function getStrategyPanelStatus(): Promise<ThetaRunnerStatus> {
     totalTradeCount: payload.total_trade_count,
     tradeStats: {
       total: s.total,
-      submitted: s.submitted,
+      live: s.live,
       dryRun: s.dry_run,
       rejected: s.rejected,
       failed: s.failed,

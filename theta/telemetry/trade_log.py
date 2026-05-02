@@ -54,7 +54,8 @@ class TradeRecord:
     client_order_id: str
 
     # Outcome
-    status: str                 # "submitted" | "dry_run" | "failed" | "rejected"
+    status: str                 # "live" | "dry_run" | "failed" | "rejected"
+                                # ("submitted" is the legacy label for "live")
     error: str = ""
 
     # Populated after fill (via polling — not set synchronously by Coinbase IOC)
@@ -87,9 +88,10 @@ def log_trade(record: TradeRecord, log_dir: str = "logs") -> None:
     )
 
     try:
-        out_dir = Path(log_dir)
+        out_dir = Path(log_dir).resolve()
         out_dir.mkdir(parents=True, exist_ok=True)
         jsonl_path = out_dir / "trades.jsonl"
+        LOGGER.info("trade_log_path abs=%s", jsonl_path)
         with open(jsonl_path, "a", encoding="utf-8") as fh:
             fh.write(record.to_json() + "\n")
     except Exception as exc:

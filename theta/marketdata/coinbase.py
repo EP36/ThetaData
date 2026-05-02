@@ -155,6 +155,18 @@ def get_quote_balance(quote: str = "USD") -> float:
     return bal
 
 
+def get_base_balance(asset: str) -> float:
+    """Return available balance of the base currency (e.g. ETH or BTC).
+
+    Returns 0.0 on any error rather than raising, so callers can check
+    position size without crashing the preflight.
+    """
+    from funding_arb.coinbase_client import get_spot_balance
+    bal = get_spot_balance(asset)
+    LOGGER.info("coinbase_base_balance asset=%s balance=%.8f", asset, bal)
+    return bal
+
+
 def validate_product(asset: str, quote: str = "USD") -> str:
     """Confirm the product exists and is tradeable on Coinbase.
 

@@ -517,11 +517,15 @@ def get_theta_runner_status(
             with open(trades_file) as fh:
                 for line in fh:
                     line = line.strip()
-                    if line:
-                        try:
-                            raw_trades.append(json.loads(line))
-                        except json.JSONDecodeError:
-                            pass
+                    if not line:
+                        continue
+                    # Skip git conflict markers that may appear in the JSONL file.
+                    if line.startswith(("<<<<<<<", "=======", ">>>>>>>")):
+                        continue
+                    try:
+                        raw_trades.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        pass
         except Exception as exc:
             _APP_LOGGER.warning("theta_trades_read_failed path=%s error=%s", trades_file, exc)
 
@@ -585,8 +589,8 @@ def get_theta_runner_status(
     for t in raw_trades:
         stats.total += 1
         s = (t.get("status") or "").lower()
-        if s == "submitted":
-            stats.submitted += 1
+        if s in ("live", "submitted"):    # "submitted" is the legacy label for live
+            stats.live += 1
         elif s == "dry_run":
             stats.dry_run += 1
         elif s == "rejected":

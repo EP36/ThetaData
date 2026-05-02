@@ -122,7 +122,7 @@ def place_market_order(
                             does not call create_order.
 
     Returns:
-        TradeRecord with status="submitted" (live) or "dry_run".
+        TradeRecord with status="live" (live) or "dry_run".
 
     Raises:
         ExecutionError: on API error or order rejection.
@@ -303,7 +303,7 @@ def place_market_order(
         expected_total_cost_usd=expected_total_cost,
         order_id=order_id,
         client_order_id=client_order_id,
-        status="submitted",
+        status="live",
     )
     log_trade(record, cfg.log_dir)
     return record

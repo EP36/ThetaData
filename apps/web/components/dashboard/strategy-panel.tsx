@@ -229,12 +229,12 @@ function TradeLogSummary({ status }: { status: ThetaRunnerStatus }) {
   if (st.total === 0) return null;
 
   const items: { label: string; value: string; styleKey?: string }[] = [
-    { label: "Total",     value: String(st.total) },
-    { label: "Submitted", value: String(st.submitted), styleKey: "submitted" },
-    { label: "Dry run",   value: String(st.dryRun),    styleKey: "dry_run" },
-    { label: "Rejected",  value: String(st.rejected),  styleKey: "rejected" },
-    { label: "Failed",    value: String(st.failed),    styleKey: "failed" },
-    { label: "Notional",  value: fmtUsd(st.totalNotionalUsd) },
+    { label: "Total",    value: String(st.total) },
+    { label: "Live",     value: String(st.live),    styleKey: "live" },
+    { label: "Dry run",  value: String(st.dryRun),  styleKey: "dry_run" },
+    { label: "Rejected", value: String(st.rejected), styleKey: "rejected" },
+    { label: "Failed",   value: String(st.failed),   styleKey: "failed" },
+    { label: "Notional", value: fmtUsd(st.totalNotionalUsd) },
   ];
 
   return (
