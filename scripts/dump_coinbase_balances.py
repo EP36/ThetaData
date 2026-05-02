@@ -70,9 +70,17 @@ def main() -> int:
             for acct in accounts:
                 cur = getattr(acct, "currency", "?")
                 avail = getattr(acct, "available_balance", None)
-                val = getattr(avail, "value", "?") if avail else "?"
+                if isinstance(avail, dict):
+                    val = avail.get("value", "?")
+                elif avail is not None:
+                    val = getattr(avail, "value", "?")
+                else:
+                    val = "None"
                 name = getattr(acct, "name", "?")
                 LOGGER.info("  account name=%r currency=%s available=%s", name, cur, val)
+                # Print full repr for key accounts so we can see the raw structure.
+                if str(cur).upper() in ("USD", "USDC", "ETH", "BTC"):
+                    LOGGER.info("  [diag] repr=%r", acct)
     except Exception as exc:
         LOGGER.warning("raw_accounts_dump_failed error=%s", exc)
 

@@ -242,7 +242,23 @@ def get_spot_balance(currency: str = "USD") -> float:
                 continue
 
             available = getattr(acct, "available_balance", None)
-            value = getattr(available, "value", None)
+            # available_balance may be a typed Balance object, a plain dict,
+            # or None if the SDK version doesn't deserialize nested objects.
+            if isinstance(available, dict):
+                value = available.get("value")
+            elif available is not None:
+                value = getattr(available, "value", None)
+            else:
+                # Fallback: try to_dict() on the account itself
+                value = None
+                try:
+                    if hasattr(acct, "to_dict"):
+                        d = acct.to_dict()
+                        ab = (d.get("available_balance") or {})
+                        value = ab.get("value") if isinstance(ab, dict) else None
+                except Exception:
+                    pass
+
             try:
                 bal = float(value) if value is not None else 0.0
             except (TypeError, ValueError):
