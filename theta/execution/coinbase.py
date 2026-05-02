@@ -130,9 +130,20 @@ def place_market_order(
     """
     cfg = config or BasisConfig.from_env()
 
-    # Fetch mid price for cost estimation (also validates connectivity)
-    from theta.marketdata.coinbase import get_spot_mid_price
-    mid_price = get_spot_mid_price(asset, quote)
+    # Fetch mid price for cost estimation.
+    # In dry-run mode, tolerate a missing client so smoke tests work locally.
+    from theta.marketdata.coinbase import get_spot_mid_price, MarketDataError
+    try:
+        mid_price = get_spot_mid_price(asset, quote)
+    except MarketDataError as exc:
+        if not dry_run:
+            raise
+        LOGGER.warning(
+            "coinbase_mid_price_unavailable product=%s-%s error=%s — "
+            "dry_run=True so continuing with mid_price=0",
+            asset, quote, exc,
+        )
+        mid_price = 0.0
 
     # Build cost estimates
     expected_fee_usd      = notional_usd * cfg.cb_taker_fee_bps   / 10_000.0
