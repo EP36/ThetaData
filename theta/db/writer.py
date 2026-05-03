@@ -211,11 +211,11 @@ def write_trade(
             INSERT INTO theta_trades
                 (runner_key, trade_timestamp, strategy, exchange, asset, quote,
                  side, notional_usd, expected_edge_bps, mid_price_at_order,
-                 order_id, client_order_id, status, error, dry_run)
+                 order_id, client_order_id, status, error, dry_run, created_at)
             VALUES
                 (:runner_key, :trade_timestamp, :strategy, :exchange, :asset, :quote,
                  :side, :notional_usd, :expected_edge_bps, :mid_price_at_order,
-                 :order_id, :client_order_id, :status, :error, :dry_run)
+                 :order_id, :client_order_id, :status, :error, :dry_run, :created_at)
         """)
         with engine.begin() as conn:
             conn.execute(sql, {
@@ -234,6 +234,7 @@ def write_trade(
                 "status": record.status,
                 "error": record.error or None,
                 "dry_run": record.status == "dry_run",
+                "created_at": datetime.now(timezone.utc),
             })
         LOGGER.info(
             "trade_write_db strategy=%s side=%s notional=%.2f status=%s",
