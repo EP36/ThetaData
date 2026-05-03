@@ -33,6 +33,14 @@ from src.api.schemas import (
     HealthResponse,
     KillSwitchRequest,
     KillSwitchResponse,
+    OperationalOverviewResponse,
+    OverviewBalances,
+    OverviewHealth,
+    OverviewPositions,
+    OverviewPnl,
+    OverviewStrategyStats,
+    OverviewSystem,
+    OverviewVenues,
     PortfolioAnalyticsResponse,
     RiskStatusResponse,
     SelectionStatusResponse,
@@ -763,6 +771,317 @@ def get_theta_runner_status(
         trade_stats=stats,
         recent_trades=recent_trades,
         fetched_at=now,
+    )
+
+
+@app.get("/api/dashboard/overview", response_model=OperationalOverviewResponse)
+def get_operational_overview(
+    _user: AuthenticatedUser = Depends(require_authenticated_user),
+) -> OperationalOverviewResponse:
+    """Unified control-tower payload for the Operational Overview section.
+
+    Aggregates runner state, trade stats, positions, PnL, and health from the
+    shared Postgres DB.  ETH price is fetched from the public Coinbase REST API
+    (no auth required).  All sections degrade gracefully to null/empty on error.
+    """
+    import urllib.request
+    now = datetime.now(timezone.utc)
+    as_of = now.isoformat()
+    ds = _deployment_settings()
+
+    # ── 1. Runner state from shared DB ──────────────────────────────────────
+    hb = _read_runner_heartbeat_from_db(now) or _read_runner_heartbeat_from_file(
+        Path(ds.log_dir).resolve(), now
+    )
+    system = OverviewSystem(
+        runner_live=hb.available and not hb.stale,
+        runner_stale=hb.available and hb.stale,
+        runner_mode=hb.mode,
+        last_tick_at=hb.last_tick_at,
+        iterations=hb.iterations_completed,
+        last_result=hb.last_result,
+        selected_strategy=hb.selected_strategy,
+        signal_provider=ds.signal_provider,
+    )
+
+    # ── 2. Venue/mode summary from deployment settings ───────────────────────
+    # Detect active Coinbase execution: runner is live AND evaluating a coinbase strategy.
+    cb_strategies = [s for s in hb.strategies_evaluated if "coinbase" in s.lower()]
+    coinbase_active = hb.available and bool(cb_strategies)
+    coinbase_mode = "live" if (coinbase_active and hb.mode == "live") else \
+                    "dry_run" if (coinbase_active and hb.mode == "dry_run") else "off"
+    execution_venue = "coinbase" if coinbase_active else ds.trading_venue
+
+    venues = OverviewVenues(
+        execution_venue=execution_venue,
+        coinbase_mode=coinbase_mode,
+        polymarket_mode=ds.poly_trading_mode,
+        alpaca_mode=ds.alpaca_trading_mode,
+    )
+
+    # ── 3. Trade stats from theta_trades ─────────────────────────────────────
+    engine = _theta_engine()
+    strategy_stats: dict[str, dict] = {}
+    daily: dict[str, float] = {}
+    warnings: list[str] = []
+
+    if engine is not None:
+        try:
+            from sqlalchemy import text as _text
+            # Per-strategy, per-side aggregates for live trades
+            sql = _text("""
+                SELECT
+                    strategy,
+                    side,
+                    COUNT(*)                                               AS cnt,
+                    COALESCE(SUM(notional_usd), 0)                        AS total_notional,
+                    COALESCE(SUM(notional_usd / NULLIF(mid_price_at_order, 0)), 0) AS approx_eth,
+                    MAX(trade_timestamp)                                   AS last_trade_at
+                FROM theta_trades
+                WHERE status = 'live'
+                GROUP BY strategy, side
+            """)
+            with engine.connect() as conn:
+                rows = conn.execute(sql).fetchall()
+
+            for r in rows:
+                key = r.strategy or "unknown"
+                if key not in strategy_stats:
+                    strategy_stats[key] = {
+                        "buy_count": 0, "sell_count": 0,
+                        "buy_notional": 0.0, "sell_notional": 0.0,
+                        "buy_eth": 0.0, "sell_eth": 0.0,
+                        "last_trade_at": None,
+                    }
+                s = strategy_stats[key]
+                cnt = int(r.cnt or 0)
+                notional = float(r.total_notional or 0)
+                eth = float(r.approx_eth or 0)
+                ts = r.last_trade_at
+                ts_iso = ts.isoformat() if hasattr(ts, "isoformat") else str(ts) if ts else None
+                if r.side == "buy":
+                    s["buy_count"] += cnt
+                    s["buy_notional"] += notional
+                    s["buy_eth"] += eth
+                else:
+                    s["sell_count"] += cnt
+                    s["sell_notional"] += notional
+                    s["sell_eth"] += eth
+                if ts_iso and (s["last_trade_at"] is None or ts_iso > s["last_trade_at"]):
+                    s["last_trade_at"] = ts_iso
+
+            # Most-recent trade per strategy for last_edge, last_action, last_notional
+            sql2 = _text("""
+                SELECT DISTINCT ON (strategy)
+                    strategy, side, notional_usd, expected_edge_bps, trade_timestamp
+                FROM theta_trades
+                WHERE status = 'live'
+                ORDER BY strategy, trade_timestamp DESC
+            """)
+            with engine.connect() as conn:
+                recent_rows = conn.execute(sql2).fetchall()
+            for r in recent_rows:
+                key = r.strategy or "unknown"
+                if key not in strategy_stats:
+                    strategy_stats[key] = {
+                        "buy_count": 0, "sell_count": 0,
+                        "buy_notional": 0.0, "sell_notional": 0.0,
+                        "buy_eth": 0.0, "sell_eth": 0.0,
+                        "last_trade_at": None,
+                    }
+                strategy_stats[key]["last_edge_bps"] = float(r.expected_edge_bps or 0)
+                strategy_stats[key]["last_notional_usd"] = float(r.notional_usd or 0)
+                strategy_stats[key]["last_action"] = r.side
+
+            # Daily trade stats for PnL (today UTC)
+            sql3 = _text("""
+                SELECT
+                    side,
+                    COALESCE(SUM(notional_usd), 0) AS daily_notional
+                FROM theta_trades
+                WHERE status = 'live'
+                  AND trade_timestamp >= CURRENT_DATE
+                GROUP BY side
+            """)
+            daily: dict[str, float] = {}
+            with engine.connect() as conn:
+                for r in conn.execute(sql3).fetchall():
+                    daily[r.side] = float(r.daily_notional or 0)
+
+        except Exception as exc:
+            _APP_LOGGER.warning("overview_trade_stats_failed error=%s", exc)
+            warnings.append(f"trade_stats_unavailable: {exc}")
+
+    # ── 4. ETH price from public Coinbase REST ────────────────────────────────
+    eth_price: float | None = None
+    try:
+        req = urllib.request.Request(
+            "https://api.coinbase.com/v2/prices/ETH-USD/spot",
+            headers={"User-Agent": "trauto-dashboard/1.0"},
+        )
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            body = json.loads(resp.read())
+        eth_price = float(body["data"]["amount"])
+    except Exception as exc:
+        _APP_LOGGER.warning("eth_price_fetch_failed error=%s", exc)
+        # Fall back to latest mid_price from theta_trades
+        if engine is not None:
+            try:
+                from sqlalchemy import text as _text2
+                sql_price = _text2("""
+                    SELECT mid_price_at_order
+                    FROM theta_trades
+                    WHERE mid_price_at_order > 0
+                    ORDER BY trade_timestamp DESC
+                    LIMIT 1
+                """)
+                with engine.connect() as conn:
+                    row = conn.execute(sql_price).fetchone()
+                if row:
+                    eth_price = float(row.mid_price_at_order)
+            except Exception:
+                pass
+
+    # ── 5. Positions and balances from trade history ──────────────────────────
+    # Aggregate across all coinbase strategies
+    total_buy_notional = sum(s["buy_notional"] for s in strategy_stats.values())
+    total_sell_notional = sum(s["sell_notional"] for s in strategy_stats.values())
+    total_buy_eth = sum(s["buy_eth"] for s in strategy_stats.values())
+    total_sell_eth = sum(s["sell_eth"] for s in strategy_stats.values())
+
+    approx_eth_held = max(0.0, total_buy_eth - total_sell_eth)
+    eth_value_usd = (approx_eth_held * eth_price) if eth_price and approx_eth_held > 0 else None
+
+    # Active positions: ETH position is "active" if worth more than $1
+    active_count = 1 if (eth_value_usd is not None and eth_value_usd >= 1.0) else 0
+
+    # Also include Polymarket USDC in total balance if available
+    poly_usdc: float | None = None
+    hl_usdc: float | None = None
+    if ds.poly_wallet_address:
+        try:
+            from src.api.services import _fetch_polygon_usdc_balance, _fetch_hl_usdc_balance
+            poly_usdc = _fetch_polygon_usdc_balance(ds.poly_wallet_address) or None
+            hl_usdc = _fetch_hl_usdc_balance(os.getenv("HL_WALLET_ADDRESS", "")) or None
+        except Exception:
+            pass
+
+    total_usd: float | None = None
+    parts: list[float] = []
+    if eth_value_usd is not None:
+        parts.append(eth_value_usd)
+    if poly_usdc is not None:
+        parts.append(poly_usdc)
+    if hl_usdc is not None:
+        parts.append(hl_usdc)
+    if parts:
+        total_usd = sum(parts)
+
+    balance_note_parts = []
+    if eth_value_usd is not None:
+        balance_note_parts.append(f"ETH: ~${eth_value_usd:.0f}")
+    if poly_usdc:
+        balance_note_parts.append(f"Poly: ${poly_usdc:.0f}")
+    if hl_usdc:
+        balance_note_parts.append(f"HL: ${hl_usdc:.0f}")
+
+    balances = OverviewBalances(
+        total_usd=total_usd,
+        eth_qty=approx_eth_held if approx_eth_held > 0 else None,
+        eth_value_usd=eth_value_usd,
+        eth_price_usd=eth_price,
+        polymarket_usdc=poly_usdc,
+        hyperliquid_usdc=hl_usdc,
+        note=" | ".join(balance_note_parts) if balance_note_parts else "estimated from trade history",
+    )
+
+    positions = OverviewPositions(
+        active_count=active_count,
+        eth_qty=approx_eth_held if approx_eth_held > 0 else None,
+        eth_value_usd=eth_value_usd,
+        eth_price_usd=eth_price,
+    )
+
+    # ── 6. PnL from trade history ─────────────────────────────────────────────
+    # Cost-basis approach: PnL = (current ETH value + total sells) - total buys
+    # This works for a spot strategy with no other capital sources.
+    try:
+        from src.api.services import _load_total_deposited as _ltd
+        _total_deposited = _ltd()
+    except Exception:
+        _total_deposited = 0.0
+
+    if total_buy_notional > 0:
+        realized_net = total_sell_notional - total_buy_notional
+        total_pnl: float | None = realized_net + (eth_value_usd or 0.0)
+        if _total_deposited > 0:
+            total_pnl = total_pnl - _total_deposited
+        pnl_note = "cost-basis: (ETH value + sells) − buys"
+    else:
+        total_pnl = None
+        pnl_note = "no live trades yet"
+
+    daily_buy = daily.get("buy", 0.0)
+    daily_sell = daily.get("sell", 0.0)
+    daily_pnl: float | None = (daily_sell - daily_buy) if (daily_buy > 0 or daily_sell > 0) else None
+
+    pnl = OverviewPnl(
+        total_usd=total_pnl,
+        daily_usd=daily_pnl,
+        total_buy_notional=total_buy_notional,
+        total_sell_notional=total_sell_notional,
+        note=pnl_note,
+    )
+
+    # ── 7. Per-strategy summary cards ────────────────────────────────────────
+    _KNOWN_STRATS = [
+        ("coinbase_spot_eth_usd", "Coinbase Spot ETH", "coinbase"),
+        ("coinbase_spot_btc_usd", "Momentum (ETH/BTC)", "coinbase"),
+        ("hyperliquid_spot_eth_usd", "Funding Arb (HL)", "hyperliquid"),
+    ]
+    strategy_summaries: list[OverviewStrategyStats] = []
+    for strat_key, label, exchange in _KNOWN_STRATS:
+        s = strategy_stats.get(strat_key, {})
+        total = s.get("buy_count", 0) + s.get("sell_count", 0)
+        has_activity = total > 0
+        status = "live" if (has_activity and system.runner_live) else \
+                 "stale" if system.runner_stale else \
+                 "idle"
+        strategy_summaries.append(OverviewStrategyStats(
+            strategy=strat_key,
+            label=label,
+            exchange=exchange,
+            status=status,
+            total_trades=total,
+            buy_trades=s.get("buy_count", 0),
+            sell_trades=s.get("sell_count", 0),
+            last_trade_at=s.get("last_trade_at"),
+            last_edge_bps=s.get("last_edge_bps"),
+            last_notional_usd=s.get("last_notional_usd"),
+            last_action=s.get("last_action"),
+        ))
+
+    # ── 8. Health ─────────────────────────────────────────────────────────────
+    if engine is None:
+        warnings.append("database_unavailable: theta_trades not reachable")
+    if hb.available and hb.stale:
+        warnings.append("runner_stale: heartbeat older than 5 minutes")
+    health = OverviewHealth(
+        trade_writer_ok=engine is not None and not any(
+            "trade_stats_unavailable" in w for w in warnings
+        ),
+        warnings=warnings,
+    )
+
+    return OperationalOverviewResponse(
+        as_of=as_of,
+        system=system,
+        venues=venues,
+        balances=balances,
+        positions=positions,
+        pnl=pnl,
+        strategies=strategy_summaries,
+        health=health,
     )
 
 

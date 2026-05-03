@@ -395,3 +395,80 @@ export type AuthSessionData = {
   user: AuthenticatedUser;
   expiresAt: string;
 };
+
+// ---------------------------------------------------------------------------
+// Operational Overview — unified control-tower endpoint
+// ---------------------------------------------------------------------------
+
+export type OverviewSystem = {
+  runnerLive: boolean;
+  runnerStale: boolean;
+  runnerMode: string | null;
+  lastTickAt: string | null;
+  iterations: number;
+  lastResult: string | null;
+  selectedStrategy: string | null;
+  signalProvider: string;
+};
+
+export type OverviewVenues = {
+  executionVenue: string;
+  coinbaseMode: string;
+  polymarketMode: string;
+  alpacaMode: string;
+};
+
+export type OverviewBalances = {
+  totalUsd: number | null;
+  ethQty: number | null;
+  ethValueUsd: number | null;
+  ethPriceUsd: number | null;
+  polymarketUsdc: number | null;
+  hyperliquidUsdc: number | null;
+  note: string;
+};
+
+export type OverviewPositions = {
+  activeCount: number;
+  ethQty: number | null;
+  ethValueUsd: number | null;
+  ethPriceUsd: number | null;
+};
+
+export type OverviewPnl = {
+  totalUsd: number | null;
+  dailyUsd: number | null;
+  totalBuyNotional: number;
+  totalSellNotional: number;
+  note: string;
+};
+
+export type OverviewStrategyStats = {
+  strategy: string;
+  label: string;
+  exchange: string;
+  status: string;
+  totalTrades: number;
+  buyTrades: number;
+  sellTrades: number;
+  lastTradeAt: string | null;
+  lastEdgeBps: number | null;
+  lastNotionalUsd: number | null;
+  lastAction: string | null;
+};
+
+export type OverviewHealth = {
+  tradeWriterOk: boolean;
+  warnings: string[];
+};
+
+export type OperationalOverview = {
+  asOf: string;
+  system: OverviewSystem;
+  venues: OverviewVenues;
+  balances: OverviewBalances;
+  positions: OverviewPositions;
+  pnl: OverviewPnl;
+  strategies: OverviewStrategyStats[];
+  health: OverviewHealth;
+};

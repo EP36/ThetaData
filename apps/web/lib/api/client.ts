@@ -7,6 +7,7 @@ import type {
   BacktestResultData,
   ContextAnalyticsData,
   DashboardSummary,
+  OperationalOverview,
   PortfolioAnalyticsData,
   RiskStatusData,
   SelectionStatusData,
@@ -881,5 +882,144 @@ export async function getStrategyPanelStatus(): Promise<ThetaRunnerStatus> {
       clientOrderId: t.client_order_id,
     })),
     fetchedAt: payload.fetched_at,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Operational Overview
+// ---------------------------------------------------------------------------
+
+type ApiOverviewSystem = {
+  runner_live: boolean;
+  runner_stale: boolean;
+  runner_mode: string | null;
+  last_tick_at: string | null;
+  iterations: number;
+  last_result: string | null;
+  selected_strategy: string | null;
+  signal_provider: string;
+};
+
+type ApiOverviewVenues = {
+  execution_venue: string;
+  coinbase_mode: string;
+  polymarket_mode: string;
+  alpaca_mode: string;
+};
+
+type ApiOverviewBalances = {
+  total_usd: number | null;
+  eth_qty: number | null;
+  eth_value_usd: number | null;
+  eth_price_usd: number | null;
+  polymarket_usdc: number | null;
+  hyperliquid_usdc: number | null;
+  note: string;
+};
+
+type ApiOverviewPositions = {
+  active_count: number;
+  eth_qty: number | null;
+  eth_value_usd: number | null;
+  eth_price_usd: number | null;
+};
+
+type ApiOverviewPnl = {
+  total_usd: number | null;
+  daily_usd: number | null;
+  total_buy_notional: number;
+  total_sell_notional: number;
+  note: string;
+};
+
+type ApiOverviewStrategyStats = {
+  strategy: string;
+  label: string;
+  exchange: string;
+  status: string;
+  total_trades: number;
+  buy_trades: number;
+  sell_trades: number;
+  last_trade_at: string | null;
+  last_edge_bps: number | null;
+  last_notional_usd: number | null;
+  last_action: string | null;
+};
+
+type ApiOverviewHealth = {
+  trade_writer_ok: boolean;
+  warnings: string[];
+};
+
+type ApiOperationalOverview = {
+  as_of: string;
+  system: ApiOverviewSystem;
+  venues: ApiOverviewVenues;
+  balances: ApiOverviewBalances;
+  positions: ApiOverviewPositions;
+  pnl: ApiOverviewPnl;
+  strategies: ApiOverviewStrategyStats[];
+  health: ApiOverviewHealth;
+};
+
+export async function getOperationalOverview(): Promise<OperationalOverview> {
+  const p = await fetchJson<ApiOperationalOverview>("/api/dashboard/overview");
+  return {
+    asOf: p.as_of,
+    system: {
+      runnerLive: p.system.runner_live,
+      runnerStale: p.system.runner_stale,
+      runnerMode: p.system.runner_mode,
+      lastTickAt: p.system.last_tick_at,
+      iterations: p.system.iterations,
+      lastResult: p.system.last_result,
+      selectedStrategy: p.system.selected_strategy,
+      signalProvider: p.system.signal_provider,
+    },
+    venues: {
+      executionVenue: p.venues.execution_venue,
+      coinbaseMode: p.venues.coinbase_mode,
+      polymarketMode: p.venues.polymarket_mode,
+      alpacaMode: p.venues.alpaca_mode,
+    },
+    balances: {
+      totalUsd: p.balances.total_usd,
+      ethQty: p.balances.eth_qty,
+      ethValueUsd: p.balances.eth_value_usd,
+      ethPriceUsd: p.balances.eth_price_usd,
+      polymarketUsdc: p.balances.polymarket_usdc,
+      hyperliquidUsdc: p.balances.hyperliquid_usdc,
+      note: p.balances.note,
+    },
+    positions: {
+      activeCount: p.positions.active_count,
+      ethQty: p.positions.eth_qty,
+      ethValueUsd: p.positions.eth_value_usd,
+      ethPriceUsd: p.positions.eth_price_usd,
+    },
+    pnl: {
+      totalUsd: p.pnl.total_usd,
+      dailyUsd: p.pnl.daily_usd,
+      totalBuyNotional: p.pnl.total_buy_notional,
+      totalSellNotional: p.pnl.total_sell_notional,
+      note: p.pnl.note,
+    },
+    strategies: p.strategies.map((s) => ({
+      strategy: s.strategy,
+      label: s.label,
+      exchange: s.exchange,
+      status: s.status,
+      totalTrades: s.total_trades,
+      buyTrades: s.buy_trades,
+      sellTrades: s.sell_trades,
+      lastTradeAt: s.last_trade_at,
+      lastEdgeBps: s.last_edge_bps,
+      lastNotionalUsd: s.last_notional_usd,
+      lastAction: s.last_action,
+    })),
+    health: {
+      tradeWriterOk: p.health.trade_writer_ok,
+      warnings: p.health.warnings,
+    },
   };
 }

@@ -11,17 +11,17 @@ import { SummaryCard } from "@/components/dashboard/summary-card";
 import { CollapsibleSection } from "@/components/ui/collapsible-section";
 import { PageHeader } from "@/components/ui/page-header";
 import { StatePanel } from "@/components/ui/state-panel";
-import { getDashboardSummary, getStrategyPanelStatus } from "@/lib/api/client";
+import { getStrategyPanelStatus } from "@/lib/api/client";
 import { getDashboardData } from "@/lib/dashboard/service";
-import type { DashboardSummary, ThetaRunnerStatus, TimeSeriesPoint, TradeRow } from "@/lib/types";
+import { useOperationalOverview } from "@/lib/dashboard/use-operational-overview";
+import type { ThetaRunnerStatus, TimeSeriesPoint, TradeRow } from "@/lib/types";
 
-const BALANCE_POLL_MS = 60_000;
-
-function formatUsd(value: number): string {
+function formatUsd(value: number | null | undefined): string {
+  if (value === null || value === undefined) return "—";
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
-    maximumFractionDigits: 2
+    maximumFractionDigits: 2,
   }).format(value);
 }
 
@@ -29,69 +29,68 @@ function formatStatusValue(value: string): string {
   return value
     .split("_")
     .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
     .join(" ");
 }
 
+function relativeTime(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "—";
+  const secs = Math.floor((Date.now() - d.getTime()) / 1000);
+  if (secs < 60) return `${secs}s ago`;
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `${mins}m ago`;
+  return `${Math.floor(mins / 60)}h ago`;
+}
+
+// Derive a system status string for the StatusBadge from overview data.
+function deriveSystemStatus(
+  runnerLive: boolean,
+  runnerStale: boolean,
+  coinbaseMode: string,
+): string {
+  if (!runnerLive && !runnerStale) return "backend_unavailable";
+  if (runnerStale) return "dry_run";
+  if (coinbaseMode === "live") return "polymarket_live"; // reuse green badge
+  if (coinbaseMode === "dry_run") return "dry_run";
+  return "trading_disabled";
+}
+
 export default function DashboardPage() {
-  const [summary, setSummary] = useState<DashboardSummary | null>(null);
+  const overview = useOperationalOverview();
+
+  // Charts + recent trades still come from the legacy service (equity curves, fills)
   const [equity, setEquity] = useState<TimeSeriesPoint[]>([]);
   const [drawdown, setDrawdown] = useState<TimeSeriesPoint[]>([]);
   const [trades, setTrades] = useState<TradeRow[]>([]);
   const [strategyStatus, setStrategyStatus] = useState<ThetaRunnerStatus | null>(null);
   const [strategyError, setStrategyError] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [chartsLoading, setChartsLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
-
-    async function loadDashboard() {
-      setLoading(true);
+    async function load() {
       let thetaError = false;
       const [data, strategies] = await Promise.all([
         getDashboardData(),
         getStrategyPanelStatus().catch(() => { thetaError = true; return null; }),
       ]);
       if (!cancelled) {
-        setSummary(data.summary);
         setEquity(data.equityCurve);
         setDrawdown(data.drawdownCurve);
         setTrades(data.recentTrades);
         setStrategyStatus(strategies);
         setStrategyError(thetaError);
-        setLoading(false);
+        setChartsLoading(false);
       }
     }
-
-    void loadDashboard();
-    return () => {
-      cancelled = true;
-    };
+    void load();
+    return () => { cancelled = true; };
   }, []);
 
-  useEffect(() => {
-    const id = setInterval(async () => {
-      try {
-        const updated = await getDashboardSummary();
-        setSummary((prev) =>
-          prev === null
-            ? prev
-            : {
-                ...prev,
-                equity: updated.equity,
-                equityBreakdown: updated.equityBreakdown ?? prev.equityBreakdown,
-                totalDeposited: updated.totalDeposited ?? prev.totalDeposited,
-                totalPnl: updated.totalPnl,
-              }
-        );
-      } catch {
-        // leave stale value; next tick will retry
-      }
-    }, BALANCE_POLL_MS);
-    return () => clearInterval(id);
-  }, []);
-
-  if (loading || summary === null) {
+  // Loading state: wait for overview only (charts load in background)
+  if (overview.loading) {
     return (
       <StatePanel
         title="Loading dashboard"
@@ -100,76 +99,108 @@ export default function DashboardPage() {
     );
   }
 
-  const isPolymarket = summary.tradingStatus.tradingVenue === "polymarket";
-  const dailyTone = summary.dailyPnl >= 0 ? "positive" : "negative";
-  const totalTone = summary.totalPnl >= 0 ? "positive" : "negative";
+  const ov = overview.data;
+
+  // ── derive display values ────────────────────────────────────────────────
+  const systemStatus = ov
+    ? deriveSystemStatus(ov.system.runnerLive, ov.system.runnerStale, ov.venues.coinbaseMode)
+    : "backend_unavailable";
+
+  const totalPnl = ov?.pnl.totalUsd ?? null;
+  const dailyPnl = ov?.pnl.dailyUsd ?? null;
+  const totalPnlTone = totalPnl === null ? "default" : totalPnl >= 0 ? "positive" : "negative";
+  const dailyPnlTone = dailyPnl === null ? "default" : dailyPnl >= 0 ? "positive" : "negative";
+
+  const balanceNote = ov?.balances.note || "estimated from trades";
+  const warnings = ov?.health.warnings ?? [];
+  const hasWarnings = warnings.length > 0;
+
+  const freshness = overview.lastFetchedAt
+    ? `Updated ${relativeTime(overview.lastFetchedAt.toISOString())}`
+    : "";
+
+  const riskAlerts: string[] = [
+    ...(hasWarnings ? warnings : []),
+    ...(ov?.system.runnerStale ? ["runner_stale"] : []),
+  ];
 
   return (
     <section className="space-y-4">
       <PageHeader
         eyebrow="Dashboard"
         title="Operational Overview"
-        description="Key PnL, position exposure, and system readiness are prioritized for quick review."
-        meta={<StatusBadge status={summary.systemStatus} />}
+        description={
+          freshness
+            ? `Key PnL, position exposure, and system readiness. ${freshness}.`
+            : "Key PnL, position exposure, and system readiness."
+        }
+        meta={<StatusBadge status={systemStatus} />}
       />
 
+      {/* Row 1 — mode cards */}
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <SummaryCard
           label="Signal Provider"
-          value={formatStatusValue(summary.tradingStatus.signalProvider)}
+          value={formatStatusValue(ov?.system.signalProvider ?? "—")}
           meta="Signals"
         />
         <SummaryCard
           label="Execution Venue"
-          value={formatStatusValue(summary.tradingStatus.tradingVenue)}
-          meta={formatStatusValue(summary.tradingStatus.executionAdapter)}
+          value={formatStatusValue(ov?.venues.executionVenue ?? "—")}
+          meta={formatStatusValue(ov?.venues.coinbaseMode ?? "off")}
         />
         <SummaryCard
           label="Polymarket Mode"
-          value={formatStatusValue(summary.tradingStatus.polyTradingMode)}
-          meta={summary.tradingStatus.polyDryRun ? "Dry run on" : "Dry run off"}
+          value={formatStatusValue(ov?.venues.polymarketMode ?? "—")}
+          meta="Poly"
         />
         <SummaryCard
           label="Alpaca Mode"
-          value={formatStatusValue(summary.tradingStatus.alpacaTradingMode)}
-          meta={
-            summary.tradingStatus.paperTradingEnabled
-              ? "Paper trading on"
-              : "Paper trading off"
-          }
+          value={formatStatusValue(ov?.venues.alpacaMode ?? "—")}
+          meta="Alpaca"
         />
       </div>
 
+      {/* Row 2 — metric cards */}
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <SummaryCard
           label="Total PnL"
-          value={formatUsd(summary.totalPnl)}
-          tone={totalTone}
-          meta={summary.totalDeposited ? `vs $${summary.totalDeposited.toFixed(0)} deposited` : "Portfolio"}
+          value={formatUsd(totalPnl)}
+          tone={totalPnlTone}
+          meta={ov?.pnl.note ?? ""}
         />
         <SummaryCard
           label="Daily PnL"
-          value={formatUsd(summary.dailyPnl)}
-          tone={dailyTone}
-          meta="Today"
+          value={formatUsd(dailyPnl)}
+          tone={dailyPnlTone}
+          meta="Today (UTC)"
         />
         <SummaryCard
           label="Active Positions"
-          value={String(summary.openPositions)}
-          meta="Open now"
+          value={String(ov?.positions.activeCount ?? 0)}
+          meta={
+            ov?.positions.ethQty
+              ? `~${ov.positions.ethQty.toFixed(4)} ETH`
+              : "Open now"
+          }
         />
         <SummaryCard
           label="Total Balance"
-          value={summary.equity !== null ? formatUsd(summary.equity) : "Unavailable"}
-          meta={
-            isPolymarket && summary.equityBreakdown
-              ? `Poly: ${formatUsd(summary.equityBreakdown.polymarketUsdc)} | HL: ${formatUsd(summary.equityBreakdown.hyperliquidUsdc)}`
-              : isPolymarket
-              ? "Polygon wallet"
-              : "Net value"
-          }
+          value={formatUsd(ov?.balances.totalUsd)}
+          meta={balanceNote}
         />
       </div>
+
+      {/* Health warning banner (only when degraded) */}
+      {hasWarnings && (
+        <div
+          className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900"
+          role="alert"
+        >
+          <span className="font-semibold">System warnings: </span>
+          {warnings.join(" · ")}
+        </div>
+      )}
 
       <CollapsibleSection
         title="Theta Strategies"
@@ -200,14 +231,14 @@ export default function DashboardPage() {
 
       <CollapsibleSection
         title="Risk Alerts"
-        description={`Warnings that may require attention before ${isPolymarket ? "live trading resumes" : "paper trading resumes"}.`}
+        description="Warnings that may require attention before trading resumes."
         meta={
           <span className="rounded-full border border-[var(--line-soft)] px-3 py-1 text-xs font-medium text-[var(--muted)]">
-            {summary.riskAlerts.length}
+            {riskAlerts.length}
           </span>
         }
       >
-        <RiskAlertsPanel alerts={summary.riskAlerts} showHeader={false} />
+        <RiskAlertsPanel alerts={riskAlerts} showHeader={false} />
       </CollapsibleSection>
     </section>
   );

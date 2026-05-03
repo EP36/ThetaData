@@ -565,3 +565,90 @@ class ServiceStatusResponse(BaseModel):
     worker_heartbeat: Optional[dict[str, Any]]
     recent_runs: list[dict[str, Any]]
     timestamp: datetime
+
+
+# ---------------------------------------------------------------------------
+# Operational Overview — unified dashboard control-tower endpoint
+# ---------------------------------------------------------------------------
+
+class OverviewSystem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    runner_live: bool = False
+    runner_stale: bool = False
+    runner_mode: Optional[str] = None
+    last_tick_at: Optional[str] = None
+    iterations: int = 0
+    last_result: Optional[str] = None
+    selected_strategy: Optional[str] = None
+    signal_provider: str = "synthetic"
+
+
+class OverviewVenues(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    execution_venue: str = "unknown"
+    coinbase_mode: str = "off"
+    polymarket_mode: str = "off"
+    alpaca_mode: str = "off"
+
+
+class OverviewBalances(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    total_usd: Optional[float] = None
+    eth_qty: Optional[float] = None
+    eth_value_usd: Optional[float] = None
+    eth_price_usd: Optional[float] = None
+    polymarket_usdc: Optional[float] = None
+    hyperliquid_usdc: Optional[float] = None
+    note: str = ""
+
+
+class OverviewPositions(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    active_count: int = 0
+    eth_qty: Optional[float] = None
+    eth_value_usd: Optional[float] = None
+    eth_price_usd: Optional[float] = None
+
+
+class OverviewPnl(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    total_usd: Optional[float] = None
+    daily_usd: Optional[float] = None
+    total_buy_notional: float = 0.0
+    total_sell_notional: float = 0.0
+    note: str = ""
+
+
+class OverviewStrategyStats(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    strategy: str
+    label: str
+    exchange: str
+    status: str = "idle"
+    total_trades: int = 0
+    buy_trades: int = 0
+    sell_trades: int = 0
+    last_trade_at: Optional[str] = None
+    last_edge_bps: Optional[float] = None
+    last_notional_usd: Optional[float] = None
+    last_action: Optional[str] = None
+
+
+class OverviewHealth(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    trade_writer_ok: bool = True
+    warnings: list[str] = Field(default_factory=list)
+
+
+class OperationalOverviewResponse(BaseModel):
+    """Unified control-tower payload for the Operational Overview section."""
+    model_config = ConfigDict(extra="forbid")
+
+    as_of: str
+    system: OverviewSystem = Field(default_factory=OverviewSystem)
+    venues: OverviewVenues = Field(default_factory=OverviewVenues)
+    balances: OverviewBalances = Field(default_factory=OverviewBalances)
+    positions: OverviewPositions = Field(default_factory=OverviewPositions)
+    pnl: OverviewPnl = Field(default_factory=OverviewPnl)
+    strategies: list[OverviewStrategyStats] = Field(default_factory=list)
+    health: OverviewHealth = Field(default_factory=OverviewHealth)
