@@ -319,6 +319,83 @@ def test_dust_eth_position_no_sell():
 
 
 # ---------------------------------------------------------------------------
+# 10. Live buy → write_trade() called with strategy_name (DB write path)
+# ---------------------------------------------------------------------------
+
+def test_live_buy_calls_write_trade_with_strategy_name():
+    """write_trade() must be invoked with strategy_name so theta_trades gets a row."""
+    tmp = tempfile.mkdtemp()
+    strat = CoinbaseSpotEdgeStrategy(config=_cfg(log_dir=tmp), signal_edge_bps=200.0)
+
+    mock_cb = MagicMock()
+    mock_resp = MagicMock()
+    mock_resp.success = True
+    mock_resp.order_id = "db-write-order-001"
+    mock_resp.success_response = MagicMock(order_id="db-write-order-001")
+    mock_cb.create_order.return_value = mock_resp
+
+    planned = PlannedTrade(
+        strategy_name=strat.name,
+        exchange="coinbase",
+        product_id="ETH-USD",
+        side="buy",
+        notional_usd=50.0,
+        expected_edge_bps=200.0,
+    )
+
+    with patch("theta.execution.coinbase._require_client", return_value=mock_cb), \
+         patch("theta.marketdata.coinbase.get_spot_mid_price", return_value=_MID), \
+         patch("theta.db.writer.write_trade") as mock_write_trade:
+        result = strat.execute(planned, dry_run=False)
+
+    _assert(result.success, f"expected success, got error={result.error}")
+    mock_write_trade.assert_called_once()
+    call_kwargs = mock_write_trade.call_args
+    written_strategy = call_kwargs[0][1] if len(call_kwargs[0]) > 1 else call_kwargs[1].get("strategy_name")
+    _assert(
+        written_strategy == strat.name,
+        f"expected strategy_name={strat.name!r}, write_trade got {written_strategy!r}",
+    )
+    print("PASS test_live_buy_calls_write_trade_with_strategy_name")
+
+
+# ---------------------------------------------------------------------------
+# 11. dry_run=True → write_trade() called with strategy_name (dry-run DB path)
+# ---------------------------------------------------------------------------
+
+def test_dry_run_calls_write_trade_with_strategy_name():
+    """DB write must also fire for dry-run trades so the dashboard can show them."""
+    tmp = tempfile.mkdtemp()
+    strat = CoinbaseSpotEdgeStrategy(config=_cfg(log_dir=tmp), signal_edge_bps=200.0)
+
+    mock_cb = MagicMock()
+
+    planned = PlannedTrade(
+        strategy_name=strat.name,
+        exchange="coinbase",
+        product_id="ETH-USD",
+        side="buy",
+        notional_usd=50.0,
+        expected_edge_bps=200.0,
+    )
+
+    with patch("theta.execution.coinbase._require_client", return_value=mock_cb), \
+         patch("theta.marketdata.coinbase.get_spot_mid_price", return_value=_MID), \
+         patch("theta.db.writer.write_trade") as mock_write_trade:
+        result = strat.execute(planned, dry_run=True)
+
+    _assert(result.success, f"expected success in dry_run, got error={result.error}")
+    mock_write_trade.assert_called_once()
+    call_kwargs = mock_write_trade.call_args
+    written_strategy = call_kwargs[0][1] if len(call_kwargs[0]) > 1 else call_kwargs[1].get("strategy_name")
+    _assert(
+        written_strategy == strat.name,
+        f"expected strategy_name={strat.name!r}, write_trade got {written_strategy!r}",
+    )
+    print("PASS test_dry_run_calls_write_trade_with_strategy_name")
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -334,6 +411,8 @@ _ALL_TESTS = [
     test_live_sell_logged_with_live_status,
     test_api_error_logged_as_failed,
     test_dust_eth_position_no_sell,
+    test_live_buy_calls_write_trade_with_strategy_name,
+    test_dry_run_calls_write_trade_with_strategy_name,
 ]
 
 
