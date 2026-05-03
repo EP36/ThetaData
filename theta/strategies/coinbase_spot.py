@@ -115,6 +115,7 @@ class CoinbaseSpotEdgeStrategy:
                 expected_edge_bps=planned.expected_edge_bps,
                 config=self._cfg,
                 dry_run=dry_run,
+                strategy_name=self.name,
             )
             if planned.side == "sell" and not dry_run:
                 LOGGER.info(

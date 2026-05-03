@@ -70,6 +70,44 @@ def write_runner_status(
     except Exception as exc:
         LOGGER.warning("runner_status_write_failed path=%s error=%s", dest, exc)
 
+    # Also write to Postgres so the Render API can read it cross-host.
+    _write_to_db(
+        mode=mode,
+        last_tick_at=datetime.now(timezone.utc),
+        strategies_evaluated=strategies_evaluated,
+        iterations_completed=iterations_completed,
+        selected_strategy=selected_strategy,
+        last_result=last_result,
+        last_error=last_error,
+    )
+
+
+def _write_to_db(
+    mode: str,
+    last_tick_at: datetime,
+    strategies_evaluated: list[str],
+    iterations_completed: int,
+    selected_strategy: Optional[str],
+    last_result: str,
+    last_error: Optional[str],
+) -> None:
+    import os
+    runner_key = os.getenv("THETA_RUNNER_KEY", "default")
+    try:
+        from theta.db.writer import write_runner_status
+        write_runner_status(
+            runner_key=runner_key,
+            mode=mode,
+            last_tick_at=last_tick_at,
+            last_result=last_result,
+            last_error=last_error,
+            iterations_completed=iterations_completed,
+            selected_strategy=selected_strategy,
+            strategies_evaluated=strategies_evaluated,
+        )
+    except Exception as exc:
+        LOGGER.warning("runner_status_db_write_failed error=%s", exc)
+
 
 def _atomic_write(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
