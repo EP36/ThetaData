@@ -396,6 +396,101 @@ def test_dry_run_calls_write_trade_with_strategy_name():
 
 
 # ---------------------------------------------------------------------------
+# 12. Cap exceeded with positive edge → SELL (primary use case for live operation)
+# ---------------------------------------------------------------------------
+
+def test_cap_exceeded_with_positive_edge_produces_sell():
+    """When SPOT_MAX_LONG_NOTIONAL_USD is set and ETH position exceeds it,
+    the strategy must sell the excess even though the edge signal is positive (buy).
+    This is the fix for the 'static positive SPOT_EDGE_BPS never sells' bug."""
+    # cap = $50; ETH position = 0.02 ETH × $3000 = $60 → $10 over cap → sell $10
+    strat = CoinbaseSpotEdgeStrategy(
+        config=_cfg(max_long_notional_usd=50.0),
+        signal_edge_bps=200.0,  # positive buy signal — should NOT block sell
+    )
+
+    with patch("theta.marketdata.coinbase.get_base_balance", return_value=0.02), \
+         patch("theta.marketdata.coinbase.get_spot_mid_price", return_value=_MID), \
+         patch("theta.marketdata.coinbase.get_quote_balance", return_value=100.0):
+        planned = strat.evaluate_opportunity(NOW)
+
+    _assert(planned is not None, "expected PlannedTrade for cap-exceeded sell, got None")
+    _assert(planned.side == "sell", f"expected side=sell, got {planned.side}")
+    # excess = $60 - $50 = $10
+    _assert(
+        abs(planned.notional_usd - 10.0) < 0.01,
+        f"expected notional≈10 (excess above cap), got {planned.notional_usd}",
+    )
+    _assert("cap_sell" in planned.notes, f"expected cap_sell in notes, got {planned.notes!r}")
+    print("PASS test_cap_exceeded_with_positive_edge_produces_sell")
+
+
+# ---------------------------------------------------------------------------
+# 13. Cap not exceeded → no cap sell, buy path proceeds normally
+# ---------------------------------------------------------------------------
+
+def test_cap_not_exceeded_buy_proceeds():
+    """When ETH position is below the cap, the buy path runs as normal."""
+    # cap = $100; ETH = 0.01 × $3000 = $30 < $100 → no cap-sell → proceeds to buy
+    strat = CoinbaseSpotEdgeStrategy(
+        config=_cfg(max_long_notional_usd=100.0),
+        signal_edge_bps=200.0,
+    )
+
+    with patch("theta.marketdata.coinbase.get_base_balance", return_value=0.01), \
+         patch("theta.marketdata.coinbase.get_spot_mid_price", return_value=_MID), \
+         patch("theta.marketdata.coinbase.get_quote_balance", return_value=50.0):
+        planned = strat.evaluate_opportunity(NOW)
+
+    _assert(planned is not None, "expected buy PlannedTrade when below cap, got None")
+    _assert(planned.side == "buy", f"expected side=buy, got {planned.side}")
+    print("PASS test_cap_not_exceeded_buy_proceeds")
+
+
+# ---------------------------------------------------------------------------
+# 14. Cap exceeded but excess is dust → no trade
+# ---------------------------------------------------------------------------
+
+def test_cap_exceeded_dust_excess_no_trade():
+    """When ETH position exceeds cap but excess is below min_notional, no trade."""
+    # cap = $59.50; ETH = 0.02 × $3000 = $60 → excess = $0.50 < min_notional=1.0
+    strat = CoinbaseSpotEdgeStrategy(
+        config=_cfg(max_long_notional_usd=59.50, min_notional_usd=1.0),
+        signal_edge_bps=200.0,
+    )
+
+    with patch("theta.marketdata.coinbase.get_base_balance", return_value=0.02), \
+         patch("theta.marketdata.coinbase.get_spot_mid_price", return_value=_MID), \
+         patch("theta.marketdata.coinbase.get_quote_balance", return_value=0.0):
+        planned = strat.evaluate_opportunity(NOW)
+
+    _assert(planned is None, "expected None for dust excess below min_notional")
+    print("PASS test_cap_exceeded_dust_excess_no_trade")
+
+
+# ---------------------------------------------------------------------------
+# 15. Cap disabled (default 0) → no cap sell, normal buy path
+# ---------------------------------------------------------------------------
+
+def test_cap_disabled_no_cap_sell():
+    """max_long_notional_usd=0 (default) disables the cap; buy proceeds as normal."""
+    # Even with large ETH position, no cap-sell when cap=0
+    strat = CoinbaseSpotEdgeStrategy(
+        config=_cfg(max_long_notional_usd=0.0),
+        signal_edge_bps=200.0,
+    )
+
+    with patch("theta.marketdata.coinbase.get_base_balance", return_value=10.0), \
+         patch("theta.marketdata.coinbase.get_spot_mid_price", return_value=_MID), \
+         patch("theta.marketdata.coinbase.get_quote_balance", return_value=50.0):
+        planned = strat.evaluate_opportunity(NOW)
+
+    _assert(planned is not None, "expected buy PlannedTrade with cap disabled, got None")
+    _assert(planned.side == "buy", f"expected side=buy, got {planned.side}")
+    print("PASS test_cap_disabled_no_cap_sell")
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -413,6 +508,10 @@ _ALL_TESTS = [
     test_dust_eth_position_no_sell,
     test_live_buy_calls_write_trade_with_strategy_name,
     test_dry_run_calls_write_trade_with_strategy_name,
+    test_cap_exceeded_with_positive_edge_produces_sell,
+    test_cap_not_exceeded_buy_proceeds,
+    test_cap_exceeded_dust_excess_no_trade,
+    test_cap_disabled_no_cap_sell,
 ]
 
 

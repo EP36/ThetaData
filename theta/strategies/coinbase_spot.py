@@ -5,8 +5,13 @@ Signal interpretation (SPOT_EDGE_BPS env var or constructor arg):
   + negative edge ≤  -hurdle  →  SELL (expect price to fall / reduce position)
   + |edge| < hurdle           →  NO TRADE (no-trade band, reduces over-trading)
 
+Inventory cap (SPOT_MAX_LONG_NOTIONAL_USD):
+  When ETH position value exceeds the cap, sell the excess automatically,
+  regardless of edge direction.  This makes the sell branch reachable even
+  when SPOT_EDGE_BPS is a static positive value.  Set to 0 to disable (default).
+
 Buy sizing:  min(quote_balance, max_notional_usd)
-Sell sizing: min(base_balance × mid_price, max_notional_usd)
+Sell sizing: min(excess_above_cap OR base_balance × mid_price, max_notional_usd)
 
 The strategy never sells more than is held, and never places an order whose
 USD-equivalent is below min_notional_usd or above max_notional_usd.
@@ -17,12 +22,13 @@ Natural hysteresis:
   until ETH is re-acquired.  This prevents rapid alternating round-trips.
 
 Env vars (all optional):
-  SPOT_EDGE_BPS     float  default=0.0   signal in bps (positive=buy, negative=sell)
-  CB_TAKER_FEE_BPS  float  default=60.0
-  MIN_EDGE_BPS      float  default=20.0
-  MIN_NOTIONAL_USD  float  default=1.0
-  MAX_NOTIONAL_USD  float  default=500.0
-  TRADE_LOG_DIR     str    default="logs"
+  SPOT_EDGE_BPS             float  default=0.0   signal in bps (positive=buy, negative=sell)
+  SPOT_MAX_LONG_NOTIONAL_USD float default=0.0   inventory cap; 0 = disabled
+  CB_TAKER_FEE_BPS          float  default=60.0
+  MIN_EDGE_BPS              float  default=20.0
+  MIN_NOTIONAL_USD          float  default=1.0
+  MAX_NOTIONAL_USD          float  default=500.0
+  TRADE_LOG_DIR             str    default="logs"
 """
 from __future__ import annotations
 
@@ -80,6 +86,13 @@ class CoinbaseSpotEdgeStrategy:
         edge_bps = self._resolve_edge_bps()
         hurdle = self._cfg.hurdle_bps
 
+        # Inventory cap: sell excess ETH regardless of edge direction.
+        # Checked first so it fires even when SPOT_EDGE_BPS is static-positive.
+        if self._cfg.max_long_notional_usd > 0:
+            cap_sell = self._evaluate_cap_sell()
+            if cap_sell is not None:
+                return cap_sell
+
         if edge_bps >= hurdle:
             return self._evaluate_buy(edge_bps)
         elif edge_bps <= -hurdle:
@@ -106,6 +119,13 @@ class CoinbaseSpotEdgeStrategy:
     ) -> ExecutionResult:
         from theta.execution.coinbase import place_market_order, ExecutionError
 
+        if planned.side == "sell":
+            LOGGER.info(
+                "%s sell_submitted product=%s-%s notional=%.2f edge=%.1fbps dry_run=%s",
+                self.name, self._asset, self._quote,
+                planned.notional_usd, planned.expected_edge_bps, dry_run,
+            )
+
         try:
             record = place_market_order(
                 asset=self._asset,
@@ -119,8 +139,9 @@ class CoinbaseSpotEdgeStrategy:
             )
             if planned.side == "sell" and not dry_run:
                 LOGGER.info(
-                    "%s sell_filled order_id=%s notional=%.2f",
-                    self.name, record.order_id, record.notional_usd,
+                    "%s sell_filled product=%s-%s order_id=%s notional=%.2f",
+                    self.name, self._asset, self._quote,
+                    record.order_id, record.notional_usd,
                 )
             return ExecutionResult(
                 success=True,
@@ -181,7 +202,7 @@ class CoinbaseSpotEdgeStrategy:
         )
 
     def _evaluate_sell(self, abs_edge_bps: float) -> Optional[PlannedTrade]:
-        # Need mid_price to convert base balance → USD notional.
+        """Evaluate an edge-signal-triggered sell."""
         try:
             from theta.marketdata.coinbase import get_spot_mid_price
             mid_price = get_spot_mid_price(self._asset, self._quote)
@@ -207,7 +228,8 @@ class CoinbaseSpotEdgeStrategy:
             return None
 
         LOGGER.info(
-            "%s sell_submitted notional=%.2f edge=%.1fbps mid=%.4f reason=%s",
+            "%s evaluate result=sell_opportunity notional=%.2f edge=%.1fbps "
+            "mid=%.4f reason=edge_negative %s",
             self.name, notional, abs_edge_bps, mid_price, reason,
         )
         return PlannedTrade(
@@ -218,6 +240,57 @@ class CoinbaseSpotEdgeStrategy:
             notional_usd=notional,
             expected_edge_bps=abs_edge_bps,
             notes=f"sell_signal mid={mid_price:.4f} {reason}",
+        )
+
+    def _evaluate_cap_sell(self) -> Optional[PlannedTrade]:
+        """Sell excess ETH when long notional exceeds max_long_notional_usd.
+
+        Fires before edge-based routing so the cap is enforced even when
+        SPOT_EDGE_BPS is a static positive value.
+        """
+        try:
+            from theta.marketdata.coinbase import get_base_balance, get_spot_mid_price
+            mid_price = get_spot_mid_price(self._asset, self._quote)
+            base_balance = get_base_balance(self._asset)
+        except Exception as exc:
+            LOGGER.warning("%s cap_check_failed error=%s", self.name, exc)
+            return None
+
+        if mid_price <= 0 or base_balance <= 0:
+            return None
+
+        eth_notional = base_balance * mid_price
+        cap = self._cfg.max_long_notional_usd
+        if eth_notional <= cap:
+            return None
+
+        # Sell only the excess above cap, capped at max_notional_usd per trade.
+        excess = eth_notional - cap
+        notional = min(excess, self._cfg.max_notional_usd)
+
+        if notional < self._cfg.min_notional_usd:
+            LOGGER.info(
+                "%s base_balance_below_min base_balance=%.8f value_usd=%.4f "
+                "cap=%.2f excess=%.2f min_notional=%.2f result=no_trade",
+                self.name, base_balance, eth_notional,
+                cap, excess, self._cfg.min_notional_usd,
+            )
+            return None
+
+        LOGGER.info(
+            "%s evaluate result=sell_opportunity notional=%.2f edge=%.1fbps "
+            "reason=cap_exceeded eth_notional=%.2f cap=%.2f mid=%.4f",
+            self.name, notional, self._cfg.hurdle_bps,
+            eth_notional, cap, mid_price,
+        )
+        return PlannedTrade(
+            strategy_name=self.name,
+            exchange="coinbase",
+            product_id=f"{self._asset}-{self._quote}",
+            side="sell",
+            notional_usd=notional,
+            expected_edge_bps=self._cfg.hurdle_bps,
+            notes=f"cap_sell eth_notional={eth_notional:.2f} cap={cap:.2f} mid={mid_price:.4f}",
         )
 
     def _resolve_buy_notional(self) -> float:

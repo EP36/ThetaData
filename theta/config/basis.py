@@ -37,6 +37,9 @@ class BasisConfig:
         max_risk_pct_per_trade: Max % of estimated portfolio per trade.
         default_quote:          Default quote currency for product IDs.
         log_dir:                Directory for trade telemetry files.
+        max_long_notional_usd:  Inventory cap (USD).  When ETH position value
+                                exceeds this, sell excess regardless of edge
+                                direction.  0 = disabled (default).
     """
     cb_taker_fee_bps:       float = _CB_TAKER_FEE_BPS_DEFAULT
     slippage_buffer_bps:    float = _CB_SLIPPAGE_BUFFER_BPS_DEFAULT
@@ -47,6 +50,8 @@ class BasisConfig:
     max_risk_pct_per_trade: float = 1.0     # % of portfolio
     default_quote:          str   = "USD"
     log_dir:                str   = "logs"
+    # 0 = disabled; when ETH notional > cap, sell excess regardless of edge direction
+    max_long_notional_usd:  float = 0.0
 
     # ---------- derived quantities ----------
 
@@ -94,4 +99,5 @@ class BasisConfig:
             max_risk_pct_per_trade=_f("MAX_RISK_PCT_PER_TRADE", 1.0),
             default_quote=_s("DEFAULT_QUOTE",              "USD"),
             log_dir=_s("TRADE_LOG_DIR",                    "logs"),
+            max_long_notional_usd=_f("SPOT_MAX_LONG_NOTIONAL_USD", 0.0),
         )
