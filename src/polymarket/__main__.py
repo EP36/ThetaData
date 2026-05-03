@@ -11,6 +11,8 @@ from __future__ import annotations
 import logging
 import os
 import time
+from datetime import datetime, timezone
+from typing import Any
 
 from src.dashboard.aggregator import is_poly_paused
 from src.observability.logging import configure_logging
@@ -28,6 +30,62 @@ _TUNING_INTERVAL_HOURS = float(os.getenv("POLY_TUNING_INTERVAL_HOURS", "168"))
 _SIGNAL_PARAMS_PATH = os.getenv("POLY_SIGNAL_PARAMS_PATH", "polymarket/signal_params.json")
 _TUNER_PROPOSAL_PATH = "polymarket/signal_params_proposed.json"
 _AI_ANALYSIS_INTERVAL_HOURS = float(os.getenv("AI_ANALYSIS_INTERVAL_HOURS", "24"))
+
+# ---------------------------------------------------------------------------
+# Opportunity observation persistence — lazy singleton, best-effort only
+# ---------------------------------------------------------------------------
+_OBS_REPO: Any = None  # PersistenceRepository | None
+
+
+def _get_obs_repo() -> Any:
+    """Return a cached PersistenceRepository, or None if DATABASE_URL is unset."""
+    global _OBS_REPO
+    if _OBS_REPO is not None:
+        return _OBS_REPO
+    db_url = os.getenv("DATABASE_URL", "").strip()
+    if not db_url:
+        return None
+    try:
+        from src.persistence.store import DatabaseStore
+        from src.persistence.repository import PersistenceRepository
+        store = DatabaseStore(database_url=db_url)
+        store.create_schema()
+        _OBS_REPO = PersistenceRepository(store=store)
+    except Exception as exc:
+        LOGGER.warning("opportunity_observation_repo_init_failed error=%s", exc)
+    return _OBS_REPO
+
+
+def _persist_opportunity_observations(
+    cycle_key: str,
+    scores: list[Any],
+    scan_opps: list[Any],
+    exec_result: Any,
+    dry_run: bool,
+) -> None:
+    """Write all scored opportunities for this cycle to Postgres. Never raises."""
+    repo = _get_obs_repo()
+    if repo is None:
+        return
+    try:
+        # The top scan_opp is the one runner.py submitted for execution.
+        selected_label: str | None = None
+        if scan_opps and exec_result is not None:
+            selected_label = scan_opps[0].market_question[:200]
+        n = repo.record_opportunity_observations(
+            cycle_key=cycle_key,
+            scores=scores,
+            selected_label=selected_label,
+            execution_result=exec_result,
+            dry_run=dry_run,
+        )
+        LOGGER.info(
+            "opportunity_observations_persisted cycle=%s count=%d", cycle_key, n
+        )
+    except Exception as exc:
+        LOGGER.warning(
+            "opportunity_observation_persist_failed cycle=%s error=%s", cycle_key, exc
+        )
 
 
 def _run_tuning_cycle(config: PolymarketConfig) -> None:
@@ -153,12 +211,14 @@ def main() -> None:
     last_ai_time = 0.0
 
     while True:
+        _cycle_key = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         _scan_opps: list = []
+        _exec_result: Any = None
         if is_poly_paused():
             LOGGER.info("polymarket_scan_skipped reason=dashboard_pause_flag")
         else:
             try:
-                _scan_opps, _ = scan_and_execute(config)
+                _scan_opps, _exec_result = scan_and_execute(config)
             except Exception as exc:
                 LOGGER.error("polymarket_scan_error error=%s", exc)
 
@@ -202,6 +262,13 @@ def main() -> None:
                 except Exception:
                     pass  # funding rates are best-effort
                 run_rebalance_cycle(_scores)
+                _persist_opportunity_observations(
+                    cycle_key=_cycle_key,
+                    scores=_scores,
+                    scan_opps=_scan_opps,
+                    exec_result=_exec_result,
+                    dry_run=config.dry_run,
+                )
             except Exception as exc:
                 LOGGER.warning("rebalance_cycle_error error=%s", exc)
 
