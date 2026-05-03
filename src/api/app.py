@@ -84,6 +84,11 @@ def _build_api_service() -> tuple[
         settings=deployment_settings,
     )
     auth_service = AuthService(repository=repository, settings=deployment_settings)
+    _APP_LOGGER.info(
+        "api_startup log_dir=%s abs_log_dir=%s",
+        deployment_settings.log_dir,
+        Path(deployment_settings.log_dir).resolve(),
+    )
     return api_service, deployment_settings, repository, auth_service
 
 app = FastAPI(
@@ -470,7 +475,6 @@ _HEARTBEAT_STALE_SECONDS = int(os.getenv("THETA_HEARTBEAT_STALE_SECONDS", "300")
 def _read_runner_heartbeat(log_dir: Path, now: datetime) -> ThetaRunnerHeartbeat:
     """Parse logs/theta_runner_status.json; return unavailable on any error."""
     status_file = log_dir.resolve() / _RUNNER_STATUS_FILE
-    _APP_LOGGER.debug("heartbeat_read abs_path=%s", status_file)
     if not status_file.exists():
         _APP_LOGGER.info("heartbeat_not_found abs_path=%s", status_file)
         return ThetaRunnerHeartbeat(available=False)
@@ -511,7 +515,6 @@ def get_theta_runner_status(
     """Return theta strategy runner state: live heartbeat + historical trade telemetry."""
     now = datetime.now(timezone.utc)
     log_dir = Path(_deployment_settings().log_dir).resolve()
-    _APP_LOGGER.debug("theta_status_log_dir abs_path=%s", log_dir)
     trades_file = log_dir / "trades.jsonl"
 
     raw_trades: list[dict] = []

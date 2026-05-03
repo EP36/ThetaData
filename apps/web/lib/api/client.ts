@@ -860,12 +860,12 @@ export async function getStrategyPanelStatus(): Promise<ThetaRunnerStatus> {
     lastTradeAt: payload.last_trade_at,
     totalTradeCount: payload.total_trade_count,
     tradeStats: {
-      total: s.total,
-      live: s.live,
-      dryRun: s.dry_run,
-      rejected: s.rejected,
-      failed: s.failed,
-      totalNotionalUsd: s.total_notional_usd,
+      total: s.total ?? 0,
+      live: s.live ?? (s as any).submitted ?? 0,
+      dryRun: s.dry_run ?? 0,
+      rejected: s.rejected ?? 0,
+      failed: s.failed ?? 0,
+      totalNotionalUsd: s.total_notional_usd ?? 0,
     },
     recentTrades: payload.recent_trades.map((t) => ({
       timestamp: t.timestamp,
