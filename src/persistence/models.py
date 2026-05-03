@@ -362,3 +362,42 @@ class AIAnalysisLogModel(Base):
     tokens_used: Mapped[int | None] = mapped_column(Integer, nullable=True)
     duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     model: Mapped[str | None] = mapped_column(String(50), nullable=True)
+
+
+# ---------------------------------------------------------------------------
+# Phase 8 — Opportunity observation data pipeline
+# ---------------------------------------------------------------------------
+
+class OpportunityObservationModel(Base):
+    """One row per detected opportunity per worker cycle.
+
+    Append-only. Used for future ML quality-model training.
+    Fields are populated at scan time; outcome labels (whether the trade
+    actually made money) are joined in later via a separate enrichment job.
+    """
+
+    __tablename__ = "opportunity_observations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    cycle_key: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    venue: Mapped[str] = mapped_column(String(32), nullable=False)
+    asset_or_market: Mapped[str] = mapped_column(String(200), nullable=False)
+    strategy: Mapped[str] = mapped_column(String(64), nullable=False)
+    label: Mapped[str] = mapped_column(String(200), nullable=False)
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+    annualized_edge_pct: Mapped[float] = mapped_column(Float, nullable=False)
+    raw_edge_pct: Mapped[float] = mapped_column(Float, nullable=False)
+    exec_confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    capital_efficiency: Mapped[float] = mapped_column(Float, nullable=False)
+    lockup_hours: Mapped[float] = mapped_column(Float, nullable=False)
+    composite_score: Mapped[float] = mapped_column(Float, nullable=False)
+    basis_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    funding_rate_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    predicted_funding_rate_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    position_size_candidate_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
+    selected_for_execution: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    execution_attempted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    execution_status: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    dry_run: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)

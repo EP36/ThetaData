@@ -18,6 +18,7 @@ from src.persistence.models import (
     GlobalStateModel,
     LoginAttemptModel,
     LogEventModel,
+    OpportunityObservationModel,
     OrderModel,
     PortfolioStateModel,
     PositionModel,
@@ -916,3 +917,78 @@ class PersistenceRepository:
                 }
                 for row in rows
             ]
+
+    # ------------------------------------------------------------------
+    # Opportunity observation data pipeline
+    # ------------------------------------------------------------------
+
+    def record_opportunity_observations(
+        self,
+        cycle_key: str,
+        scores: list[Any],
+        selected_label: str | None = None,
+        execution_result: Any | None = None,
+        dry_run: bool = True,
+    ) -> int:
+        """Bulk-insert all OpportunityScore objects observed in one worker cycle.
+
+        Args:
+            cycle_key:        ISO-format UTC string identifying this cycle.
+            scores:           list[OpportunityScore] — already ranked by CapitalAllocator.
+            selected_label:   label of the opportunity that was submitted for execution
+                              (i.e. the top polymarket opp when exec was attempted).
+            execution_result: ExecutionResult | None returned by scan_and_execute.
+            dry_run:          mirrors config.dry_run so the record is queryable by mode.
+
+        Returns:
+            Number of rows inserted.
+        """
+        if not scores:
+            return 0
+
+        rows = []
+        for score in scores:
+            is_selected = selected_label is not None and score.label == selected_label
+            exec_attempted = is_selected and execution_result is not None
+            exec_status: str | None = None
+            if exec_attempted:
+                if execution_result.success:
+                    exec_status = "success"
+                else:
+                    err = str(getattr(execution_result, "error", ""))[:60]
+                    exec_status = f"failed:{err}" if err else "failed"
+
+            meta = dict(score.metadata) if score.metadata else {}
+            # float("inf") is not a valid Postgres float — clamp to sentinel
+            lockup = score.lockup_hours
+            if lockup == float("inf") or lockup != lockup:  # inf or NaN
+                lockup = 9999.0
+
+            rows.append(OpportunityObservationModel(
+                cycle_key=cycle_key,
+                venue=score.source[:32],
+                asset_or_market=score.label[:200],
+                strategy=score.strategy[:64],
+                label=score.label[:200],
+                source=score.source[:32],
+                annualized_edge_pct=score.annualized_edge_pct,
+                raw_edge_pct=score.raw_edge_pct,
+                exec_confidence=score.exec_confidence,
+                capital_efficiency=score.capital_efficiency,
+                lockup_hours=lockup,
+                composite_score=score.composite_score,
+                basis_pct=meta.get("basis_pct"),
+                funding_rate_pct=meta.get("funding_rate_pct"),
+                predicted_funding_rate_pct=meta.get("predicted_funding_rate_pct"),
+                position_size_candidate_usd=meta.get("position_size_candidate_usd"),
+                selected_for_execution=is_selected,
+                execution_attempted=exec_attempted,
+                execution_status=exec_status,
+                dry_run=dry_run,
+                metadata_json=meta,
+            ))
+
+        with self.store.session() as session:
+            session.add_all(rows)
+
+        return len(rows)
