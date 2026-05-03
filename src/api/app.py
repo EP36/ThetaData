@@ -84,6 +84,12 @@ def _build_api_service() -> tuple[
         settings=deployment_settings,
     )
     auth_service = AuthService(repository=repository, settings=deployment_settings)
+    _APP_LOGGER.info(
+        "api_startup log_dir=%s abs_log_dir=%s db_url_set=%s",
+        deployment_settings.log_dir,
+        Path(deployment_settings.log_dir).resolve(),
+        bool(deployment_settings.database_url),
+    )
     return api_service, deployment_settings, repository, auth_service
 
 app = FastAPI(
@@ -467,10 +473,75 @@ _RUNNER_STATUS_FILE = "theta_runner_status.json"
 _HEARTBEAT_STALE_SECONDS = int(os.getenv("THETA_HEARTBEAT_STALE_SECONDS", "300"))
 
 
-def _read_runner_heartbeat(log_dir: Path, now: datetime) -> ThetaRunnerHeartbeat:
+def _theta_engine():
+    """Return the SQLAlchemy engine from the shared repository store, or None."""
+    try:
+        return app.state.repository.store.engine
+    except Exception:
+        return None
+
+
+def _read_runner_heartbeat_from_db(now: datetime) -> ThetaRunnerHeartbeat | None:
+    """Query theta_runner_status for the most recently written heartbeat row."""
+    engine = _theta_engine()
+    if engine is None:
+        return None
+    try:
+        from sqlalchemy import text
+        sql = text("""
+            SELECT runner_key, mode, last_tick_at, last_result, last_error,
+                   iterations_completed, selected_strategy, strategies_evaluated,
+                   written_at
+            FROM theta_runner_status
+            ORDER BY written_at DESC
+            LIMIT 1
+        """)
+        with engine.connect() as conn:
+            row = conn.execute(sql).fetchone()
+        if row is None:
+            _APP_LOGGER.info("theta_runner_status_db_empty — no heartbeat row yet")
+            return None
+        written_at = row.written_at
+        if written_at and written_at.tzinfo is None:
+            written_at = written_at.replace(tzinfo=timezone.utc)
+        stale = True
+        if written_at:
+            age = (now - written_at).total_seconds()
+            stale = age > _HEARTBEAT_STALE_SECONDS
+        strats_raw = row.strategies_evaluated
+        if isinstance(strats_raw, str):
+            try:
+                strats: list = json.loads(strats_raw)
+            except (ValueError, TypeError):
+                strats = []
+        else:
+            strats = strats_raw or []
+        last_tick = row.last_tick_at
+        last_tick_iso = last_tick.isoformat() if last_tick else None
+        _APP_LOGGER.info(
+            "theta_heartbeat_db runner_key=%s mode=%s written_at=%s stale=%s",
+            row.runner_key, row.mode, written_at, stale,
+        )
+        return ThetaRunnerHeartbeat(
+            available=True,
+            stale=stale,
+            last_tick_at=last_tick_iso,
+            mode=row.mode or None,
+            strategies_evaluated=strats,
+            iterations_completed=int(row.iterations_completed or 0),
+            selected_strategy=row.selected_strategy or None,
+            last_result=row.last_result or None,
+            last_error=row.last_error or None,
+            written_at=written_at,
+        )
+    except Exception as exc:
+        _APP_LOGGER.warning("theta_heartbeat_db_read_failed error=%s", exc)
+        return None
+
+
+def _read_runner_heartbeat_from_file(log_dir: Path, now: datetime) -> ThetaRunnerHeartbeat:
     """Parse logs/theta_runner_status.json; return unavailable on any error."""
     status_file = log_dir.resolve() / _RUNNER_STATUS_FILE
-    _APP_LOGGER.debug("heartbeat_read abs_path=%s", status_file)
     if not status_file.exists():
         _APP_LOGGER.info("heartbeat_not_found abs_path=%s", status_file)
         return ThetaRunnerHeartbeat(available=False)
@@ -500,8 +571,71 @@ def _read_runner_heartbeat(log_dir: Path, now: datetime) -> ThetaRunnerHeartbeat
             written_at=written_at_dt,
         )
     except Exception as exc:
-        _APP_LOGGER.warning("theta_heartbeat_read_failed path=%s error=%s", status_file, exc)
+        _APP_LOGGER.warning("theta_heartbeat_file_read_failed path=%s error=%s", status_file, exc)
         return ThetaRunnerHeartbeat(available=False)
+
+
+def _read_trades_from_db() -> list[dict]:
+    """Return all theta trades from Postgres, oldest-first (matches JSONL order)."""
+    engine = _theta_engine()
+    if engine is None:
+        return []
+    try:
+        from sqlalchemy import text
+        sql = text("""
+            SELECT trade_timestamp, strategy, exchange, asset, quote,
+                   side, notional_usd, expected_edge_bps, mid_price_at_order,
+                   order_id, client_order_id, status, error
+            FROM theta_trades
+            ORDER BY trade_timestamp ASC
+            LIMIT 10000
+        """)
+        with engine.connect() as conn:
+            rows = conn.execute(sql).fetchall()
+        result = []
+        for r in rows:
+            ts = r.trade_timestamp
+            ts_str = ts.isoformat() if hasattr(ts, "isoformat") else str(ts)
+            result.append({
+                "timestamp": ts_str,
+                "exchange": r.exchange or "",
+                "asset": r.asset or "",
+                "quote": r.quote or "USD",
+                "side": r.side or "",
+                "notional_usd": float(r.notional_usd or 0),
+                "expected_edge_bps": float(r.expected_edge_bps or 0),
+                "status": r.status or "",
+                "error": r.error or "",
+                "order_id": r.order_id or "",
+                "client_order_id": r.client_order_id or "",
+            })
+        _APP_LOGGER.info("theta_trades_db_loaded count=%d", len(result))
+        return result
+    except Exception as exc:
+        _APP_LOGGER.warning("theta_trades_db_read_failed error=%s", exc)
+        return []
+
+
+def _read_trades_from_file(trades_file: Path) -> list[dict]:
+    """Read trade records from the local JSONL file (single-host fallback)."""
+    if not trades_file.exists():
+        return []
+    result: list[dict] = []
+    try:
+        with open(trades_file) as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                if line.startswith(("<<<<<<<", "=======", ">>>>>>>")):
+                    continue
+                try:
+                    result.append(json.loads(line))
+                except json.JSONDecodeError:
+                    pass
+    except Exception as exc:
+        _APP_LOGGER.warning("theta_trades_file_read_failed path=%s error=%s", trades_file, exc)
+    return result
 
 
 @app.get("/api/strategies/status", response_model=ThetaRunnerStatusResponse)
@@ -511,26 +645,10 @@ def get_theta_runner_status(
     """Return theta strategy runner state: live heartbeat + historical trade telemetry."""
     now = datetime.now(timezone.utc)
     log_dir = Path(_deployment_settings().log_dir).resolve()
-    _APP_LOGGER.debug("theta_status_log_dir abs_path=%s", log_dir)
     trades_file = log_dir / "trades.jsonl"
 
-    raw_trades: list[dict] = []
-    if trades_file.exists():
-        try:
-            with open(trades_file) as fh:
-                for line in fh:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    # Skip git conflict markers that may appear in the JSONL file.
-                    if line.startswith(("<<<<<<<", "=======", ">>>>>>>")):
-                        continue
-                    try:
-                        raw_trades.append(json.loads(line))
-                    except json.JSONDecodeError:
-                        pass
-        except Exception as exc:
-            _APP_LOGGER.warning("theta_trades_read_failed path=%s error=%s", trades_file, exc)
+    # Load trades: DB is the primary source; fall back to local JSONL.
+    raw_trades = _read_trades_from_db() or _read_trades_from_file(trades_file)
 
     # Group trades by (exchange, asset, quote) → infer strategy name
     groups: dict[str, list[dict]] = defaultdict(list)
@@ -625,7 +743,8 @@ def get_theta_runner_status(
         except Exception:
             pass
 
-    heartbeat = _read_runner_heartbeat(log_dir, now)
+    # Heartbeat: DB first (cross-host), then local file (single-host fallback).
+    heartbeat = _read_runner_heartbeat_from_db(now) or _read_runner_heartbeat_from_file(log_dir, now)
 
     # dry_run: prefer live heartbeat mode, fall back to DRY_RUN env var.
     if heartbeat.available and heartbeat.mode is not None:

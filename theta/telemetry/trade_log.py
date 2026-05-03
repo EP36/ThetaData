@@ -74,8 +74,12 @@ class TradeRecord:
         return datetime.now(timezone.utc).isoformat()
 
 
-def log_trade(record: TradeRecord, log_dir: str = "logs") -> None:
-    """Write a TradeRecord to the logger and append to logs/trades.jsonl."""
+def log_trade(
+    record: TradeRecord,
+    log_dir: str = "logs",
+    strategy_name: str = "",
+) -> None:
+    """Write a TradeRecord to the logger, JSONL file, and Postgres (if DATABASE_URL set)."""
     LOGGER.info(
         "trade_record exchange=%s asset=%s quote=%s side=%s "
         "notional=%.2f mid=%.6f edge=%.1fbps "
@@ -96,3 +100,10 @@ def log_trade(record: TradeRecord, log_dir: str = "logs") -> None:
             fh.write(record.to_json() + "\n")
     except Exception as exc:
         LOGGER.warning("trade_log_write_failed path=%s error=%s", log_dir, exc)
+
+    if strategy_name:
+        try:
+            from theta.db.writer import write_trade
+            write_trade(record, strategy_name)
+        except Exception as exc:
+            LOGGER.warning("trade_db_write_failed strategy=%s error=%s", strategy_name, exc)

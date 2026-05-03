@@ -104,6 +104,7 @@ def place_market_order(
     expected_edge_bps: float = 0.0,
     config: BasisConfig | None = None,
     dry_run: bool = False,
+    strategy_name: str = "",
 ) -> TradeRecord:
     """Submit a market IOC order on Coinbase Advanced Trade.
 
@@ -180,7 +181,7 @@ def place_market_order(
             client_order_id=client_order_id,
             status="dry_run",
         )
-        log_trade(record, cfg.log_dir)
+        log_trade(record, cfg.log_dir, strategy_name=strategy_name)
         return record
 
     # --- Live order ---
@@ -228,7 +229,7 @@ def place_market_order(
             status="failed",
             error=str(exc),
         )
-        log_trade(record, cfg.log_dir)
+        log_trade(record, cfg.log_dir, strategy_name=strategy_name)
         raise ExecutionError(
             f"create_order_api_error product={product_id} "
             f"side={side} notional={notional_usd:.2f} error={exc}"
@@ -263,7 +264,7 @@ def place_market_order(
             status="rejected",
             error=str(failure),
         )
-        log_trade(record, cfg.log_dir)
+        log_trade(record, cfg.log_dir, strategy_name=strategy_name)
         raise ExecutionError(
             f"order_rejected product={product_id} reason={failure}"
         )
@@ -305,7 +306,7 @@ def place_market_order(
         client_order_id=client_order_id,
         status="live",
     )
-    log_trade(record, cfg.log_dir)
+    log_trade(record, cfg.log_dir, strategy_name=strategy_name)
     return record
 
 

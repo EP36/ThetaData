@@ -365,6 +365,51 @@ class AIAnalysisLogModel(Base):
 
 
 # ---------------------------------------------------------------------------
+# Theta strategy runner telemetry (written by Hetzner runner, read by Render API)
+# ---------------------------------------------------------------------------
+
+class ThetaRunnerStatusModel(Base):
+    """Heartbeat row per runner instance; upserted on every tick."""
+
+    __tablename__ = "theta_runner_status"
+
+    runner_key: Mapped[str] = mapped_column(String(100), primary_key=True)
+    mode: Mapped[str] = mapped_column(String(20), nullable=False, default="dry_run")
+    last_tick_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_result: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    iterations_completed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    selected_strategy: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    strategies_evaluated: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    written_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now
+    )
+
+
+class ThetaTradeModel(Base):
+    """One trade/order attempt from the theta spot strategy runner."""
+
+    __tablename__ = "theta_trades"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    runner_key: Mapped[str] = mapped_column(String(100), nullable=False, default="default", index=True)
+    trade_timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    strategy: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    exchange: Mapped[str] = mapped_column(String(50), nullable=False)
+    asset: Mapped[str] = mapped_column(String(20), nullable=False)
+    quote: Mapped[str] = mapped_column(String(20), nullable=False, default="USD")
+    side: Mapped[str] = mapped_column(String(10), nullable=False)
+    notional_usd: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    expected_edge_bps: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    mid_price_at_order: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    order_id: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    client_order_id: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    status: Mapped[str] = mapped_column(String(30), nullable=False)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    dry_run: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+# ---------------------------------------------------------------------------
 # Phase 8 — Opportunity observation data pipeline
 # ---------------------------------------------------------------------------
 

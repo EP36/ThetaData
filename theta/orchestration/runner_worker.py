@@ -182,10 +182,18 @@ def run() -> int:
 
     from pathlib import Path as _Path
     _abs_log_dir = _Path(cfg.log_dir).resolve()
+    _db_url = os.getenv("DATABASE_URL", "")
     LOGGER.info(
-        "runner_worker_ready strategies=%s mode=%s log_dir=%s abs_log_dir=%s",
-        runner.strategy_names, mode, cfg.log_dir, _abs_log_dir,
+        "runner_worker_ready strategies=%s mode=%s abs_log_dir=%s db_url_set=%s",
+        runner.strategy_names, mode, _abs_log_dir, bool(_db_url),
     )
+
+    # Bootstrap theta DB tables (idempotent; skipped if DATABASE_URL not set).
+    try:
+        from theta.db.writer import ensure_schema
+        ensure_schema()
+    except Exception as _e:
+        LOGGER.warning("runner_db_schema_init_failed error=%s — DB writes disabled", _e)
 
     iterations_completed = 0
 
