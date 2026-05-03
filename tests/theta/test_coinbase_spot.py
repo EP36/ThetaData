@@ -319,6 +319,91 @@ def test_dust_eth_position_no_sell():
 
 
 # ---------------------------------------------------------------------------
+# 10. Inventory cap: ETH position exceeds cap → SELL excess (no-trade band)
+# ---------------------------------------------------------------------------
+
+def test_cap_exceeded_in_no_trade_band_produces_sell():
+    # edge=0 (no-trade band), 0.05 ETH × $3000 = $150 > cap=$100 → sell $50 excess
+    strat = CoinbaseSpotEdgeStrategy(
+        config=_cfg(max_long_notional_usd=100.0, max_notional_usd=500.0),
+        signal_edge_bps=0.0,
+    )
+    # 0.05 ETH × 3000 = $150 notional
+    with patch("theta.marketdata.coinbase.get_base_balance", return_value=0.05), \
+         patch("theta.marketdata.coinbase.get_spot_mid_price", return_value=_MID):
+        planned = strat.evaluate_opportunity(NOW)
+
+    _assert(planned is not None, "expected cap-driven PlannedTrade, got None")
+    _assert(planned.side == "sell", f"expected side=sell, got {planned.side}")
+    # excess = 150 - 100 = 50; sell_notional = 50
+    _assert(
+        abs(planned.notional_usd - 50.0) < 0.01,
+        f"expected sell_notional≈50 (excess), got {planned.notional_usd}",
+    )
+    _assert(planned.expected_edge_bps == 0.0, "cap sell should carry edge=0")
+    print("PASS test_cap_exceeded_in_no_trade_band_produces_sell")
+
+
+def test_cap_not_exceeded_no_cap_sell():
+    # edge=0, 0.02 ETH × $3000 = $60 < cap=$100 → no trade
+    strat = CoinbaseSpotEdgeStrategy(
+        config=_cfg(max_long_notional_usd=100.0),
+        signal_edge_bps=0.0,
+    )
+    with patch("theta.marketdata.coinbase.get_base_balance", return_value=0.02), \
+         patch("theta.marketdata.coinbase.get_spot_mid_price", return_value=_MID):
+        planned = strat.evaluate_opportunity(NOW)
+
+    _assert(planned is None, "expected None when ETH notional < cap")
+    print("PASS test_cap_not_exceeded_no_cap_sell")
+
+
+def test_cap_exceeded_blocks_buy():
+    # edge=+200 (buy signal), but ETH notional ($150) >= cap ($100) → buy blocked
+    strat = CoinbaseSpotEdgeStrategy(
+        config=_cfg(max_long_notional_usd=100.0),
+        signal_edge_bps=200.0,
+    )
+    with patch("theta.marketdata.coinbase.get_quote_balance", return_value=50.0), \
+         patch("theta.marketdata.coinbase.get_base_balance", return_value=0.05), \
+         patch("theta.marketdata.coinbase.get_spot_mid_price", return_value=_MID):
+        planned = strat.evaluate_opportunity(NOW)
+
+    _assert(planned is None, "expected buy blocked when ETH notional >= cap")
+    print("PASS test_cap_exceeded_blocks_buy")
+
+
+def test_cap_disabled_by_default_buy_proceeds():
+    # cap=0 (disabled), edge=+200, USD available → BUY proceeds normally
+    strat = CoinbaseSpotEdgeStrategy(
+        config=_cfg(max_long_notional_usd=0.0),
+        signal_edge_bps=200.0,
+    )
+    with patch("theta.marketdata.coinbase.get_quote_balance", return_value=50.0), \
+         patch("theta.marketdata.coinbase.get_spot_mid_price", return_value=_MID):
+        planned = strat.evaluate_opportunity(NOW)
+
+    _assert(planned is not None, "expected BUY when cap disabled")
+    _assert(planned.side == "buy", f"expected side=buy, got {planned.side}")
+    print("PASS test_cap_disabled_by_default_buy_proceeds")
+
+
+def test_cap_excess_dust_no_sell():
+    # excess ($0.20) < min_notional ($1.0) → dust, no cap sell
+    strat = CoinbaseSpotEdgeStrategy(
+        config=_cfg(max_long_notional_usd=100.0, min_notional_usd=1.0),
+        signal_edge_bps=0.0,
+    )
+    # 0.03340 ETH × $3000 = $100.20 → excess = $0.20 < $1.00
+    with patch("theta.marketdata.coinbase.get_base_balance", return_value=0.03340), \
+         patch("theta.marketdata.coinbase.get_spot_mid_price", return_value=_MID):
+        planned = strat.evaluate_opportunity(NOW)
+
+    _assert(planned is None, "expected None for dust cap excess below min_notional")
+    print("PASS test_cap_excess_dust_no_sell")
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -334,6 +419,11 @@ _ALL_TESTS = [
     test_live_sell_logged_with_live_status,
     test_api_error_logged_as_failed,
     test_dust_eth_position_no_sell,
+    test_cap_exceeded_in_no_trade_band_produces_sell,
+    test_cap_not_exceeded_no_cap_sell,
+    test_cap_exceeded_blocks_buy,
+    test_cap_disabled_by_default_buy_proceeds,
+    test_cap_excess_dust_no_sell,
 ]
 
 

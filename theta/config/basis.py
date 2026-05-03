@@ -45,6 +45,7 @@ class BasisConfig:
     max_notional_usd:       float = 500.0
     max_daily_notional_usd: float = 2_000.0
     max_risk_pct_per_trade: float = 1.0     # % of portfolio
+    max_long_notional_usd:  float = 0.0     # 0 = disabled; >0 = hard cap on long ETH exposure
     default_quote:          str   = "USD"
     log_dir:                str   = "logs"
 
@@ -92,6 +93,7 @@ class BasisConfig:
             max_notional_usd=_f("MAX_NOTIONAL_USD",        500.0),
             max_daily_notional_usd=_f("MAX_DAILY_NOTIONAL_USD", 2_000.0),
             max_risk_pct_per_trade=_f("MAX_RISK_PCT_PER_TRADE", 1.0),
+            max_long_notional_usd=_f("SPOT_MAX_LONG_NOTIONAL_USD", 0.0),
             default_quote=_s("DEFAULT_QUOTE",              "USD"),
             log_dir=_s("TRADE_LOG_DIR",                    "logs"),
         )
