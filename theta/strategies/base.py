@@ -30,7 +30,9 @@ class PlannedTrade:
     side: Literal["buy", "sell"]
     notional_usd: float
     expected_edge_bps: float              # alpha estimate above round-trip costs
-    score: float = 0.0                    # filled by runner before execution
+    score: float = 0.0                    # filled by allocator before execution
+    confidence: float = 1.0              # signal confidence [0, 1]; default=1 (not modelled)
+    risk_score: float = 0.0              # risk estimate [0, 1]; higher = riskier
     notes: str = ""                       # human-readable signal explanation
 
 

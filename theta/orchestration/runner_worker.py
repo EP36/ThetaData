@@ -1,7 +1,7 @@
 """Standalone theta strategy runner — entry point for the theta-runner systemd unit.
 
 Loads env, builds all enabled strategies, then loops forever:
-  evaluate → rank → gate → execute → write heartbeat → sleep
+  evaluate → rank → gate → allocate → execute → write heartbeat → sleep
 
 Env vars (set in /etc/trauto/env):
     WORKER_DRY_RUN                  bool   default=true   — no real orders
@@ -15,6 +15,16 @@ Env vars (set in /etc/trauto/env):
     DAILY_NOTIONAL_COINBASE_USD     float  default=2000
     DAILY_NOTIONAL_HL_USD           float  default=500
     MIN_SCORE_THRESHOLD             float  default=0
+
+    Portfolio allocator:
+    STRATEGY_SELECTION_MODE         str    default=priority_with_fallback
+    PORTFOLIO_AVAILABLE_CAPITAL_USD float  default=500.0
+    PORTFOLIO_MAX_ETH_EXPOSURE_USD  float  default=0.0   (0 = disabled)
+    PORTFOLIO_FALLBACK_MIN_SCORE    float  default=10.0
+    PORTFOLIO_COOLDOWN_SECONDS      int    default=0     (0 = disabled)
+    ALLOCATOR_EDGE_WEIGHT           float  default=1.0
+    ALLOCATOR_CONFIDENCE_WEIGHT     float  default=0.0
+    ALLOCATOR_RISK_PENALTY_WEIGHT   float  default=0.0
 
     Strategy tuning (passed through to strategy constructors):
     SPOT_EDGE_BPS, MOMENTUM_PRODUCT, MOMENTUM_FAST_BARS, MOMENTUM_SLOW_BARS,
@@ -147,6 +157,21 @@ def _build_risk_limits():
     )
 
 
+def _build_allocator():
+    from theta.orchestration.allocator import AllocatorConfig, PortfolioAllocator
+    config = AllocatorConfig(
+        mode=os.getenv("STRATEGY_SELECTION_MODE", "priority_with_fallback"),
+        available_capital_usd=_float_env("PORTFOLIO_AVAILABLE_CAPITAL_USD", 500.0),
+        max_eth_exposure_usd=_float_env("PORTFOLIO_MAX_ETH_EXPOSURE_USD", 0.0),
+        fallback_min_score=_float_env("PORTFOLIO_FALLBACK_MIN_SCORE", 10.0),
+        cooldown_seconds=_int_env("PORTFOLIO_COOLDOWN_SECONDS", 0),
+        edge_weight=_float_env("ALLOCATOR_EDGE_WEIGHT", 1.0),
+        confidence_weight=_float_env("ALLOCATOR_CONFIDENCE_WEIGHT", 0.0),
+        risk_penalty_weight=_float_env("ALLOCATOR_RISK_PENALTY_WEIGHT", 0.0),
+    )
+    return PortfolioAllocator(config)
+
+
 # ---------------------------------------------------------------------------
 # Main loop
 # ---------------------------------------------------------------------------
@@ -178,7 +203,8 @@ def run() -> int:
 
     cfg = BasisConfig.from_env()
     risk = _build_risk_limits()
-    runner = StrategyRunner(strategies=strategies, risk=risk)
+    allocator = _build_allocator()
+    runner = StrategyRunner(strategies=strategies, risk=risk, allocator=allocator)
 
     from pathlib import Path as _Path
     _abs_log_dir = _Path(cfg.log_dir).resolve()
@@ -199,25 +225,27 @@ def run() -> int:
 
     while not _SHUTDOWN:
         tick_error: str | None = None
-        result = None
+        results = []
         try:
-            result = runner.run_once(dry_run=dry_run)
+            results = runner.run_once(dry_run=dry_run)
         except Exception as exc:
             LOGGER.error("runner_tick_error error=%s", exc)
             tick_error = str(exc)
 
         iterations_completed += 1
 
+        # Summarise tick outcome for status writer and logs.
+        primary = results[0] if results else None
         if tick_error is not None:
             last_result = "error"
-        elif result is None:
+        elif not results:
             last_result = "no_opportunity"
         elif dry_run:
-            last_result = "dry_run_would_execute" if result.success else "failed"
+            last_result = "dry_run_would_execute" if primary and primary.success else "failed"
         else:
-            last_result = "executed" if result.success else "failed"
+            last_result = "executed" if primary and primary.success else "failed"
 
-        selected = result.strategy_name if result is not None else None
+        selected = primary.strategy_name if primary is not None else None
 
         write_runner_status(
             cfg.log_dir,
@@ -226,12 +254,12 @@ def run() -> int:
             iterations_completed=iterations_completed,
             selected_strategy=selected,
             last_result=last_result,
-            last_error=tick_error or (result.error if result and not result.success else None),
+            last_error=tick_error or (primary.error if primary and not primary.success else None),
         )
 
         LOGGER.info(
-            "runner_tick_done iteration=%d result=%s strategy=%s",
-            iterations_completed, last_result, selected or "none",
+            "runner_tick_done iteration=%d result=%s trades=%d strategy=%s",
+            iterations_completed, last_result, len(results), selected or "none",
         )
 
         if _SHUTDOWN:

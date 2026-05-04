@@ -4,11 +4,9 @@ Each tick:
   1. Call evaluate_opportunity(now) on every registered strategy.
   2. Collect all non-None PlannedTrade proposals.
   3. Apply global risk limits (max notional per trade, daily budget per exchange).
-  4. Score remaining candidates.  v1 heuristic: score = expected_edge_bps.
-     (Replace with vol-adjusted or Sharpe-based scoring when data is available.)
-  5. Pick the highest-scoring trade above min_score_threshold — or no-trade.
-  6. Call execute(planned, dry_run) for the selected strategy.
-  7. Log the full decision, regardless of outcome.
+  4. Hand approved proposals to PortfolioAllocator for scoring and selection.
+  5. Execute each selected trade in order.
+  6. Log every decision, regardless of outcome.
 """
 from __future__ import annotations
 
@@ -19,6 +17,7 @@ from datetime import date, datetime, timezone
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from theta.orchestration.allocator import PortfolioAllocator
     from theta.strategies.base import ExecutionResult, PlannedTrade, Strategy
 
 LOGGER = logging.getLogger("theta.orchestration.runner")
@@ -89,23 +88,30 @@ class StrategyRunner:
         self,
         strategies: list["Strategy"],
         risk: GlobalRiskLimits | None = None,
+        allocator: "PortfolioAllocator | None" = None,
     ) -> None:
         if not strategies:
             raise ValueError("at least one strategy is required")
         self._strategies = list(strategies)
         self._risk = risk or GlobalRiskLimits()
         self._daily = _DailyNotional()
+        if allocator is None:
+            from theta.orchestration.allocator import PortfolioAllocator
+            self._allocator: "PortfolioAllocator" = PortfolioAllocator()
+        else:
+            self._allocator = allocator
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
-    def run_once(self, dry_run: bool = False) -> "ExecutionResult | None":
+    def run_once(self, dry_run: bool = False) -> "list[ExecutionResult]":
         """Run one full evaluate → rank → gate → execute tick.
 
-        Returns the ExecutionResult if a trade was attempted, None otherwise.
+        Returns a list of ExecutionResults for all trades attempted this tick
+        (usually 0 or 1; up to 2 in priority_with_fallback mode).
         """
-        from theta.strategies.base import ExecutionResult
+        from theta.strategies.base import ExecutionResult  # noqa: F401 (kept for TYPE_CHECKING)
 
         now = datetime.now(timezone.utc)
         LOGGER.info(
@@ -140,7 +146,7 @@ class StrategyRunner:
 
         if not proposals:
             LOGGER.info("runner decision=no_trade reason=no_opportunities")
-            return None
+            return []
 
         # --- Apply global risk limits ---
         approved: list["PlannedTrade"] = []
@@ -155,58 +161,63 @@ class StrategyRunner:
 
         if not approved:
             LOGGER.info("runner decision=no_trade reason=all_proposals_vetoed")
-            return None
+            return []
 
-        # --- Score and rank (v1: score = expected_edge_bps) ---
-        for trade in approved:
-            trade.score = self._score(trade)
+        # --- Allocator: score, filter, select ---
+        selected = self._allocator.select(approved)
 
-        approved.sort(key=lambda t: t.score, reverse=True)
-        best = approved[0]
+        if not selected:
+            LOGGER.info("runner decision=no_trade reason=allocator_selected_none")
+            return []
 
-        if best.score < self._risk.min_score_threshold:
+        # Min-score gate (applied to primary trade only).
+        if selected[0].score < self._risk.min_score_threshold:
             LOGGER.info(
                 "runner decision=no_trade reason=below_min_score "
-                "best_score=%.1f threshold=%.1f",
-                best.score, self._risk.min_score_threshold,
+                "best_score=%.2f threshold=%.2f",
+                selected[0].score, self._risk.min_score_threshold,
             )
-            return None
+            return []
 
-        LOGGER.info(
-            "runner decision=execute strategy=%s product=%s side=%s "
-            "notional=%.2f score=%.1fbps dry_run=%s",
-            best.strategy_name, best.product_id, best.side,
-            best.notional_usd, best.score, dry_run,
-        )
-
-        # --- Execute ---
-        executing_strategy = next(
-            s for s in self._strategies if s.name == best.strategy_name
-        )
-        result = executing_strategy.execute(best, dry_run=dry_run)
-
-        # Backfill product/side from the PlannedTrade if the strategy didn't set them.
-        if not result.product_id:
-            result.product_id = best.product_id
-        if not result.side:
-            result.side = best.side
-
-        if result.success:
-            if not dry_run:
-                self._daily.record(best.exchange, best.notional_usd)
+        # --- Execute each selected trade ---
+        results: list["ExecutionResult"] = []
+        for trade in selected:
             LOGGER.info(
-                "runner execute_result=success strategy=%s "
-                "order_id=%s client_order_id=%s notional=%.2f dry_run=%s",
-                result.strategy_name, result.order_id,
-                result.client_order_id, result.notional_usd, dry_run,
-            )
-        else:
-            LOGGER.error(
-                "runner execute_result=failed strategy=%s error=%s",
-                result.strategy_name, result.error,
+                "runner decision=execute strategy=%s product=%s side=%s "
+                "notional=%.2f score=%.2f dry_run=%s",
+                trade.strategy_name, trade.product_id, trade.side,
+                trade.notional_usd, trade.score, dry_run,
             )
 
-        return result
+            executing_strategy = next(
+                s for s in self._strategies if s.name == trade.strategy_name
+            )
+            result = executing_strategy.execute(trade, dry_run=dry_run)
+
+            if not result.product_id:
+                result.product_id = trade.product_id
+            if not result.side:
+                result.side = trade.side
+
+            if result.success:
+                if not dry_run:
+                    self._daily.record(trade.exchange, trade.notional_usd)
+                self._allocator.record_executed(trade.strategy_name)
+                LOGGER.info(
+                    "runner execute_result=success strategy=%s "
+                    "order_id=%s client_order_id=%s notional=%.2f dry_run=%s",
+                    result.strategy_name, result.order_id,
+                    result.client_order_id, result.notional_usd, dry_run,
+                )
+            else:
+                LOGGER.error(
+                    "runner execute_result=failed strategy=%s error=%s",
+                    result.strategy_name, result.error,
+                )
+
+            results.append(result)
+
+        return results
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -240,12 +251,6 @@ class StrategyRunner:
         # TODO(risk): realized PnL drawdown circuit breaker
 
         return ""
-
-    @staticmethod
-    def _score(trade: "PlannedTrade") -> float:
-        # v1 heuristic: raw expected alpha in bps.
-        # TODO: replace with vol-adjusted or annualized Sharpe when data is available.
-        return trade.expected_edge_bps
 
     # ------------------------------------------------------------------
     # Introspection
