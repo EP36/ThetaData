@@ -10,8 +10,18 @@ Inventory cap (SPOT_MAX_LONG_NOTIONAL_USD):
   regardless of edge direction.  This makes the sell branch reachable even
   when SPOT_EDGE_BPS is a static positive value.  Set to 0 to disable (default).
 
-Buy sizing:  min(quote_balance, max_notional_usd)
+Buy sizing:  min(quote_balance × (1 − buffer), max_notional_usd)
+  A fee/safety buffer (SPOT_BUY_BUFFER_PCT, default 10 %) is applied to the
+  live USD balance so the strategy never tries to spend more than Coinbase can
+  fill.  This prevents PREVIEW_INSUFFICIENT_FUND rejections at the order layer.
+
 Sell sizing: min(excess_above_cap OR base_balance × mid_price, max_notional_usd)
+
+Insufficient-fund backoff:
+  If Coinbase rejects a buy order with PREVIEW_INSUFFICIENT_FUND, an internal
+  backoff flag is set.  Subsequent evaluate_opportunity() calls skip the buy
+  path and log quote_balance_below_min until the spendable balance rises above
+  min_notional_usd, at which point the flag is automatically cleared.
 
 The strategy never sells more than is held, and never places an order whose
 USD-equivalent is below min_notional_usd or above max_notional_usd.
@@ -22,13 +32,14 @@ Natural hysteresis:
   until ETH is re-acquired.  This prevents rapid alternating round-trips.
 
 Env vars (all optional):
-  SPOT_EDGE_BPS             float  default=0.0   signal in bps (positive=buy, negative=sell)
-  SPOT_MAX_LONG_NOTIONAL_USD float default=0.0   inventory cap; 0 = disabled
-  CB_TAKER_FEE_BPS          float  default=60.0
-  MIN_EDGE_BPS              float  default=20.0
-  MIN_NOTIONAL_USD          float  default=1.0
-  MAX_NOTIONAL_USD          float  default=500.0
-  TRADE_LOG_DIR             str    default="logs"
+  SPOT_EDGE_BPS              float  default=0.0    signal in bps (positive=buy, negative=sell)
+  SPOT_MAX_LONG_NOTIONAL_USD float  default=0.0    inventory cap; 0 = disabled
+  SPOT_BUY_BUFFER_PCT        float  default=10.0   % of balance to reserve for fees/slippage
+  CB_TAKER_FEE_BPS           float  default=60.0
+  MIN_EDGE_BPS               float  default=20.0
+  MIN_NOTIONAL_USD           float  default=1.0
+  MAX_NOTIONAL_USD           float  default=500.0
+  TRADE_LOG_DIR              str    default="logs"
 """
 from __future__ import annotations
 
@@ -43,6 +54,8 @@ from theta.strategies.base import ExecutionResult, PlannedTrade
 
 LOGGER = logging.getLogger("theta.strategies.coinbase_spot")
 
+_PREVIEW_INSUFFICIENT_FUND = "PREVIEW_INSUFFICIENT_FUND"
+
 
 class CoinbaseSpotEdgeStrategy:
     """Symmetric spot buy/sell on Coinbase when an external edge signal clears the hurdle."""
@@ -54,6 +67,7 @@ class CoinbaseSpotEdgeStrategy:
         quote: str | None = None,
         signal_edge_bps: float | None = None,
         test_notional_usd: float | None = None,
+        buy_buffer_pct: float | None = None,
     ) -> None:
         """
         Args:
@@ -67,12 +81,22 @@ class CoinbaseSpotEdgeStrategy:
             test_notional_usd:  Fallback buy notional when quote balance is zero
                                 (useful for dry-run smoke tests without real USD).
                                 Only applied for the BUY path.
+            buy_buffer_pct:     Percentage of balance to reserve for fees/slippage before
+                                sizing a buy.  Overrides SPOT_BUY_BUFFER_PCT env var.
+                                Default 10.0 (keep 10 % of balance as cushion).
         """
         self._cfg = config or BasisConfig.from_env()
         self._asset = asset.upper()
         self._quote = (quote or self._cfg.default_quote).upper()
         self._signal_edge_bps = signal_edge_bps
         self._test_notional_usd = test_notional_usd
+        pct = buy_buffer_pct if buy_buffer_pct is not None else float(os.getenv("SPOT_BUY_BUFFER_PCT", "10.0"))
+        self._buy_buffer_fraction: float = max(0.0, min(pct, 99.0)) / 100.0
+
+        # Backoff state — set by execute() when Coinbase returns PREVIEW_INSUFFICIENT_FUND;
+        # cleared by _resolve_buy_notional() once the buffered balance is sufficient again.
+        self._buy_backoff: bool = False
+        self._last_known_balance: float = 0.0
 
     # ------------------------------------------------------------------
     # Strategy Protocol
@@ -152,11 +176,19 @@ class CoinbaseSpotEdgeStrategy:
                 dry_run=dry_run,
             )
         except ExecutionError as exc:
+            err_str = str(exc)
+            if planned.side == "buy" and _PREVIEW_INSUFFICIENT_FUND in err_str:
+                self._buy_backoff = True
+                LOGGER.warning(
+                    "%s quote_balance_below_min order_rejected=%s "
+                    "buy_backoff=set last_known_balance=%.2f",
+                    self.name, _PREVIEW_INSUFFICIENT_FUND, self._last_known_balance,
+                )
             LOGGER.error("%s execute failed error=%s", self.name, exc)
             return ExecutionResult(
                 success=False,
                 strategy_name=self.name,
-                error=str(exc),
+                error=err_str,
                 dry_run=dry_run,
             )
         except Exception as exc:
@@ -294,7 +326,14 @@ class CoinbaseSpotEdgeStrategy:
         )
 
     def _resolve_buy_notional(self) -> float:
-        """Return trade-sized notional for a buy, bounded by config and USD balance."""
+        """Return trade-sized notional for a buy, bounded by buffered USD balance.
+
+        Applies _buy_buffer_fraction to the live balance so the strategy never
+        asks Coinbase to spend more than is available after fees.  Also enforces
+        the PREVIEW_INSUFFICIENT_FUND backoff: while the flag is set the method
+        returns 0 and logs quote_balance_below_min; it self-clears once the
+        spendable balance rises above min_notional_usd.
+        """
         try:
             from theta.marketdata.coinbase import get_quote_balance
             balance = get_quote_balance(self._quote)
@@ -319,12 +358,35 @@ class CoinbaseSpotEdgeStrategy:
             )
             return 0.0
 
-        desired = min(self._cfg.max_notional_usd, balance)
+        self._last_known_balance = balance
+
+        # Reserve a buffer fraction so the notional never exceeds what Coinbase
+        # can fill after taker fees and slippage.
+        spendable = balance * (1.0 - self._buy_buffer_fraction)
+
+        # If the insufficient-fund backoff is active, keep blocking until the
+        # spendable balance is high enough for at least a minimum order.
+        if self._buy_backoff:
+            if spendable < self._cfg.min_notional_usd:
+                LOGGER.info(
+                    "%s quote_balance_below_min balance=%.2f spendable=%.2f "
+                    "min_notional=%.2f result=no_trade reason=insufficient_fund_backoff",
+                    self.name, balance, spendable, self._cfg.min_notional_usd,
+                )
+                return 0.0
+            # Balance has recovered — clear the backoff and proceed.
+            LOGGER.info(
+                "%s buy_backoff_cleared balance=%.2f spendable=%.2f",
+                self.name, balance, spendable,
+            )
+            self._buy_backoff = False
+
+        desired = min(self._cfg.max_notional_usd, spendable)
         if desired < self._cfg.min_notional_usd:
             LOGGER.info(
-                "%s evaluate result=no_trade reason=balance_below_min "
-                "balance=%.8f min=%.2f",
-                self.name, balance, self._cfg.min_notional_usd,
+                "%s quote_balance_below_min balance=%.2f spendable=%.2f "
+                "min_notional=%.2f result=no_trade reason=balance_below_min",
+                self.name, balance, spendable, self._cfg.min_notional_usd,
             )
             return 0.0
         return desired

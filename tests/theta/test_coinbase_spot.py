@@ -55,6 +55,7 @@ def _assert(cond: bool, msg: str) -> None:
 # ---------------------------------------------------------------------------
 
 def test_positive_edge_with_usd_balance_produces_buy():
+    # balance=50, default 10% buffer → spendable=45, max_notional=500 → notional=45
     strat = CoinbaseSpotEdgeStrategy(config=_cfg(), signal_edge_bps=200.0)
 
     with patch("theta.marketdata.coinbase.get_quote_balance", return_value=50.0), \
@@ -63,7 +64,7 @@ def test_positive_edge_with_usd_balance_produces_buy():
 
     _assert(planned is not None, "expected PlannedTrade, got None")
     _assert(planned.side == "buy", f"expected side=buy, got {planned.side}")
-    _assert(planned.notional_usd == 50.0, f"expected notional=50, got {planned.notional_usd}")
+    _assert(abs(planned.notional_usd - 45.0) < 0.01, f"expected notional≈45 (10% buffer), got {planned.notional_usd}")
     _assert(planned.expected_edge_bps == 200.0, f"expected edge=200, got {planned.expected_edge_bps}")
     _assert(planned.exchange == "coinbase", f"unexpected exchange {planned.exchange}")
     print("PASS test_positive_edge_with_usd_balance_produces_buy")
@@ -491,6 +492,97 @@ def test_cap_disabled_no_cap_sell():
 
 
 # ---------------------------------------------------------------------------
+# 16. Buy buffer reduces notional and blocks when balance too thin
+# ---------------------------------------------------------------------------
+
+def test_buy_buffer_reduces_notional():
+    """Default 10% buffer: notional = balance × 0.9, not balance."""
+    strat = CoinbaseSpotEdgeStrategy(config=_cfg(), signal_edge_bps=200.0)
+
+    with patch("theta.marketdata.coinbase.get_quote_balance", return_value=100.0), \
+         patch("theta.marketdata.coinbase.get_spot_mid_price", return_value=_MID):
+        planned = strat.evaluate_opportunity(NOW)
+
+    _assert(planned is not None, "expected PlannedTrade, got None")
+    # 100 * 0.90 = 90; max_notional=500 → 90
+    _assert(abs(planned.notional_usd - 90.0) < 0.01,
+            f"expected notional≈90 with 10% buffer, got {planned.notional_usd}")
+    print("PASS test_buy_buffer_reduces_notional")
+
+
+def test_buy_blocked_when_spendable_below_min():
+    """If balance × (1 − buffer) < min_notional, no buy is proposed."""
+    # balance=1.0, buffer=20%, min_notional=1.0 → spendable=0.80 < 1.0 → no trade
+    strat = CoinbaseSpotEdgeStrategy(config=_cfg(min_notional_usd=1.0),
+                                     signal_edge_bps=200.0, buy_buffer_pct=20.0)
+
+    with patch("theta.marketdata.coinbase.get_quote_balance", return_value=1.0), \
+         patch("theta.marketdata.coinbase.get_spot_mid_price", return_value=_MID):
+        planned = strat.evaluate_opportunity(NOW)
+
+    _assert(planned is None,
+            f"expected no trade when spendable < min_notional, got {planned}")
+    print("PASS test_buy_blocked_when_spendable_below_min")
+
+
+# ---------------------------------------------------------------------------
+# 17. PREVIEW_INSUFFICIENT_FUND → backoff flag set; clears on balance recovery
+# ---------------------------------------------------------------------------
+
+def test_preview_insufficient_fund_sets_backoff():
+    """execute() receiving PREVIEW_INSUFFICIENT_FUND sets _buy_backoff=True."""
+    tmp = tempfile.mkdtemp()
+    strat = CoinbaseSpotEdgeStrategy(config=_cfg(log_dir=tmp), signal_edge_bps=200.0)
+
+    mock_cb = MagicMock()
+    mock_resp = MagicMock()
+    mock_resp.success = False
+    mock_resp.failure_reason = "PREVIEW_INSUFFICIENT_FUND"
+    mock_resp.error_response = "PREVIEW_INSUFFICIENT_FUND"
+    mock_cb.create_order.return_value = mock_resp
+
+    planned = PlannedTrade(
+        strategy_name=strat.name, exchange="coinbase", product_id="ETH-USD",
+        side="buy", notional_usd=50.0, expected_edge_bps=200.0,
+    )
+    strat._last_known_balance = 50.0  # simulate a prior balance check
+
+    with patch("theta.execution.coinbase._require_client", return_value=mock_cb), \
+         patch("theta.marketdata.coinbase.get_spot_mid_price", return_value=_MID):
+        result = strat.execute(planned, dry_run=False)
+
+    _assert(result.success is False, "expected failure for rejected order")
+    _assert(strat._buy_backoff is True,
+            f"expected _buy_backoff=True after PREVIEW_INSUFFICIENT_FUND, got {strat._buy_backoff}")
+    print("PASS test_preview_insufficient_fund_sets_backoff")
+
+
+def test_backoff_blocks_subsequent_evaluate_until_balance_recovers():
+    """Once backoff is set, evaluate() returns None until balance rises."""
+    strat = CoinbaseSpotEdgeStrategy(config=_cfg(min_notional_usd=1.0),
+                                     signal_edge_bps=200.0)
+    strat._buy_backoff = True  # inject backoff directly
+
+    # Spendable = 0.5 * 0.9 = 0.45 < 1.0 → still blocked
+    with patch("theta.marketdata.coinbase.get_quote_balance", return_value=0.5), \
+         patch("theta.marketdata.coinbase.get_spot_mid_price", return_value=_MID):
+        blocked = strat.evaluate_opportunity(NOW)
+
+    _assert(blocked is None, "expected None while backoff and balance still low")
+    _assert(strat._buy_backoff is True, "backoff should still be set")
+
+    # Now balance recovers: spendable = 20 * 0.9 = 18 > 1.0 → clears + trades
+    with patch("theta.marketdata.coinbase.get_quote_balance", return_value=20.0), \
+         patch("theta.marketdata.coinbase.get_spot_mid_price", return_value=_MID):
+        recovered = strat.evaluate_opportunity(NOW)
+
+    _assert(recovered is not None, "expected PlannedTrade after balance recovery")
+    _assert(recovered.side == "buy", f"expected buy after recovery, got {recovered.side}")
+    _assert(strat._buy_backoff is False, "backoff should be cleared after recovery")
+    print("PASS test_backoff_blocks_subsequent_evaluate_until_balance_recovers")
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -512,6 +604,10 @@ _ALL_TESTS = [
     test_cap_not_exceeded_buy_proceeds,
     test_cap_exceeded_dust_excess_no_trade,
     test_cap_disabled_no_cap_sell,
+    test_buy_buffer_reduces_notional,
+    test_buy_blocked_when_spendable_below_min,
+    test_preview_insufficient_fund_sets_backoff,
+    test_backoff_blocks_subsequent_evaluate_until_balance_recovers,
 ]
 
 
